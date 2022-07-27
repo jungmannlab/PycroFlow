@@ -14,6 +14,7 @@ from icecream import ic
 
 from pycromanager import Acquisition, multi_d_acquisition_events, start_headless
 # import monet.control as mcont
+from FlowAcquisition import AriaTrigger
 
 
 logger = logging.getLogger(__name__)
@@ -36,9 +37,17 @@ def main():
     # Start the Java process
     start_headless(mm_app_path, config_file, timeout=5000)
 
+    # start aria triggering connection
+    aria = AriaTrigger()
+
     for round in n_rounds:
         acq_name = base_name + '_{:d}'.format(round)
+
+        aria.sense_pulse()
         record_movie(save_dir, acq_name, n_frames, t_exp)
+
+        print('acquisition of ', acq_name, 'done.')
+        aria.send_pulse()
 
 
 def image_saved_fn(axes, dataset):
