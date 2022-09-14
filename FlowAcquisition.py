@@ -14,7 +14,7 @@ from icecream import ic
 
 from pycromanager import Acquisition, multi_d_acquisition_events, start_headless
 # import monet.control as mcont
-from FlowAcquisition import AriaTrigger
+from arduino_connection import AriaTrigger
 
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ def main():
         aria.sense_pulse()
         record_movie(save_dir, acq_name, n_frames, t_exp)
 
-        print('acquisition of ', acq_name, 'done.')
+        print('Acquisition of ', acq_name, 'done.')
         aria.send_pulse()
 
 
