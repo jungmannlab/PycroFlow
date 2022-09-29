@@ -11,6 +11,8 @@
 import logging
 from icecream import ic
 import time
+import numpy as np
+import itertools
 
 from Arduino import Arduino
 
@@ -53,7 +55,9 @@ class AriaTrigger():
         triggered = False
         edge_times_rising, edge_times_falling = [], []
         while time.time()-tstart < timeout:
-            triggered, edge_detected = self.sense_edge(timeout, edge, refresh_rate)
+            tleft = timeout - (time.time()-tstart)
+            triggered, edge_detected = self.sense_edge(
+                tleft, 'both', refresh_rate)
             tic = time.time()
             if edge_detected=='falling':
                 edge_times_falling.append(tic)
@@ -62,17 +66,21 @@ class AriaTrigger():
             elif edge_detected=='none':
                 # timeout
                 break
+            # print('edge_times_rising', edge_times_rising)
+            # print('edge_times_falling', edge_times_falling)
             # find a pulse
             time_deltas = np.fromiter(
-                f-r
-                for f, r in
-                itertools.product(edge_times_falling, edge_times_rising))
+                (f-r
+                 for f, r in
+                 itertools.product(edge_times_falling, edge_times_rising)),
+                dtype=np.float64)
             if baseline==True:
                 time_deltas = - time_deltas
             if np.any((time_deltas>=min_duration) &
                       (time_deltas<=max_duration)):
                 triggered = True
                 break
+        # print('sense pulse time deltas:', time_deltas)
         return triggered
 
     def sense_edge(self, timeout=10, edge='rising', refresh_rate=.01):
