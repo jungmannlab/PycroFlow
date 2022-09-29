@@ -49,32 +49,31 @@ class AriaTrigger():
             triggered : bool
                 whether the pulse was detected
         """
-        # find first edge
-        if baseline:
-            edge = 'falling'
-        else:
-            edge = 'rising'
-        triggered, edge_detected = self.sense_edge(timeout, edge, refresh_rate)
-        if not triggered:
-            # timeout
-            return False
-        tic = time.time()
-        # find second edge
-        if baseline:
-            edge = 'rising'
-        else:
-            edge = 'falling'
-        while True:
-            triggered, edge_detected = self.sense_edge(max_duration, edge, refresh_rate)
-            toc = time.time()
-            if toc-tic < min_duration:
-                # this was a mismeasurement; wait for the 'real' second edge
-                # of course also the first edge could have been mismeasured
-                continue
-            elif toc-tic >= min_duration and toc-tic <= max_duration:
-                return True
-            elif toc-tic > max_duration:
-                return False
+        tstart = time.time()
+        triggered = False
+        edge_times_rising, edge_times_falling = [], []
+        while time.time()-tstart < timeout:
+            triggered, edge_detected = self.sense_edge(timeout, edge, refresh_rate)
+            tic = time.time()
+            if edge_detected=='falling':
+                edge_times_falling.append(tic)
+            elif edge_detected=='rising':
+                edge_times_rising.append(tic)
+            elif edge_detected=='none':
+                # timeout
+                break
+            # find a pulse
+            time_deltas = np.fromiter(
+                f-r
+                for f, r in
+                itertools.product(edge_times_falling, edge_times_rising))
+            if baseline==True:
+                time_deltas = - time_deltas
+            if np.any((time_deltas>=min_duration) &
+                      (time_deltas<=max_duration)):
+                triggered = True
+                break
+        return triggered
 
     def sense_edge(self, timeout=10, edge='rising', refresh_rate=.01):
         """
