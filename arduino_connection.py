@@ -18,10 +18,21 @@ from Arduino import Arduino
 
 
 class AriaTrigger():
-    def __init__(self, pulse_pin=13, sense_pin=12, pulse_duration=.2):
-        self.pulse_pin = pulse_pin
-        self.sense_pin = sense_pin
-        self.pulse_duration = pulse_duration
+    def __init__(self, parameters={}):
+        """
+        Args:
+            paramters : dict
+                aria connection parameters
+                keys:
+                    pulse_pin : int, default 13
+                    sense_pin : int, default 12
+                    TTL_duration : float, default 0.3 (both directions)
+                    max_flowstep : float, default 30 min, timeout for aria TTL
+        """
+        self.pulse_pin = parameters.get('pulse_pin', 13)
+        self.sense_pin = parameters.get('sense_pin', 12)
+        self.pulse_duration = parameters.get('TTL_duration', .3)
+        self.pulse_timeout = poarameters.get('max_flowstep', 30*60)
 
         self.board = Arduino()
         self.board.pinMode(self.pulse_pin, "OUTPUT")
@@ -34,12 +45,12 @@ class AriaTrigger():
         time.sleep(self.pulse_duration)
         self.board.digitalWrite(self.pulse_pin, "LOW")
 
-    def sense_pulse(self, timeout=10, baseline=False, refresh_rate=.01,
-                    min_duration=.05, max_duration=.6):
+    def sense_pulse(self, timeout=None, baseline=False, refresh_rate=.01,
+                    min_duration=None, max_duration=None):
         """
         Args:
             timeout : int
-                timeout in seconds
+                timeout in seconds, default: max_flowstep from config
             baseline : bool
                 TTL level of baseline (0V, with upward pulse,
                     or 5V with downward pulse)
@@ -51,6 +62,12 @@ class AriaTrigger():
             triggered : bool
                 whether the pulse was detected
         """
+        if timetout is None:
+            timeout = self.pulse_timeout
+        if min_duration is None:
+            min_duration = max([self.pulse_duration - .1, .02])
+        if max_duration is None:
+            max_duration = self.pulse_duration + .1
         tstart = time.time()
         triggered = False
         edge_times_rising, edge_times_falling = [], []

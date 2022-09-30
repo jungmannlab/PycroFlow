@@ -16,150 +16,50 @@ from pycromanager import Acquisition, multi_d_acquisition_events, start_headless
 # import monet.control as mcont
 from arduino_connection import AriaTrigger
 import time
+from time import sleep
 
 
 logger = logging.getLogger(__name__)
 ic.configureOutput(outputFunction=logger.debug)
 
 
-mm_app_path = r'C:\Program Files\Micro-Manager-2.0'
-config_file = r'C:\Users\miblab\Desktop\MMConfig_1.cfg'
-
-save_dir = r"Z:\users\grabmayr\FlowAutomation\testdata"
-base_name = 'exchange_experiment'
-n_rounds = 4
-n_frames = 10
-t_exp = .1
-aria_timeout = 30*60
+# mm_app_path = r'C:\Program Files\Micro-Manager-2.0'
+# config_file = r'C:\Users\miblab\Desktop\MMConfig_1.cfg'
+#
+# save_dir = r"Z:\users\grabmayr\FlowAutomation\testdata"
+# base_name = 'exchange_experiment'
+# n_rounds = 4
+# n_frames = 100
+# t_exp = .1
+# max_duration_aria = 30*60  # in s
+# aria_TTL_duration = 0.3  # in s
 # laser = 561
 # laser_power = 35
 
-from pathlib import Path
-from time import sleep
-from functools import partial
-import gc
-
-# this function is executed once the acquisition engine has setup
-def post_hook_fn(event,bridge,event_queue):
-
-    # open bridge to MM
-    bridge = Bridge()
-    core = bridge.get_core()
-
-    return event
-
-# this function makes sure that all data is written to disk
-def storage_monitor_callback_fn(final_z,final_c,final_e,axes):
-
-    global data_storage_finished
-
-    print(axes['z'],axes['c'],axes['e'])
-
-    if axes['z']==(final_z-1) and axes['c']==(final_c-1) and axes['e']==(final_e-1):
-        print('Setting flag, writing last image.')
-        data_storage_finished = True
-
-def test_acq3():
-
-    from pycromanager import __version__
-    print('pycromanager', __version__)
-
-    from zmq import __version__
-    print('zmq', __version__)
-
-    core = Core()
-
-    events = multi_d_acquisition_events(num_time_points=n_frames)
-
-    # Loop over N acquisitions
-    for i in range(4):
-        print (f'\nAcquisition {i}')
-        time.sleep(10)
-
-        try:
-            with Acquisition(directory=save_dir, name='test', show_display=False, debug=False) as acq:
-                acq.acquire(events)
-
-                del acq       # Adding ths didn't help
-                gc.collect()  # Adding ths didn't help
-                print('\tAll good!')
-
-        except Exception as e:
-            print(e)
+flow_acq_config = {
+    'rounds': 4,
+    'frames': 100,
+    't_exp': .1,  # in s
+    'save_dir': r"Z:\users\grabmayr\FlowAutomation\testdata",
+    'base_name': 'exchange_experiment'
+    'aria_parameters': {
+        'max_flowstep': 30*60,  # in s
+        'TTL_duration': 0.3,  # in s
+    },
+    'mm_parameters': {
+        'mm_app_path': r'C:\Program Files\Micro-Manager-2.0',
+        'mm_config_file': r'C:\Users\miblab\Desktop\MMConfig_1.cfg',
+        'channel_group': 'Filter turret',
+        'filter': '2-G561',
+    },
+    'illu_parameters': {
+        'laser': 560,
+        'power': 35,  #mW
+    }
+}
 
 
-def test_acq2():
-    start_headless(mm_app_path, config_file, timeout=5000)
-
-    print('started headless')
-
-    acq_name = r'test_acquisition'
-
-    # global data_storage_finished
-    # # construct partial functions for acquisition hooks
-    # storage_monitor_callback_metadata_fn = partial(storage_monitor_callback_fn, n_frames, 1, 1)
-    #
-    # data_storage_finished = False
-
-    with Acquisition(
-            directory=save_dir, name=acq_name, show_display=False,
-                     ) as acq:
-        print('creating events')
-        events = multi_d_acquisition_events(num_time_points=n_frames)
-        print('printing events')
-        for e in events:
-            print(e)
-        print('acquiring')
-        acq.acquire(events)
-
-    # # wait until all data is written to disk
-    # while not(data_storage_finished):
-    #     sleep(1)
-    #     print('Storage not finished')
-
-    # clean up this acquisition object and force Python to run garbage collector
-    acq = None
-    gc.collect()
-
-
-    print('second run')
-
-    acq_name = r'test_acquisition2'
-
-    with Acquisition(directory=save_dir, name=acq_name, show_display=False,
-                     ) as acq:
-        print('creating events')
-        events = multi_d_acquisition_events(num_time_points=n_frames)
-        print('printing events')
-        for e in events:
-            print(e)
-        print('acquiring')
-        acq.acquire(events)
-
-
-def test_acq():
-    start_headless(mm_app_path, config_file, timeout=5000)
-
-    print('started headless')
-
-    acq_name = r'test_acquisition'
-
-    with Acquisition(directory=save_dir, name=acq_name, show_display=False,
-                     ) as acq:
-        print('creating events')
-        events = multi_d_acquisition_events(
-            num_time_points=n_frames,
-            time_interval_s=t_exp,
-            channel_group='Filter turret', channels=['2-G561'],
-            channel_exposures_ms= [t_exp],
-        )
-        print('printing events')
-        for e in events:
-            print(e)
-        print('acquiring')
-        acq.acquire(events)
-
-def main():
+def main(acquisition_config):
     # Start the Java process
     # start_headless(mm_app_path, config_file, timeout=5000)
     core = Core()
@@ -167,16 +67,16 @@ def main():
     print('started headless')
 
     # start aria triggering connection
-    aria = AriaTrigger()
+    aria = AriaTrigger(acquisition_config['aria_parameters'])
     print('initialized triggering')
 
-    for round in range(n_rounds):
-        acq_name = base_name + '_{:d}'.format(round)
+    for round in range(acquisition_config['rounds']):
+        acq_name = acquisition_config['base_name'] + '_{:d}'.format(round)
 
         print('waiting for Aria pulsing to signal readiness for round {:d}'.format(round))
-        aria.sense_pulse(timeout=aria_timeout)
+        aria.sense_pulse()
         print('received pulse, now starting acquisition.')
-        record_movie(save_dir, acq_name, n_frames, t_exp)
+        record_movie(acquisition_config)
 
         print('Acquisition of ', acq_name, 'done.')
         aria.send_pulse()
@@ -187,14 +87,31 @@ def image_saved_fn(axes, dataset):
     # TODO: on-the-fly testing and quality control of data
     pass
 
-def record_movie(acq_dir, acq_name, n_frames, t_exp):
+
+def record_movie(acq_name, acquisition_config):
+    """Records a movie via pycromanager
+    Args:
+        acq_name : str
+            the name of the acquisition; pycromanager creats the respective dir
+        acquisition_config : dict
+            the acquisition configuration, comprising following keys:
+                save_dir : the directory to save the acquisition in
+                frames : the number of frames to acquire
+                t_exp : the exposure time.
+    """
+    acq_dir = acquisition_config['save_dir']
+    n_frames = acquisition_config['frames']
+    t_exp = acquisition_config['t_exp']
+    chan_group = acquisition_config['mm_parameters']['channel_group']
+    filter = acquisition_config['mm_parameters']['filter']
+
     with Acquisition(directory=acq_dir, name=acq_name, show_display=False,
                     image_saved_fn=image_saved_fn,
                      ) as acq:
         events = multi_d_acquisition_events(
             num_time_points=n_frames,
             time_interval_s=t_exp,
-            channel_group='Filter turret', channels=['2-G561'],
+            channel_group=chan_group, channels=[filter],
             channel_exposures_ms= [t_exp],
         )
         for e in events:
@@ -222,4 +139,4 @@ if __name__ == "__main__":
     config_logger()
     logger = logging.getLogger(__name__)
     logger.debug('start logging')
-    main()
+    main(flow_acq_config)
