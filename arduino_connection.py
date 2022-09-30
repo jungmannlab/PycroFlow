@@ -32,7 +32,7 @@ class AriaTrigger():
         self.pulse_pin = parameters.get('pulse_pin', 13)
         self.sense_pin = parameters.get('sense_pin', 12)
         self.pulse_duration = parameters.get('TTL_duration', .3)
-        self.pulse_timeout = poarameters.get('max_flowstep', 30*60)
+        self.pulse_timeout = parameters.get('max_flowstep', 30*60)
 
         self.board = Arduino()
         self.board.pinMode(self.pulse_pin, "OUTPUT")
@@ -62,7 +62,7 @@ class AriaTrigger():
             triggered : bool
                 whether the pulse was detected
         """
-        if timetout is None:
+        if timeout is None:
             timeout = self.pulse_timeout
         if min_duration is None:
             min_duration = max([self.pulse_duration - .1, .02])

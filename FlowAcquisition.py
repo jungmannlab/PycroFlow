@@ -17,6 +17,8 @@ from pycromanager import Acquisition, multi_d_acquisition_events, start_headless
 from arduino_connection import AriaTrigger
 import time
 from time import sleep
+import os
+from datetime import datetime
 
 
 logger = logging.getLogger(__name__)
@@ -41,7 +43,7 @@ flow_acq_config = {
     'frames': 100,
     't_exp': .1,  # in s
     'save_dir': r"Z:\users\grabmayr\FlowAutomation\testdata",
-    'base_name': 'exchange_experiment'
+    'base_name': 'exchange_experiment',
     'aria_parameters': {
         'max_flowstep': 30*60,  # in s
         'TTL_duration': 0.3,  # in s
@@ -66,17 +68,23 @@ def main(acquisition_config):
 
     print('started headless')
 
+    dataset_dir = os.path.join(
+        acquisition_config['save_dir'],
+        datetime.now().strftime('%Y-%m-%d_%H-%M') + acquisition_config['base_name'])
+    os.mkdir(dataset_dir)
+    acquisition_config['dataset_dir'] = dataset_dir
+
     # start aria triggering connection
     aria = AriaTrigger(acquisition_config['aria_parameters'])
     print('initialized triggering')
 
     for round in range(acquisition_config['rounds']):
-        acq_name = acquisition_config['base_name'] + '_{:d}'.format(round)
+        acq_name = acquisition_config['base_name'] + '{:d}'.format(round)
 
         print('waiting for Aria pulsing to signal readiness for round {:d}'.format(round))
         aria.sense_pulse()
         print('received pulse, now starting acquisition.')
-        record_movie(acquisition_config)
+        record_movie(acq_name, acquisition_config)
 
         print('Acquisition of ', acq_name, 'done.')
         aria.send_pulse()
@@ -99,7 +107,7 @@ def record_movie(acq_name, acquisition_config):
                 frames : the number of frames to acquire
                 t_exp : the exposure time.
     """
-    acq_dir = acquisition_config['save_dir']
+    acq_dir = acquisition_config['dataset_dir']
     n_frames = acquisition_config['frames']
     t_exp = acquisition_config['t_exp']
     chan_group = acquisition_config['mm_parameters']['channel_group']
@@ -114,8 +122,8 @@ def record_movie(acq_name, acquisition_config):
             channel_group=chan_group, channels=[filter],
             channel_exposures_ms= [t_exp],
         )
-        for e in events:
-            ic(e)
+        # for e in events:
+        #     ic(e)
         acq.acquire(events)
 
 
