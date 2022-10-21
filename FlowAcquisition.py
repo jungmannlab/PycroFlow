@@ -6,27 +6,48 @@
     A first script to start on the topic of automating Exchange-PAINT
     experiments using Pycromanager and Fluigent Aria.
 
+    Usage:
+    * Start this program first (python FlowAcquisition.py in pycroflow environemnt)
+    * Start Aria
+    * follow instructions in command line
+
+    Aria Protocol for simple exchange experiment:
+    * 10ul Buffer injection, ending in TTL
+    * Wait for external TTL
+        (here, a pause can be made, for connecting the slide)
+    * iteratively, for all rounds:
+        - inject 200ul respective imager, ending with TTL
+        - Wait for external TTL (here, the acquisition takes place)
+        - inject 1000ul buffer
+
+    Aria Protocol for MERPAINT experiment:
+    * 10ul Buffer injection, ending in TTL
+    * Wait for external TTL
+        (here, a pause can be made, for connecting the slide)
+    * same as above, but with interleaved hybridization of multiplex-adapter
+
     :authors: Heinrich Grabmayr, 2022
     :copyright: Copyright (c) 2022 Jungmann Lab, MPI of Biochemistry
 """
 import logging
+from logging import handlers
 from icecream import ic
+from inputimeout import inputimeout, TimeoutOccurred
 
-from pycromanager import Acquisition, multi_d_acquisition_events, start_headless, Core
+from pycromanager import Acquisition, multi_d_acquisition_events, start_headless, Core, Bridge
 # import monet.control as mcont
 from arduino_connection import AriaTrigger
+from AriaProtocol import create_protocol as _create_protocol
 import time
 from time import sleep
-import os
-from datetime import datetime
 
 
 logger = logging.getLogger(__name__)
 ic.configureOutput(outputFunction=logger.debug)
 
 
-# mm_app_path = r'C:\Program Files\Micro-Manager-2.0'
-# config_file = r'C:\Users\miblab\Desktop\MMConfig_1.cfg'
+mm_app_path = r'C:\Program Files\Micro-Manager-2.0'
+config_file = r'C:\Users\miblab\Desktop\MMConfig_1.cfg'
 #
 # save_dir = r"Z:\users\grabmayr\FlowAutomation\testdata"
 # base_name = 'exchange_experiment'
@@ -39,14 +60,25 @@ ic.configureOutput(outputFunction=logger.debug)
 # laser_power = 35
 
 flow_acq_config = {
-    'rounds': 4,
-    'frames': 100,
-    't_exp': .1,  # in s
+    'type': 'Exchange',  # options: ['Exchange', 'MERPAINT']
+    'rounds': 2,
+    'frames': 50,
+    't_exp': 100,  # in ms
     'save_dir': r"Z:\users\grabmayr\FlowAutomation\testdata",
-    'base_name': 'exchange_experiment',
+    'base_name': 'aria_exchange_experiment',
     'aria_parameters': {
         'max_flowstep': 30*60,  # in s
         'TTL_duration': 0.3,  # in s
+        'vol_wash': 1000,  # in ul
+        'vol_imager': 200,  # in ul
+        'reservoir_names': {
+            1: 'R 1', 2: 'R 2', 3: 'R 3', 4: 'R 4', 5: 'R 5', 6: 'R 6',
+            7: 'Res7', 8: 'Res8', 9: 'Res9', 10: 'Buffer B+'},
+        'experiment' : {
+            'wash_buffer': 'Buffer B+',
+            'imagers': ['R 2', 'R 4'],
+        },
+        'protocol_folder': 'C:\Users\miblab\AppData\Local\Fluigent\Aria\Sequences'
     },
     'mm_parameters': {
         'mm_app_path': r'C:\Program Files\Micro-Manager-2.0',
@@ -61,33 +93,67 @@ flow_acq_config = {
 }
 
 
-def main(acquisition_config):
+def optional_break(timeout=5):
+    try:
+        ipt = inputimeout(
+            'Proceed? [Y/N - default Y, respond within {:.1f}s]'.format(timeout),
+            timeout=timeout)
+    except TimeoutOccurred:
+        ipt = 'Y'
+    if 'N' in ipt.upper():
+        # user input
+        ipt = input('Enter anything when ready.')
+    print('proceeding.')
+
+
+def main(acquisition_config, dry_run=False):
+    """
+    Args:
+        acquisition_config : dict
+            the configuration
+        dry_run : bool
+            do not use aria if True
+    """
     # Start the Java process
     # start_headless(mm_app_path, config_file, timeout=5000)
     core = Core()
 
-    print('started headless')
-
-    dataset_dir = os.path.join(
-        acquisition_config['save_dir'],
-        datetime.now().strftime('%Y-%m-%d_%H-%M') + acquisition_config['base_name'])
-    os.mkdir(dataset_dir)
-    acquisition_config['dataset_dir'] = dataset_dir
+    print('Connected to Micromanager.')
 
     # start aria triggering connection
-    aria = AriaTrigger(acquisition_config['aria_parameters'])
-    print('initialized triggering')
+    if not dry_run:
+        protocol_file = _create_protocol(
+            acquisition_config['aria_parameters'],
+            acquisition_config['base_name'])
+        aria = AriaTrigger(acquisition_config['aria_parameters'])
+        print('initialized triggering.')
+        print('Please load Aria protocol {:s} and start it now.'.format(
+            protocol_file))
+
+    # first item in aria protocol must be a minute buffer injection, ending
+    # with a trigger signal, and followed by a "wait for TTL" step
+    if not dry_run:
+        aria.sense_pulse()
+        print('Ready to connect slide and check focus.')
+        optional_break()
+        aria.send_pulse()
 
     for round in range(acquisition_config['rounds']):
-        acq_name = acquisition_config['base_name'] + '{:d}'.format(round)
+        acq_name = acquisition_config['base_name'] + '_round{:d}'.format(round)
 
-        print('waiting for Aria pulsing to signal readiness for round {:d}'.format(round))
-        aria.sense_pulse()
-        print('received pulse, now starting acquisition.')
+        if not dry_run:
+            print('waiting for Aria pulsing to signal readiness for round {:d}'.format(round))
+            aria.sense_pulse()
+            print('received pulse')
+        print('About to start acquisition {:s}.'.format(acq_name))
+        optional_break(timeout=5)
+
         record_movie(acq_name, acquisition_config)
 
         print('Acquisition of ', acq_name, 'done.')
-        aria.send_pulse()
+        if not dry_run:
+            aria.send_pulse()
+    print('Finished. Now cleaning will take 1-2 hours!')
 
 
 def image_saved_fn(axes, dataset):
@@ -107,7 +173,7 @@ def record_movie(acq_name, acquisition_config):
                 frames : the number of frames to acquire
                 t_exp : the exposure time.
     """
-    acq_dir = acquisition_config['dataset_dir']
+    acq_dir = acquisition_config['save_dir']
     n_frames = acquisition_config['frames']
     t_exp = acquisition_config['t_exp']
     chan_group = acquisition_config['mm_parameters']['channel_group']
@@ -118,12 +184,35 @@ def record_movie(acq_name, acquisition_config):
                      ) as acq:
         events = multi_d_acquisition_events(
             num_time_points=n_frames,
-            time_interval_s=t_exp,
-            channel_group=chan_group, channels=[filter],
-            channel_exposures_ms= [t_exp],
+            # time_interval_s=t_exp/1000,
+            # channel_group=chan_group, channels=[filter],
+            # channel_exposures_ms= [t_exp],
         )
-        # for e in events:
-        #     ic(e)
+        #for e in events:
+        #    ic(e)
+        acq.acquire(events)
+
+
+def acq():
+    # start_headless(mm_app_path, config_file, timeout=5000)
+
+    # bridge = Bridge()
+    # core = bridge.get_core()
+    core=Core()
+    # mm = bridge.get_studio()
+    # pm = mm.positions()
+    save_dir = r"Z:\users\grabmayr\FlowAutomation\testdata"
+    acq_name = r'exchange_experiment'
+    n_frames = 2
+    t_exp = 2
+    chan_group = 'Filter turret'
+    filter = '2-G561'
+
+    with Acquisition(directory=save_dir, name=acq_name, show_display=False, debug=True,
+                     ) as acq:
+        events = multi_d_acquisition_events(
+            num_time_points=n_frames,
+        )
         acq.acquire(events)
 
 
