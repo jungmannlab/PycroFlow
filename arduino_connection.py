@@ -48,6 +48,9 @@ class AriaTrigger():
     def sense_pulse(self, timeout=None, baseline=False, refresh_rate=.01,
                     min_duration=None, max_duration=None):
         """
+        TODO: in a thread, read input and return sense_pulse if 'continue'
+        is entered..
+        
         Args:
             timeout : int
                 timeout in seconds, default: max_flowstep from config

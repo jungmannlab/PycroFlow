@@ -30,6 +30,7 @@
     :copyright: Copyright (c) 2022 Jungmann Lab, MPI of Biochemistry
 """
 import logging
+import sys
 from logging import handlers
 from icecream import ic
 from inputimeout import inputimeout, TimeoutOccurred
@@ -39,6 +40,7 @@ from pycromanager import Acquisition, multi_d_acquisition_events, start_headless
 from arduino_connection import AriaTrigger
 from AriaProtocol import create_protocol as _create_protocol
 import time
+from datetime import datetime
 from time import sleep
 
 
@@ -52,7 +54,7 @@ config_file = r'C:\Users\miblab\Desktop\MMConfig_1.cfg'
 # save_dir = r"Z:\users\grabmayr\FlowAutomation\testdata"
 # base_name = 'exchange_experiment'
 # n_rounds = 4
-# n_frames = 100
+# n_frames = 50000
 # t_exp = .1
 # max_duration_aria = 30*60  # in s
 # aria_TTL_duration = 0.3  # in s
@@ -60,9 +62,8 @@ config_file = r'C:\Users\miblab\Desktop\MMConfig_1.cfg'
 # laser_power = 35
 
 flow_acq_config = {
-    'type': 'Exchange',  # options: ['Exchange', 'MERPAINT']
     'rounds': 2,
-    'frames': 50,
+    'frames': 500,
     't_exp': 100,  # in ms
     'save_dir': r"Z:\users\grabmayr\FlowAutomation\testdata",
     'base_name': 'aria_exchange_experiment',
@@ -75,10 +76,12 @@ flow_acq_config = {
             1: 'R 1', 2: 'R 2', 3: 'R 3', 4: 'R 4', 5: 'R 5', 6: 'R 6',
             7: 'Res7', 8: 'Res8', 9: 'Res9', 10: 'Buffer B+'},
         'experiment' : {
+            'type': 'Exchange',  # options: ['Exchange', 'MERPAINT']
             'wash_buffer': 'Buffer B+',
             'imagers': ['R 2', 'R 4'],
         },
-        'protocol_folder': 'C:\Users\miblab\AppData\Local\Fluigent\Aria\Sequences'
+        # 'protocol_folder': r'../testdata/'
+        'protocol_folder': r'C:\Users\miblab\AppData\Local\Fluigent\Aria\Sequences'
     },
     'mm_parameters': {
         'mm_app_path': r'C:\Program Files\Micro-Manager-2.0',
@@ -106,14 +109,18 @@ def optional_break(timeout=5):
     print('proceeding.')
 
 
-def main(acquisition_config, dry_run=False):
+def main(acquisition_config, dry_run=False, break_for_slide=True):
     """
     Args:
         acquisition_config : dict
             the configuration
         dry_run : bool
             do not use aria if True
+        break_for_slide : bool
+            do a nonoptional break for slide connection
     """
+    starttime_str = datetime.now().strftime('_%y-%m-%d_%H%M')
+
     # Start the Java process
     # start_headless(mm_app_path, config_file, timeout=5000)
     core = Core()
@@ -122,31 +129,40 @@ def main(acquisition_config, dry_run=False):
 
     # start aria triggering connection
     if not dry_run:
+        protocol_file = ''
         protocol_file = _create_protocol(
             acquisition_config['aria_parameters'],
             acquisition_config['base_name'])
         aria = AriaTrigger(acquisition_config['aria_parameters'])
         print('initialized triggering.')
-        print('Please load Aria protocol {:s} and start it now.'.format(
+        print('Please set Aria TTL duration to 300 ms, load Aria protocol {:s} and start it now.'.format(
             protocol_file))
 
     # first item in aria protocol must be a minute buffer injection, ending
     # with a trigger signal, and followed by a "wait for TTL" step
     if not dry_run:
+        print('Waiting for aria to have pre-injected the buffers.')
         aria.sense_pulse()
-        print('Ready to connect slide and check focus.')
-        optional_break()
+        print('Ready to connect and mount slide.')
+        if break_for_slide:
+            input('Press Enter to continue')
+        else:
+            optional_break()
         aria.send_pulse()
 
     for round in range(acquisition_config['rounds']):
-        acq_name = acquisition_config['base_name'] + '_round{:d}'.format(round)
+        acq_name = (acquisition_config['base_name'] +
+                    starttime_str + '_round{:d}'.format(round))
 
         if not dry_run:
             print('waiting for Aria pulsing to signal readiness for round {:d}'.format(round))
             aria.sense_pulse()
             print('received pulse')
         print('About to start acquisition {:s}.'.format(acq_name))
-        optional_break(timeout=5)
+        if round==0:
+            input('Check focus. Stop Live View when done. Press Enter to continue.')
+        else:
+            optional_break(timeout=5)
 
         record_movie(acq_name, acquisition_config)
 
@@ -161,12 +177,39 @@ def image_saved_fn(axes, dataset):
     # TODO: on-the-fly testing and quality control of data
     pass
 
+def start_progress(title):
+    global progress_x
+    sys.stdout.write(title + ": [" + "-"*40 + "]" + chr(8)*41)
+    sys.stdout.flush()
+    progress_x = 0
+
+def progress(x):
+    global progress_x
+    x = int(x * 40 // 100)
+    sys.stdout.write("#" * (x - progress_x))
+    sys.stdout.flush()
+    progress_x = x
+
+def end_progress():
+    sys.stdout.write("#" * (40 - progress_x) + "]\n")
+    sys.stdout.flush()
+
+def image_process_fn(img, meta):
+    global nimgs_acquired, nimgs_total
+    nimgs_acquired+=1
+    progress(nimgs_acquired/nimgs_total)
+
+
+def test_record_movie():
+    acq_name = flow_acq_config['base_name']
+    acquisition_config = flow_acq_config
+    record_movie(acq_name, acquisition_config)
 
 def record_movie(acq_name, acquisition_config):
     """Records a movie via pycromanager
     Args:
         acq_name : str
-            the name of the acquisition; pycromanager creats the respective dir
+            the name of the acquisition; pycromanager creates the respective dir
         acquisition_config : dict
             the acquisition configuration, comprising following keys:
                 save_dir : the directory to save the acquisition in
@@ -179,8 +222,13 @@ def record_movie(acq_name, acquisition_config):
     chan_group = acquisition_config['mm_parameters']['channel_group']
     filter = acquisition_config['mm_parameters']['filter']
 
-    with Acquisition(directory=acq_dir, name=acq_name, show_display=False,
-                    image_saved_fn=image_saved_fn,
+    global nimgs_acquired, nimgs_total
+    nimgs_acquired = 0
+    nimgs_total = n_frames
+    start_progress('Acquisition')
+
+    with Acquisition(directory=acq_dir, name=acq_name, show_display=True,
+                     image_process_fn=image_process_fn,
                      ) as acq:
         events = multi_d_acquisition_events(
             num_time_points=n_frames,
@@ -191,6 +239,8 @@ def record_movie(acq_name, acquisition_config):
         #for e in events:
         #    ic(e)
         acq.acquire(events)
+
+    end_progress()
 
 
 def acq():
@@ -222,7 +272,7 @@ def config_logger():
     formatter = logging.Formatter(
         '%(asctime)s | %(name)s | %(levelname)s -> %(message)s')
     file_handler = handlers.RotatingFileHandler(
-        'monet.log', maxBytes=1e6, backupCount=5)
+        'pycroflow.log', maxBytes=1e6, backupCount=5)
     file_handler.setFormatter(formatter)
     file_handler.setLevel(logging.DEBUG)
     stream_handler = logging.StreamHandler()

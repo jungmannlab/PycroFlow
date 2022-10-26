@@ -9,6 +9,7 @@
     :authors: Heinrich Grabmayr, 2022
     :copyright: Copyright (c) 2022 Jungmann Lab, MPI of Biochemistry
 """
+import os
 import yaml
 from datetime import date
 
@@ -23,6 +24,8 @@ def create_protocol(config, base_name):
     """
     basic_protocol = {
         "UserComment": 'null',
+    }
+    protocol_addition = {
         "InjectionMethod": 0,
         "ZeroPressureBeforeSwitch": 'false',
         "DiffusionLeadVolume": "0 µl",
@@ -30,7 +33,7 @@ def create_protocol(config, base_name):
         "DiffusionBufferVolume": "0 µl",
         "BufferReservoir": 9,
         "StartTime": "2022-10-21T17:07:47.6951287+02:00",
-        "StartAsap": true,
+        "StartAsap": 'true',
         "PrefillStep": {
             "PrefillEnabled": 'false',
             "WarningMessage": "",
@@ -39,46 +42,57 @@ def create_protocol(config, base_name):
         }
     }
 
-    reservoirs = create_reservoirs(config['reservoir_names'])
-    basic_protocol['Reservoirs'] = reservoirs
-
-    steps = create_steps(config)
+    steps, reservoir_vols = create_steps(config)
     basic_protocol["Steps"] = steps
 
+    reservoirs = create_reservoirs(config['reservoir_names'], reservoir_vols)
+    basic_protocol['Reservoirs'] = reservoirs
+
+    for k, v in protocol_addition.items():
+        basic_protocol[k] = v
+
     # save protocol
-    fname = base_name + date.today().strftime('%y-%m-%d') + '.aseq'
+    fname = base_name + date.today().strftime('_%y-%m-%d') + '.aseq'
     filename = os.path.join(config['protocol_folder'], fname)
-    with open(filename, 'w') as f:
-        yaml.dump(basic_protocol, f)
+
+    # with open(filename, 'w') as f:
+    #     yaml.dump(basic_protocol, f, default_flow_style=True, canonical=True, default_style='"')
+    write_to_file(filename, basic_protocol)
     return fname
 
 
-def create_reservoirs(reservoirs):
+def create_reservoirs(reservoir_names, reservoir_vols):
     """Creates the reservoir configuration
 
     Returns:
-        reservoirs : list of dict
+        reservoir_names : list of dict
             the description of the reservoirs
     """
     reservoirs = []
-    for reservoirnr, name in reservoirs.items():
-        reservoirs.append(create_reservoir(reservoirnr-1, name))
+    for reservoirnr, name in reservoir_names.items():
+        reservoirs.append(
+            create_reservoir(reservoirnr-1, name, reservoir_vols.get(name, 0)))
     return reservoirs
 
 
-def create_reservoir(idx, name):
+def create_reservoir(idx, name, vol):
     """Creates the description of one resrevoir.
 
     Returns:
         reservoir : dict
     """
+    if idx < 8:
+        size = 1
+    else:
+        size = 2
     reservoir = {
         "Reservoir": idx,  # index (starting at 0)
         "Name": name,
-        "Volume": "0 µl",
-        "Size": 1,  # 1: the 8 in front; 2: the 2 on the side
-        "IsOverCapacity": false
+        "Volume": "{:d} µl".format(vol),
+        "Size": size,  # 1: the 8 in front; 2: the 2 on the side
+        "IsOverCapacity": 'false'
     }
+    return reservoir
 
 def create_steps(config):
     """Creates the protocol steps one after another
@@ -86,20 +100,22 @@ def create_steps(config):
     Returns:
         steps : list of dict
             the aria steps.
+        reservoir_vols : dict
+            keys: reservoir names, values: volumes
     """
-    if config['type'] == 'Exchange':
+    if config['experiment']['type'] == 'Exchange':
         experiment = config['experiment']
         reservoirs = config['reservoir_names']
         imager_vol = config['vol_imager']
         wash_vol = config['vol_wash']
-        steps = create_steps_Exchange(
+        steps, reservoir_vols = create_steps_Exchange(
             experiment, reservoirs, imager_vol, wash_vol)
     elif config['type'] == 'MERPAINT':
-        steps = create_steps_MERPAINT(config)
+        steps, reservoir_vols = create_steps_MERPAINT(config)
     else:
         raise KeyError(
             'Experiment type {:s} not implemented.'.format(config['type']))
-    return steps
+    return steps, reservoir_vols
 
 
 def create_steps_Exchange(experiment, reservoirs, imager_vol, wash_vol):
@@ -112,6 +128,8 @@ def create_steps_Exchange(experiment, reservoirs, imager_vol, wash_vol):
     Returns:
         steps : list of dict
             the aria steps.
+        reservoir_vols : dict
+            keys: reservoir names, values: volumes
     """
     # check that all mentioned sources acqually exist
     assert experiment['wash_buffer'] in reservoirs.values()
@@ -119,25 +137,31 @@ def create_steps_Exchange(experiment, reservoirs, imager_vol, wash_vol):
 
     washbuf = experiment['wash_buffer']
     res_idcs = {name: nr-1 for nr, name in reservoirs.items()}
-    speed = 80  # maximum speed with Flow Sensor S
+    speed = 80.0  # maximum speed with Flow Sensor S
 
     steps = []
 
-    step_idx = 0
+    step_idx = 1
     steps.append(create_step_inject(
             step_idx, 10, speed, res_idcs[washbuf], TTL_at_end=True))
-    step_idx = 1
+    reservoir_vols = {washbuf: 10}
+    step_idx = 2
     steps.append(create_step_waitforTTL(step_idx))
     for round, imager in enumerate(experiment['imagers']):
         step_idx += 1
         steps.append(create_step_inject(
             step_idx, imager_vol, speed, res_idcs[imager], TTL_at_end=True))
+        reservoir_vols[imager] = reservoir_vols.get(imager, 0) + imager_vol
+
         step_idx += 1
         steps.append(create_step_waitforTTL(step_idx))
+
         step_idx += 1
         steps.append(create_step_inject(
             step_idx, wash_vol, speed, res_idcs[washbuf], TTL_at_end=False))
-    return steps
+        reservoir_vols[washbuf] = reservoir_vols.get(washbuf, 0) + wash_vol
+
+    return steps, reservoir_vols
 
 def create_steps_MERPAINT(config):
     """Creates the protocol steps for an MERPAINT experiment
@@ -191,10 +215,10 @@ def create_step_inject(
         "Description": (
             "Inject {:d} µl".format(volume) +
             " from Reservoir {:d}".format(reservoir_idx+1) +
-            " into Chip2 at {:d} µl/min".format(speed)),  # here it says Chip2, in the Aria GUI it says Chip1
+            " into Chip2 at {:.0f} µl/min".format(speed)),  # here it says Chip2, in the Aria GUI it says Chip1
         "DefaultQ": speed,
         "Reservoir": reservoir_idx,
-        "Qorder": "{:d} µl/min".format(speed),
+        "Qorder": "{:.0f} µl/min".format(speed),
         "StringInjectionDestinations": "1, ",  # we only have the one chip
         "Index": step_idx,
         "StepNumber": 0,  # for whatever reason, this is always 0 for injection
@@ -206,3 +230,104 @@ def create_step_inject(
     else:
         step['TtlEnd'] = 'false'
     return step
+
+def write_to_file(fname, d):
+    """write the protocol to file.
+
+    Args:
+        fname : str
+            the file to write
+        d : dict
+            the protocol
+    """
+    with open(fname, 'wb') as f:
+        write_dict(f, d, islast=True)
+
+def write_dict(fh, d, indent_lvl=0, key='', islast=False):
+    """Start a dict
+    Args:
+        fh : file handle
+    """
+    indents = ' '*2*indent_lvl
+    if key == '':
+        writeline(fh, indents+'{\n')
+    else:
+        key = '"' + key + '"'
+        writeline(fh, indents+str(key)+': {\n')
+    indent_lvl += 1
+    indents = ' '*2*indent_lvl
+    N = len(d.keys())
+    for i, (k, v) in enumerate(d.items()):
+        if i == N-1:
+            sub_islast = True
+        else:
+            sub_islast = False
+        if isinstance(v, dict):
+            write_dict(fh, v, indent_lvl, k, islast=sub_islast)
+        elif isinstance(v, list):
+            write_list(fh, v, indent_lvl, k, islast=sub_islast)
+        else:
+            if isinstance(v, str):
+                if v not in ['true', 'false', 'null']:
+                    v = '"' + v + '"'
+            elif isinstance(v, int):
+                v = str(v)
+            elif isinstance(v, float):
+                v = '{:.1f}'.format(v)
+            else:
+                raise NotImplmentedError()
+            if not sub_islast:
+                v += ','
+            k = '"' + k + '"'
+            writeline(fh, indents+str(k)+': '+v+'\n')
+    indent_lvl -=1
+    indents = ' '*2*indent_lvl
+    if islast:
+        writeline(fh, indents+'}\n')
+    else:
+        writeline(fh, indents+'},\n')
+
+def write_list(fh, l, indent_lvl=0, key='', islast=False):
+    indents = ' '*2*indent_lvl
+    if key == '':
+        writeline(fh, indents+'[\n')
+    else:
+        key = '"' + key + '"'
+        writeline(fh, indents+str(key)+': [\n')
+    indent_lvl += 1
+    indents = ' '*2*indent_lvl
+    N = len(l)
+    for i, v in enumerate(l):
+        if i == N-1:
+            sub_islast = True
+        else:
+            sub_islast = False
+        if isinstance(v, dict):
+            write_dict(fh, v, indent_lvl, islast=sub_islast)
+        elif isinstance(v, list):
+            write_list(fh, v, indent_lvl, islast=sub_islast)
+        else:
+            if isinstance(v, str):
+                if v not in ['true', 'false', 'null']:
+                    v = '"' + v + '"'
+            elif isinstance(v, int):
+                v = str(v)
+            elif isinstance(v, float):
+                v = '{:.1f}'.format(v)
+            else:
+                raise NotImplmentedError()
+            if not sub_islast:
+                v += ','
+            writeline(fh, indents+v+'\n')
+    indent_lvl -=1
+    indents = ' '*2*indent_lvl
+    if islast:
+        writeline(fh, indents+']\n')
+    else:
+        writeline(fh, indents+'],\n')
+
+def writeline(fh, line):
+    fh.write(line.encode('utf8'))
+
+def write_entry(fh, e, indent_lvl=0):
+    pass
