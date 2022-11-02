@@ -38,6 +38,7 @@ from inputimeout import inputimeout, TimeoutOccurred
 from pycromanager import Acquisition, multi_d_acquisition_events, start_headless, Core, Bridge
 # import monet.control as mcont
 from arduino_connection import AriaTrigger
+from AriaComm import AriaConnection
 from AriaProtocol import create_protocol as _create_protocol
 import time
 from datetime import datetime
@@ -68,6 +69,7 @@ flow_acq_config = {
     'save_dir': r"Z:\users\grabmayr\FlowAutomation\testdata",
     'base_name': 'aria_exchange_experiment',
     'aria_parameters': {
+        'use_TTL': False,
         'max_flowstep': 30*60,  # in s
         'TTL_duration': 0.3,  # in s
         'vol_wash': 1000,  # in ul
@@ -133,7 +135,10 @@ def main(acquisition_config, dry_run=False, break_for_slide=True):
         protocol_file = _create_protocol(
             acquisition_config['aria_parameters'],
             acquisition_config['base_name'])
-        aria = AriaTrigger(acquisition_config['aria_parameters'])
+        if acquisition_config['aria_parameters']['use_TTL']:
+            aria = AriaTrigger(acquisition_config['aria_parameters'])
+        else:
+            aria = AriaConnection()
         print('initialized triggering.')
         print('Please set Aria TTL duration to 300 ms, load Aria protocol {:s} and start it now.'.format(
             protocol_file))
@@ -142,13 +147,13 @@ def main(acquisition_config, dry_run=False, break_for_slide=True):
     # with a trigger signal, and followed by a "wait for TTL" step
     if not dry_run:
         print('Waiting for aria to have pre-injected the buffers.')
-        aria.sense_pulse()
+        aria.sense_trigger()
         print('Ready to connect and mount slide.')
         if break_for_slide:
             input('Press Enter to continue')
         else:
             optional_break()
-        aria.send_pulse()
+        aria.send_trigger()
 
     for round in range(acquisition_config['rounds']):
         acq_name = (acquisition_config['base_name'] +
@@ -156,8 +161,8 @@ def main(acquisition_config, dry_run=False, break_for_slide=True):
 
         if not dry_run:
             print('waiting for Aria pulsing to signal readiness for round {:d}'.format(round))
-            aria.sense_pulse()
-            print('received pulse')
+            aria.sense_trigger()
+            print('received trigger')
         print('About to start acquisition {:s}.'.format(acq_name))
         if round==0:
             input('Check focus. Stop Live View when done. Press Enter to continue.')
@@ -168,7 +173,7 @@ def main(acquisition_config, dry_run=False, break_for_slide=True):
 
         print('Acquisition of ', acq_name, 'done.')
         if not dry_run:
-            aria.send_pulse()
+            aria.send_trigger()
     print('Finished. Now cleaning will take 1-2 hours!')
 
 

@@ -108,8 +108,9 @@ def create_steps(config):
         reservoirs = config['reservoir_names']
         imager_vol = config['vol_imager']
         wash_vol = config['vol_wash']
+        use_ttl = config['use_TTL']
         steps, reservoir_vols = create_steps_Exchange(
-            experiment, reservoirs, imager_vol, wash_vol)
+            experiment, reservoirs, imager_vol, wash_vol, use_ttl=use_ttl)
     elif config['type'] == 'MERPAINT':
         steps, reservoir_vols = create_steps_MERPAINT(config)
     else:
@@ -118,7 +119,8 @@ def create_steps(config):
     return steps, reservoir_vols
 
 
-def create_steps_Exchange(experiment, reservoirs, imager_vol, wash_vol):
+def create_steps_Exchange(experiment, reservoirs, imager_vol, wash_vol,
+                          use_ttl=False):
     """Creates the protocol steps for an Exchange-PAINT experiment
     Args:
         experiment : dict
@@ -146,15 +148,24 @@ def create_steps_Exchange(experiment, reservoirs, imager_vol, wash_vol):
             step_idx, 10, speed, res_idcs[washbuf], TTL_at_end=True))
     reservoir_vols = {washbuf: 10}
     step_idx = 2
-    steps.append(create_step_waitforTTL(step_idx))
+    if use_ttl:
+        steps.append(create_step_waitforTTL(step_idx))
+    else:
+        steps.append(create_step_waitforTCP(step_idx))
     for round, imager in enumerate(experiment['imagers']):
         step_idx += 1
         steps.append(create_step_inject(
             step_idx, imager_vol, speed, res_idcs[imager], TTL_at_end=True))
         reservoir_vols[imager] = reservoir_vols.get(imager, 0) + imager_vol
+        if not use_ttl:
+            step_idx += 1
+            steps.append(create_step_sendTCP(step_idx))
 
         step_idx += 1
-        steps.append(create_step_waitforTTL(step_idx))
+        if use_ttl:
+            steps.append(create_step_waitforTTL(step_idx))
+        else:
+            steps.append(create_step_waitforTCP(step_idx))
 
         step_idx += 1
         steps.append(create_step_inject(
@@ -191,6 +202,48 @@ def create_step_waitforTTL(step_idx):
         }
     return step
 
+def create_step_waitforTCP(step_idx):
+    """Creates a step to wait for a TCP/IP signal.
+
+    Returns:
+        step : dict
+            the step configuration
+    """
+    step = {
+        "$type": "WaitForExternal",
+        "SignalType": 1,
+        "Description": "Wait for external signal before proceeding",
+        "Timeout": "12:00:00",
+        "Index": step_idx,
+        "StepNumber": step_idx,
+        "TtlStart": 'false',
+        "StartSignalType": 0,
+        "TtlEnd": 'false',
+        "EndSignalType": 0
+        }
+    return step
+
+def create_step_sendTCP(step_idx):
+    """Creates a step to send a TCP/IP signal.
+
+    Returns:
+        step : dict
+            the step configuration
+    """
+    step = {
+        "$type": "SendExternalSignal",
+        "SignalType": 1,
+        "Message": "OK",
+        "Description": "Send TCP message \"OK\"",
+        "Index": step_idx,
+        "StepNumber": step_idx,
+        "TtlStart": 'false',
+        "StartSignalType": 0,
+        "TtlEnd": 'false',
+        "EndSignalType": 0
+        }
+    return step
+
 def create_step_inject(
         step_idx, volume, speed, reservoir_idx, TTL_at_end):
     """Creates a step to wait for a TTL pulse.
@@ -223,6 +276,8 @@ def create_step_inject(
         "Index": step_idx,
         "StepNumber": 0,  # for whatever reason, this is always 0 for injection
         "TtlStart": 'false',
+        "StartSignalType": 0,
+        "EndSignalType": 0
         }
     if TTL_at_end:
         step['Description'] = step['Description'] + ' (TTL)'

@@ -39,18 +39,18 @@ class AriaTrigger():
         self.board.digitalWrite(self.pulse_pin, "LOW")
         self.board.pinMode(self.sense_pin, "INPUT")
 
-    def send_pulse(self):
+    def send_trigger(self):
         self.board.pinMode(self.pulse_pin, "OUTPUT")
         self.board.digitalWrite(self.pulse_pin, "HIGH")
         time.sleep(self.pulse_duration)
         self.board.digitalWrite(self.pulse_pin, "LOW")
 
-    def sense_pulse(self, timeout=None, baseline=False, refresh_rate=.01,
+    def sense_trigger(self, timeout=None, baseline=False, refresh_rate=.01,
                     min_duration=None, max_duration=None):
         """
         TODO: in a thread, read input and return sense_pulse if 'continue'
         is entered..
-        
+
         Args:
             timeout : int
                 timeout in seconds, default: max_flowstep from config
