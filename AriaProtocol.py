@@ -11,7 +11,7 @@
 """
 import os
 import yaml
-from datetime import date
+from datetime import date, datetime
 
 def create_protocol(config, base_name):
     """Create a protocol based on a configuration file.
@@ -125,6 +125,11 @@ def create_steps_Exchange(experiment, reservoirs, imager_vol, wash_vol,
     Args:
         experiment : dict
             the experiment configuration
+            Items:
+                wash_buffer : str
+                    the name of the wash buffer reservoir
+                imagers : list
+                    the names of the iamger reservoirs to use
         reservoirs : dict
             keys: 1-10, values: the names of the reservoirs
     Returns:
@@ -174,15 +179,196 @@ def create_steps_Exchange(experiment, reservoirs, imager_vol, wash_vol,
 
     return steps, reservoir_vols
 
-def create_steps_MERPAINT(config):
+def create_steps_MERPAINT(experiment, reservoirs,
+                          use_ttl=False):
     """Creates the protocol steps for an MERPAINT experiment
-
+    Args:
+        experiment : dict
+            the experiment configuration
+            Items:
+                wash_buffer : str
+                    the name of the wash buffer reservoir (typically 2xSSC)
+                wash_buffer_vol : float
+                    the wash volume in µl
+                hybridization_buffer : str
+                    the name of the hybridization buffer reservoir
+                hybridization_buffer_vol : float
+                    the hybridization buffer volume in µl
+                hybridization_time : float
+                    the hybridization incubation time in s
+                imaging_buffer : str
+                    the name of the imaging buffer reservoir (typically C+)
+                imaging_buffer_vol : float
+                    the imaging buffer volume in µl
+                imagers : list
+                    the names of the imager reservoirs to use (for MERPAINT
+                    typically only 1)
+                imager_vol : float
+                    the volume to flush imagers in µl
+                adapters : list
+                    the names of the secondary adapter reservoirs to use
+                adapter_vol : float
+                    the volume to flush adapters in µl
+                check_dark_frames : int (optional)
+                    if present, add steps to check de-hybridization, and image
+                    for said number of frames
+        reservoirs : dict
+            keys: 1-10, values: the names of the reservoirs
     Returns:
         steps : list of dict
             the aria steps.
+        reservoir_vols : dict
+            keys: reservoir names, values: volumes
     """
-    pass
+    # check that all mentioned sources acqually exist
+    assert experiment['wash_buffer'] in reservoirs.values()
+    assert experiment['hybridization_buffer'] in reservoirs.values()
+    assert experiment['imaging_buffer'] in reservoirs.values()
+    assert all([name in reservoirs.values() for name in experiment['imagers']])
+    assert all([name in reservoirs.values() for name in experiment['adapters']])
 
+    washbuf = experiment['wash_buffer']
+    hybbuf = experiment['hybridization_buffer']
+    imgbuf = experiment['imaging_buffer']
+    washvol = experiment['wash_buffer_vol']
+    hybvol = experiment['hybridization_buffer_vol']
+    imgbufvol = experiment['imaging_buffer_vol']
+    imagervol = experiment['imager_vol']
+    adaptervol = experiment['adapter_vol']
+    hybtime = experiment['hybridization_time']
+
+    darkframes = experiment.get('check_dark_frames')
+    if darkframes:
+        check_dark_frames = True
+    else:
+        check_dark_frames = False
+        darkframes = 0
+
+    res_idcs = {name: nr-1 for nr, name in reservoirs.items()}
+    speed = 80.0  # maximum speed with Flow Sensor S
+
+    steps = []
+
+    step_idx = 1
+    steps.append(create_step_inject(
+            step_idx, 10, speed, res_idcs[washbuf], TTL_at_end=True))
+    reservoir_vols = {washbuf: 10}
+    step_idx = 2
+    if use_ttl:
+        steps.append(create_step_waitforTTL(step_idx))
+    else:
+        steps.append(create_step_waitforTCP(step_idx))
+    for merpaintround, adapter in enumerate(experiment['adapters']):
+        # hybridization buffer
+        step_idx += 1
+        steps.append(create_step_inject(
+            step_idx, hybvol, speed, res_idcs[hybbuf], TTL_at_end=True))
+        reservoir_vols[hybbuf] = reservoir_vols.get(hybbuf, 0) + hybvol
+        # adapter
+        step_idx += 1
+        steps.append(create_step_inject(
+            step_idx, adaptervol, speed, res_idcs[adapter], TTL_at_end=True))
+        reservoir_vols[adapter] = reservoir_vols.get(adapter, 0) + adaptervol
+        # incubation
+        step_idx += 1
+        steps.append(create_step_incubate(
+            step_idx, hybtime))
+        # 2xSSC
+        step_idx += 1
+        steps.append(create_step_inject(
+            step_idx, washvol, speed, res_idcs[washbuf], TTL_at_end=True))
+        reservoir_vols[washbuf] = reservoir_vols.get(washbuf, 0) + washvol
+        # iterate over imagers
+        for imager_round, imager in enumerate(imagers):
+            #   imaging buffer
+            step_idx += 1
+            steps.append(create_step_inject(
+                step_idx, imgbufvol, speed, res_idcs[imgbuf], TTL_at_end=True))
+            reservoir_vols[imgbuf] = reservoir_vols.get(imgbuf, 0) + imgbufvol
+            #   imager
+            step_idx += 1
+            steps.append(create_step_inject(
+                step_idx, imagervol, speed, res_idcs[imager], TTL_at_end=True))
+            reservoir_vols[imager] = reservoir_vols.get(imager, 0) + imagervol
+
+            if not use_ttl:
+                step_idx += 1
+                steps.append(create_step_sendTCP(step_idx))
+
+            step_idx += 1
+            if use_ttl:
+                steps.append(create_step_waitforTTL(step_idx))
+            else:
+                steps.append(create_step_waitforTCP(step_idx))
+            # acquire movie, possibly in multiple rois
+        # de-hybridize adapter
+        # washbuf
+        step_idx += 1
+        steps.append(create_step_inject(
+            step_idx, washvol, speed, res_idcs[washbuf], TTL_at_end=True))
+        reservoir_vols[washbuf] = reservoir_vols.get(washbuf, 0) + washvol
+        # hybridization buffer
+        step_idx += 1
+        steps.append(create_step_inject(
+            step_idx, hybvol, speed, res_idcs[hybbuf], TTL_at_end=True))
+        reservoir_vols[hybbuf] = reservoir_vols.get(hybbuf, 0) + hybvol
+        # incubation
+        step_idx += 1
+        steps.append(create_step_incubate(
+            step_idx, hybtime))
+        # washbuf
+        step_idx += 1
+        steps.append(create_step_inject(
+            step_idx, washvol, speed, res_idcs[washbuf], TTL_at_end=True))
+        reservoir_vols[washbuf] = reservoir_vols.get(washbuf, 0) + washvol
+        if check_dark_frames:
+            #   imaging buffer
+            step_idx += 1
+            steps.append(create_step_inject(
+                step_idx, imgbufvol, speed, res_idcs[imgbuf], TTL_at_end=True))
+            reservoir_vols[imgbuf] = reservoir_vols.get(imgbuf, 0) + imgbufvol
+            #   acquire movie
+            if not use_ttl:
+                step_idx += 1
+                steps.append(create_step_sendTCP(step_idx))
+
+            step_idx += 1
+            if use_ttl:
+                steps.append(create_step_waitforTTL(step_idx))
+            else:
+                steps.append(create_step_waitforTCP(step_idx))
+            # washbuf
+            step_idx += 1
+            steps.append(create_step_inject(
+                step_idx, washvol, speed, res_idcs[washbuf], TTL_at_end=True))
+            reservoir_vols[washbuf] = reservoir_vols.get(washbuf, 0) + washvol
+
+    return steps, reservoir_vols
+
+
+def create_step_incubate(step_idx, t_incu):
+    """Creates a step to wait for a TTL pulse.
+
+    Args:
+        step_idx : int
+            the step index
+        t_incu : float
+            the incubation time in seconds
+    Returns:
+        step : dict
+            the step configuration
+    """
+    timeoutstr = datetime.timedelta(seconds=t_incu).strftime('%H:%M:%S')
+    step = {
+        "$type": "Incubate",
+        "Duration": timeoutstr,
+        "Description": "Incubate for " + timeoutstr,
+        "Index": step_idx,
+        "StepNumber": step_idx,
+        "TtlStart": 'false',
+        "TtlEnd": 'false'
+        }
+    return step
 
 def create_step_waitforTTL(step_idx):
     """Creates a step to wait for a TTL pulse.
