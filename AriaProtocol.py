@@ -39,10 +39,11 @@ def create_protocol(config, base_name):
             "WarningMessage": "",
             "DisplayWarning": 'false',
             "WarningType": 0
-        }
+        },
+        "PreloadFlowRatePreset": 2
     }
 
-    steps, reservoir_vols = create_steps(config)
+    steps, reservoir_vols, imground_descriptions = create_steps(config)
     basic_protocol["Steps"] = steps
 
     reservoirs = create_reservoirs(config['reservoir_names'], reservoir_vols)
@@ -52,13 +53,13 @@ def create_protocol(config, base_name):
         basic_protocol[k] = v
 
     # save protocol
-    fname = base_name + date.today().strftime('_%y-%m-%d') + '.aseq'
+    fname = base_name + datetime.now().strftime('_%y%m%d-%H%M') + '.aseq'
     filename = os.path.join(config['protocol_folder'], fname)
 
     # with open(filename, 'w') as f:
     #     yaml.dump(basic_protocol, f, default_flow_style=True, canonical=True, default_style='"')
     write_to_file(filename, basic_protocol)
-    return fname
+    return fname, imground_descriptions
 
 
 def create_reservoirs(reservoir_names, reservoir_vols):
@@ -109,14 +110,15 @@ def create_steps(config):
         imager_vol = config['vol_imager']
         wash_vol = config['vol_wash']
         use_ttl = config['use_TTL']
-        steps, reservoir_vols = create_steps_Exchange(
+        steps, reservoir_vols, imground_descriptions = create_steps_Exchange(
             experiment, reservoirs, imager_vol, wash_vol, use_ttl=use_ttl)
     elif config['type'] == 'MERPAINT':
-        steps, reservoir_vols = create_steps_MERPAINT(config)
+        steps, reservoir_vols, imground_descriptions = create_steps_MERPAINT(
+            config)
     else:
         raise KeyError(
             'Experiment type {:s} not implemented.'.format(config['type']))
-    return steps, reservoir_vols
+    return steps, reservoir_vols, imground_descriptions
 
 
 def create_steps_Exchange(experiment, reservoirs, imager_vol, wash_vol,
@@ -137,6 +139,8 @@ def create_steps_Exchange(experiment, reservoirs, imager_vol, wash_vol,
             the aria steps.
         reservoir_vols : dict
             keys: reservoir names, values: volumes
+        imground_descriptions : list of str
+            a description of each imaging round
     """
     # check that all mentioned sources acqually exist
     assert experiment['wash_buffer'] in reservoirs.values()
@@ -147,6 +151,7 @@ def create_steps_Exchange(experiment, reservoirs, imager_vol, wash_vol,
     speed = 80.0  # maximum speed with Flow Sensor S
 
     steps = []
+    imground_descriptions = []
 
     step_idx = 1
     steps.append(create_step_inject(
@@ -156,12 +161,15 @@ def create_steps_Exchange(experiment, reservoirs, imager_vol, wash_vol,
     if use_ttl:
         steps.append(create_step_waitforTTL(step_idx))
     else:
+        steps.append(create_step_sendTCP(step_idx))
+        step_idx += 1
         steps.append(create_step_waitforTCP(step_idx))
     for round, imager in enumerate(experiment['imagers']):
+        imground_descriptions.append(imager)
         step_idx += 1
         steps.append(create_step_inject(
-            step_idx, imager_vol, speed, res_idcs[imager], TTL_at_end=True))
-        reservoir_vols[imager] = reservoir_vols.get(imager, 0) + imager_vol
+            step_idx, int(0.8*imager_vol), speed, res_idcs[imager], TTL_at_end=True))
+        reservoir_vols[imager] = reservoir_vols.get(imager, 0) + int(0.8*imager_vol)
         if not use_ttl:
             step_idx += 1
             steps.append(create_step_sendTCP(step_idx))
@@ -174,13 +182,20 @@ def create_steps_Exchange(experiment, reservoirs, imager_vol, wash_vol,
 
         step_idx += 1
         steps.append(create_step_inject(
-            step_idx, wash_vol, speed, res_idcs[washbuf], TTL_at_end=False))
-        reservoir_vols[washbuf] = reservoir_vols.get(washbuf, 0) + wash_vol
+            step_idx, int(0.2*imager_vol), speed, res_idcs[imager], TTL_at_end=True))
+        reservoir_vols[imager] = reservoir_vols.get(imager, 0) + int(0.2*imager_vol)
 
-    return steps, reservoir_vols
+        if round < len(experiment['imagers'])-1:
+            step_idx += 1
+            steps.append(create_step_inject(
+                step_idx, wash_vol, speed, res_idcs[washbuf], TTL_at_end=False))
+            reservoir_vols[washbuf] = reservoir_vols.get(washbuf, 0) + wash_vol
 
 def create_steps_MERPAINT(experiment, reservoirs,
                           use_ttl=False):
+    return steps, reservoir_vols, imground_descriptions
+
+def create_steps_MERPAINT(config):
     """Creates the protocol steps for an MERPAINT experiment
     Args:
         experiment : dict
@@ -420,7 +435,7 @@ def create_step_sendTCP(step_idx):
         "$type": "SendExternalSignal",
         "SignalType": 1,
         "Message": "OK",
-        "Description": "Send TCP message \"OK\"",
+        "Description": "Send TCP message \\\"OK\\\"",
         "Index": step_idx,
         "StepNumber": step_idx,
         "TtlStart": 'false',
@@ -463,13 +478,14 @@ def create_step_inject(
         "StepNumber": 0,  # for whatever reason, this is always 0 for injection
         "TtlStart": 'false',
         "StartSignalType": 0,
-        "EndSignalType": 0
         }
     if TTL_at_end:
         step['Description'] = step['Description'] + ' (TTL)'
         step['TtlEnd'] = 'true'
     else:
         step['TtlEnd'] = 'false'
+    step["EndSignalType"] = 0
+
     return step
 
 def write_to_file(fname, d):

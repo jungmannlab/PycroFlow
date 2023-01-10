@@ -28,8 +28,8 @@ class AriaConnection:
     def __init__(self, port=7167):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_address = ('localhost', port)
-        sock.bind(server_address)
-        sock.listen(1)  # exactly one client can connect
+        self.sock.bind(server_address)
+        self.sock.listen(1)  # exactly one client can connect
 
     def wait_for_aria_conn(self):
         """connect to the Aria client; blocking.
@@ -49,5 +49,7 @@ class AriaConnection:
         assert trig==b'OK'
 
     def __del__(self):
-        self.aria_sock.shutdown()
+        #self.aria_sock.shutdown()
         self.aria_sock.close()
+        #self.sock.shutdown()
+        self.sock.close()
