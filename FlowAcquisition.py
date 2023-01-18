@@ -86,7 +86,7 @@ flow_acq_config = {
             1: 'R1', 2: 'empt', 3: 'R3', 4: 'empt', 5: 'R5', 6: 'R6',
             7: 'R2', 8: 'R4', 9: 'Res9', 10: 'Buffer B+'},
         'experiment' : {
-            'type': 'Exchange',  # options: ['Exchange', 'MERPAINT']
+            'type': 'Exchange',  # options: ['Exchange', 'MERPAINT', 'FlushTest']
             'wash_buffer': 'Buffer B+',
             'imagers': ['R4', 'R2', 'R4', 'R2', 'R4', 'R2', 'R4', 'R2', 'R4', 'R2'],
 #            'imagers': ['500 pM P 3', '500 pM DB', '1 nM DB'],
@@ -149,7 +149,7 @@ def main(acquisition_config, dry_run=False, break_for_slide=True):
         illuconfig = CONFIGS[acquisition_config['illu_parameters']['setup']]
         laserlaunch = ILC(illuconfig)
         laserlaunch.laser = acquisition_config['illu_parameters']['laser']  # nm
-        laserlaunch.power = 1 # mW
+        laserlaunch.power = 1  # mW
 
     # Start the Java process
     # start_headless(mm_app_path, config_file, timeout=5000)
@@ -222,6 +222,10 @@ def main(acquisition_config, dry_run=False, break_for_slide=True):
         if not dry_run:
             aria.send_trigger()
     print('Finished. Now cleaning will take 1-2 hours!')
+    if 'illu_parameters' in acquisition_config.keys():
+        laserlaunch.power = 1 # mW
+        laserlaunch.laser_enabled = False
+
 
 
 def image_saved_fn(axes, dataset):

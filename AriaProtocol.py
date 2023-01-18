@@ -35,7 +35,7 @@ def create_protocol(config, base_name):
         "StartTime": "2022-10-21T17:07:47.6951287+02:00",
         "StartAsap": 'true',
         "PrefillStep": {
-            "PrefillEnabled": 'false',
+            "PrefillEnabled": 'true',
             "WarningMessage": "",
             "DisplayWarning": 'false',
             "WarningType": 0
@@ -112,9 +112,15 @@ def create_steps(config):
         use_ttl = config['use_TTL']
         steps, reservoir_vols, imground_descriptions = create_steps_Exchange(
             experiment, reservoirs, imager_vol, wash_vol, use_ttl=use_ttl)
-    elif config['type'] == 'MERPAINT':
+    elif config['experiment']['type'] == 'MERPAINT':
         steps, reservoir_vols, imground_descriptions = create_steps_MERPAINT(
             config)
+    elif config['experiment']['type'] == 'FlushTest':
+        experiment = config['experiment']
+        reservoirs = config['reservoir_names']
+        use_ttl = config['use_TTL']
+        steps, reservoir_vols, imground_descriptions = create_steps_FlushTest(
+            experiment, reservoirs, use_ttl=use_ttl)
     else:
         raise KeyError(
             'Experiment type {:s} not implemented.'.format(config['type']))
@@ -191,11 +197,10 @@ def create_steps_Exchange(experiment, reservoirs, imager_vol, wash_vol,
                 step_idx, wash_vol, speed, res_idcs[washbuf], TTL_at_end=False))
             reservoir_vols[washbuf] = reservoir_vols.get(washbuf, 0) + wash_vol
 
-def create_steps_MERPAINT(experiment, reservoirs,
-                          use_ttl=False):
     return steps, reservoir_vols, imground_descriptions
 
-def create_steps_MERPAINT(config):
+def create_steps_MERPAINT(experiment, reservoirs,
+                          use_ttl=False):
     """Creates the protocol steps for an MERPAINT experiment
     Args:
         experiment : dict
@@ -224,6 +229,11 @@ def create_steps_MERPAINT(config):
                     the names of the secondary adapter reservoirs to use
                 adapter_vol : float
                     the volume to flush adapters in µl
+                erasers : list
+                    the names of the eraser reservoirs to unzip the secondary
+                    adapters to use
+                eraser_vol : float
+                    the volume to flush erasers in µl
                 check_dark_frames : int (optional)
                     if present, add steps to check de-hybridization, and image
                     for said number of frames
@@ -241,6 +251,7 @@ def create_steps_MERPAINT(config):
     assert experiment['imaging_buffer'] in reservoirs.values()
     assert all([name in reservoirs.values() for name in experiment['imagers']])
     assert all([name in reservoirs.values() for name in experiment['adapters']])
+    assert all([name in reservoirs.values() for name in experiment['erasers']])
 
     washbuf = experiment['wash_buffer']
     hybbuf = experiment['hybridization_buffer']
@@ -250,6 +261,7 @@ def create_steps_MERPAINT(config):
     imgbufvol = experiment['imaging_buffer_vol']
     imagervol = experiment['imager_vol']
     adaptervol = experiment['adapter_vol']
+    eraservol = experiment['adapter_vol']
     hybtime = experiment['hybridization_time']
 
     darkframes = experiment.get('check_dark_frames')
@@ -273,7 +285,8 @@ def create_steps_MERPAINT(config):
         steps.append(create_step_waitforTTL(step_idx))
     else:
         steps.append(create_step_waitforTCP(step_idx))
-    for merpaintround, adapter in enumerate(experiment['adapters']):
+    for merpaintround, (adapter, eraser) in enumerate(zip(experiment
+            ['adapters'], experiment['erasers'])):
         # hybridization buffer
         step_idx += 1
         steps.append(create_step_inject(
@@ -327,6 +340,11 @@ def create_steps_MERPAINT(config):
         steps.append(create_step_inject(
             step_idx, hybvol, speed, res_idcs[hybbuf], TTL_at_end=True))
         reservoir_vols[hybbuf] = reservoir_vols.get(hybbuf, 0) + hybvol
+        # adapter
+        step_idx += 1
+        steps.append(create_step_inject(
+            step_idx, adaptervol, speed, res_idcs[adapter], TTL_at_end=True))
+        reservoir_vols[adapter] = reservoir_vols.get(adapter, 0) + adaptervol
         # incubation
         step_idx += 1
         steps.append(create_step_incubate(
@@ -359,6 +377,78 @@ def create_steps_MERPAINT(config):
             reservoir_vols[washbuf] = reservoir_vols.get(washbuf, 0) + washvol
 
     return steps, reservoir_vols
+
+
+def create_steps_FlushTest(experiment, reservoirs, use_ttl=False):
+    """Creates the protocol steps for testing flush volumes:
+    Image acquisition is triggered both when washing and when flushing imagers
+    Args:
+        experiment : dict
+            the experiment configuration
+            Items:
+                fluids : list of str
+                    the names of the imager or wash buffer reservoirs to use
+                fluid_vols : list of float
+                    the volumes of fluids to flush
+        reservoirs : dict
+            keys: 1-10, values: the names of the reservoirs
+    Returns:
+        steps : list of dict
+            the aria steps.
+        reservoir_vols : dict
+            keys: reservoir names, values: volumes
+        imground_descriptions : list of str
+            a description of each imaging round
+    """
+    assert experiment['wash_buffer'] in reservoirs.values()
+    assert all([name in reservoirs.values() for name in experiment['fluids']])
+
+    washbuf = experiment['wash_buffer']
+    res_idcs = {name: nr - 1 for nr, name in reservoirs.items()}
+    speed = 30.0  # maximum speed for HybBuf
+
+    steps = []
+    imground_descriptions = []
+
+    # extended prefill
+    step_idx = 1
+    steps.append(create_step_inject(
+        step_idx, 10, speed, res_idcs[washbuf], TTL_at_end=True))
+    reservoir_vols = {washbuf: 10}
+    # sync aria and computer
+    step_idx = 2
+    if use_ttl:
+        steps.append(create_step_waitforTTL(step_idx))
+    else:
+        steps.append(create_step_sendTCP(step_idx))
+        step_idx += 1
+        steps.append(create_step_waitforTCP(step_idx))
+    for round, (fluid, fluid_vol) in enumerate(
+            zip(experiment['fluids'], experiment['fluid_vols'])):
+        imground_descriptions.append(fluid)
+        # send minimal amount of fluid, for TTL to trigger acquisition if used
+        step_idx += 1
+        steps.append(create_step_inject(
+            step_idx, 1, speed, res_idcs[fluid], TTL_at_end=True))
+        reservoir_vols[fluid] = reservoir_vols.get(fluid, 0) + int(fluid_vol)
+        if not use_ttl:
+            step_idx += 1
+            steps.append(create_step_sendTCP(step_idx))
+
+        # flush during acquisition
+        step_idx += 1
+        steps.append(create_step_inject(
+            step_idx, int(fluid_vol), speed, res_idcs[fluid],
+            TTL_at_end=False))
+        reservoir_vols[fluid] = reservoir_vols.get(fluid, 0) + int(fluid_vol)
+
+        step_idx += 1
+        if use_ttl:
+            steps.append(create_step_waitforTTL(step_idx))
+        else:
+            steps.append(create_step_waitforTCP(step_idx))
+
+    return steps, reservoir_vols, imground_descriptions
 
 
 def create_step_incubate(step_idx, t_incu):
