@@ -15,35 +15,44 @@ import time
 from pycromanager import Core
 
 
-def calibrate(core):
+def calibrate(core, range_pars=(150, 400, 0.005), sleep=0):
     tag_pfs = 'TIPFSOffset'
     tag_zdrive = 'TIZDrive'
-    tag_zpiezo = 'ZStage'
+    # tag_zpiezo = 'ZStage'
 
-    pfs_range = np.arange(0, 700, .025)
-    pfs_range = np.concatenate([pfs_range, pfs_range[::-1], pfs_range, pfs_range[::-1], pfs_range, pfs_range[::-1]])
+    pfs_range = np.arange(*range_pars)
+    pfs_range = pfs_range[:, np.newaxis]
+    pfs_range = pfs_range.repeat(2, axis=1)
+    pfs_range[:, 1] = pfs_range[::-1, 1]
+    pfs_range = np.tile(pfs_range, 2)
 
     zpos = np.nan * np.ones_like(pfs_range)
-    zpos_piezo = np.nan * np.ones_like(pfs_range)
 
-    for i, pfs in enumerate(pfs_range):
-        # print(i, 'of', len(pfs_range))
-        core.set_position(tag_pfs, pfs)
-        if wait_for_focus(core):
-            # time.sleep(.1)
-            pos = core.get_position(tag_zdrive)
-            zpos[i] = pos
-            # pos = core.get_position(tag_zpiezo)
-            zpos_piezo[i] = pos
+    for i in range(pfs_range.shape[1]):
+        print('round', i)
+        for j, pfs in enumerate(pfs_range[:, i]):
+            # print(i, 'of', len(pfs_range))
+            core.set_position(tag_pfs, pfs)
+            if wait_for_focus(core):
+                time.sleep(sleep)
+                pos = core.get_position(tag_zdrive)
+                zpos[j, i] = pos
+        plot_calibration(pfs_range, zpos, show=False, range_pars=range_pars, sleep=sleep)
+        np.save('pfs_range_{:d}_{:d}_{:d}_sleep{:d}.npy'.format(
+            range_pars[0], range_pars[1], int(range_pars[2]*1000), int(sleep*1000)), pfs_range)
+        np.save('zpos_{:d}_{:d}_{:d}.npy'.format(
+            range_pars[0], range_pars[1], int(range_pars[2]*1000), int(sleep*1000)), zpos)
 
-    return pfs_range, zpos, zpos_piezo
+    return pfs_range, zpos
 
 
-def plot_calibration(pfs_range, zpos, zpos_piezo):
+def plot_calibration(pfs_range, zpos, show=True, range_pars=(150, 400, 0.005), sleep=0):
     fig, ax = plt.subplots(nrows=1)
-    ax.plot(pfs_range, zpos)
+    for i in range(pfs_range.shape[1]):
+        ax.plot(pfs_range[:, i], zpos[:, i], label='round {:d}'.format(i))
     ax.set_xlabel('PFS offset [a.u.]')
     ax.set_ylabel('ZDrive position [µm]')
+    ax.legend()
     # fig, ax = plt.subplots(nrows=2)
     # ax[0].plot(pfs_range, zpos)
     # ax[0].set_xlabel('PFS offset [a.u.]')
@@ -51,8 +60,10 @@ def plot_calibration(pfs_range, zpos, zpos_piezo):
     # ax[1].plot(pfs_range, zpos)
     # ax[1].set_xlabel('PFS offset [a.u.]')
     # ax[1].set_ylabel('Z piezo position [nm]')
-    fig.savefig('calibration_step0p025.png')
-    plt.show()
+    fig.savefig('calibration_{:d}_{:d}_{:d}_sleep{:d}.png'.format(
+        range_pars[0], range_pars[1], int(range_pars[2]*1000), int(sleep*1000)))
+    if show:
+        plt.show()
 
 
 def wait_for_focus(core, timeout=1):
@@ -73,7 +84,5 @@ def wait_for_focus(core, timeout=1):
 
 if __name__ == "__main__":
     core = Core()
-    pfs_range, zpos, zpos_piezo = calibrate(core)
-    np.save('pfs_range.npy', pfs_range)
-    np.save('zpos.npy', zpos)
-    plot_calibration(pfs_range, zpos, zpos_piezo)
+    pfs_range, zpos = calibrate(core, range_pars=(150, 600, 0.005), sleep=0)
+    pfs_range, zpos = calibrate(core, range_pars=(150, 600, 0.005), sleep=.2)
