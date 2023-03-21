@@ -18,7 +18,13 @@ from pycromanager import Core
 def calibrate(core, range_pars=(150, 400, 0.005), sleep=0):
     tag_pfs = 'TIPFSOffset'
     tag_zdrive = 'TIZDrive'
+    tag_status = 'TIPFSStatus'
+    prop_status = 'State'
     # tag_zpiezo = 'ZStage'
+    tag_pfs = 'PFSOffset'
+    tag_zdrive = 'ZDrive'
+    tag_status = 'PFS'
+    prop_status = 'PFS in Range'
 
     pfs_range = np.arange(*range_pars)
     pfs_range = pfs_range[:, np.newaxis]
@@ -32,8 +38,8 @@ def calibrate(core, range_pars=(150, 400, 0.005), sleep=0):
         print('round', i)
         for j, pfs in enumerate(pfs_range[:, i]):
             # print(i, 'of', len(pfs_range))
-            core.set_position(tag_pfs, pfs)
-            if wait_for_focus(core):
+            core.set_position(tag_pfs, float(pfs))
+            if wait_for_focus(core, tag_status, prop_status):
                 time.sleep(sleep)
                 pos = core.get_position(tag_zdrive)
                 zpos[j, i] = pos
@@ -66,17 +72,20 @@ def plot_calibration(pfs_range, zpos, show=True, range_pars=(150, 400, 0.005), s
         plt.show()
 
 
-def wait_for_focus(core, timeout=1):
+def wait_for_focus(core, tag_status, prop_status, timeout=1):
     tic = time.time()
     while time.time() - tic < timeout:
-        state = core.get_property('TIPFSStatus', 'State')
+        state = core.get_property(tag_status, prop_status)
         if state == 'Off':
             return False
-        status = core.get_property('TIPFSStatus', 'Status')
+        status = core.get_property(tag_status, prop_status)
         if status == 'Locked in focus':
             return True
         elif status == 'Focus lock failed':
             return False
+        elif status == 'In Range':  # check whether 'PFS in Range' is actually the correct property to use on Skylab
+            time.sleep(0.02)
+            return True
 
         time.sleep(0.02)
     return False
@@ -84,5 +93,5 @@ def wait_for_focus(core, timeout=1):
 
 if __name__ == "__main__":
     core = Core()
-    pfs_range, zpos = calibrate(core, range_pars=(150, 600, 0.005), sleep=0)
-    pfs_range, zpos = calibrate(core, range_pars=(150, 600, 0.005), sleep=.2)
+    pfs_range, zpos = calibrate(core, range_pars=(1000, 15000, 10), sleep=0)
+    #pfs_range, zpos = calibrate(core, range_pars=(150, 600, 0.005), sleep=.2)
