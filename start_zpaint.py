@@ -12,11 +12,10 @@
 """
 import os
 import time
+from datetime import datetime 
 import yaml
 import numpy as np
 from pycromanager import Studio, Core, Acquisition, multi_d_acquisition_events
-
-TAG_PFS = 'PFSOffset'
 
 
 def zpos2pfsoffset(zpos, curr_offset, calibration=None):
@@ -42,6 +41,72 @@ def zpos2pfsoffset(zpos, curr_offset, calibration=None):
         pfs_values = np.interp(
             zpos, z_relative, calibration[:, 1])
         return pfs_values
+
+
+def move_pfsoffset(
+        zpos, core, ztags, jump_factor_settings, max_iter=50,
+        tolerance=.01, approx_stepsperum=1000):
+    """move the Nikon PFS offset such that the ZDrive-position
+    reaches the target given.
+    Args:
+        zpos : float
+            absolute microscope ZDrive position to go to
+        core : MM Core instance
+            access to the hardware
+        ztags : dict
+            micromanager configuration tags. Keys:
+                'zdrive', 'pfsoffset', 'pfsstate'
+        jump_factor_settings : dict
+            settings to adjust the jump size. If the distance to zpos
+            is within the thresholds, adjust the jump size by the factor
+            items:
+                thresholds : tuple, len N
+                    strictly monotonically increasing. thresholds in microns
+                factors : tuple, len N+1
+                    strictly monotonically increasing, between 0 and 1
+        max_iter : int
+            the maximum number of jumps
+        tolerance : float
+            the error in zpos to accept as target reached in um
+        approx_stepsperum : number
+            the approximate number of PFS steps per micron
+    Returns:
+        pfsoffset_pos : np array, shape (max_iter, )
+            the pfs offset positions moved to
+        zdrive_pos : np array, shape (max_iter, )
+            the zdrive positions queried
+    """
+    zdrive_pos = np.nan * np.ones(max_iter)
+    pfsoffset_pos = np.nan * np.ones(max_iter)
+
+    for i in range(max_iter):
+        zdrive_pos[i] = core.get_position(ztags['zdrive'])
+        pfsoffset_pos[i] = core.get_position(ztags['pfsoffset'])
+
+        if np.abs(zpos - zdrive_pos[i]) < tolerance:
+            # on target
+            break
+        elif i == max_iter - 1:
+            # reached maximum iterations, don't move any more
+            break
+        # distance to move
+        deltaz = zpos - zdrive_pos[i]
+        # set the jump factor according to the thresholds
+        for th, fac in zip(jump_factor_settings['thresholds'],
+                           jump_factor_settings['factors']):
+            if np.abs(deltaz) < th:
+                jump_factor = fac
+                break
+        else:
+            jump_factor = jump_factor_settings['factors'][-1]
+        delta_steps = int(jump_factor * deltaz * approx_stepsperum)
+        core.set_position(ztags['pfsoffset'], pfsoffset_pos[i] + delta_steps)
+        # TODO implement something like calibrate_pfsoffset.wait_for_focus
+        # but only when the PFS focus/on-target Status/State can be retreived
+        # on TiE2, until then: just wait
+        # time.sleep(0.05). # maybe not; apparently, set_position waits
+
+    return zdrive_pos[:i+1], pfsoffset_pos[:i+1]
 
 
 def get_multid_settings(studio):
@@ -105,15 +170,17 @@ def get_multid_settings(studio):
     return acq
 
 
-def mm2zpaint_acq(mmacq, PFScalibration):
+def mm2zpaint_acq(mmacq, core, ztags):
     """Transform the micromanager acquisition settings to zPAINT
     acquisition settings (perforoming separate multi-d acquisitions)
     Args:
         mmacq : dict
             the micromanager acquisition settings, retrieved by
             get_multid_settings
-        PFScalibration : array, shape (N, 2)
-            the z-PFS calibration. 1st col: z vals, 2nd col: PFS vals
+        core : pycromanager Core instance
+            for hardware control
+        ztags : dict
+            tags for z hardware, keys: 'zdrive', 'pfsoffset'
     Returns:
         multid_sttg : dict
             the multi-d acquisition settings (only T)
@@ -137,7 +204,7 @@ def mm2zpaint_acq(mmacq, PFScalibration):
         'T': [],
         'C': mmacq['C'],
         'S': mmacq['S'],
-        'Z': map_z_sttg(mmacq['Z'], PFScalibration),
+        'Z': get_abs_zplanes(mmacq['Z'], core, ztags),
         'comment': mmacq['comment'],
         'prefix': mmacq['prefix'],
         'root': mmacq['root'],
@@ -145,65 +212,54 @@ def mm2zpaint_acq(mmacq, PFScalibration):
     return multid_sttg, zpacq
 
 
-def map_z_sttg(z_sttg, PFScalibration):
-    """Map z-settings from micromanager (in um) to PFS-offset settings
+def get_abs_zplanes(z_sttg, core, ztags):
+    """Get z-planes from the micromanager z-settings.
+    If relative stacks are used, calculate from the current Z position.
     Args:
         z_sttg : dict
             the z-settings as retrieved in get_multid_settings, with keys:
             'slices', 'bot', 'top', 'step', 'relative'
-        PFScalibration : array, shape (N, 2)
-            the z-PFS calibration. 1st col: z vals, 2nd col: PFS vals
+        core : pycromanager Core instance
+            for hardware control
+        ztags : dict
+            tags for z hardware, keys: 'zdrive', 'pfsoffset'
     Returns:
-        z_sttg_pfs : dict
-            the mapped settings, with keys
-            'slices', 'bot', 'top'
+        zplanes : np array
+            the absolute zdrive plane positions to move to
     """
-    try:
-        assert z_sttg['relative']
-    except:
-        raise NotImplmentedError(
-            'zPAINT experiments with absolute z settings are not implemented')
-
-    curr_pfsoffset = core_get_pfsoffset()
-    z_sttg_pfs = {
-        'slices': zpos2pfsoffset(
-            z_sttg['slices'], curr_pfsoffset, PFScalibration),
-        'top': zpos2pfsoffset(z_sttg['top'], curr_pfsoffset, PFScalibration),
-        'bot': zpos2pfsoffset(z_sttg['bot'], curr_pfsoffset, PFScalibration),
-    }
-    return z_sttg_pfs
+    # zplanes = np.linspace(z_sttg['bot'], z_sttg['top'], num=z_sttg['slices'])
+    zplanes = np.array(z_sttg['slices'])
+    if z_sttg['relative']:
+        zplanes = zplanes + core.get_position(ztags['zdrive'])
+    return zplanes
 
 
-def core_get_pfsoffset():
-    global core
-    if core is None:
-        core = Core()
-    return core.get_position(TAG_PFS)
-
-
-def core_set_pfsoffset(pfs):
-    global core
-    if core is None:
-        core = Core()
-    core.set_position(TAG_PFS, pfs)
-
-
-def start_acq(acq_settings):
+def start_acq(core, acq_settings):
     """Starts a zPAINT acquisition, based on the multi-d settings in
     micromanager.
 
     Args:
+        core : pycromanager Core instance
+            for hardware control
         acq_settings : dict
             additional settings for the acquisition
+            items:
+                ztags : dict with keys 'zdrive', 'pfsoffset'
+                ztolerance : float, tolerance of z movement in um
+                zmaxiter : int, maximum number of iterations for moving in z
     """
-    if acq_settings.get('PFScalibration'):
-        PFScalibration = np.load(acq_settings['PFScalibration'])
-    else:
-        PFScalibration = None
+    pfson = acq_settings['ztags']['pfson']
+    if core.get_property(pfson[0], pfson[1]) != 'On':
+        raise ValueError('PFS is not on. Please switch on and restart.')
 
     studio = Studio(convert_camel_case=False)
+
+    # switch live mode off if it is running, otherwise an error occurs
+    if studio.live().is_live_mode_on():
+        studio.live().set_live_mode_on(False)
+
     acq = get_multid_settings(studio)
-    multid_sttg, zpacq = mm2zpaint_acq(acq, PFScalibration)
+    multid_sttg, zpacq = mm2zpaint_acq(acq, core, acq_settings['ztags'])
 
     # create the root folder
     dirpath = os.path.join(zpacq['root'], zpacq['prefix'])
@@ -213,48 +269,82 @@ def start_acq(acq_settings):
         extit += 1
         ext = '_{:d}'.format(extit)
     dirpath = dirpath + ext
-    os.mkdir(dirpath)
+    os.makedirs(dirpath)
 
     # save settings
     acquisition_config = {
-        'inner dimensions': multid_sttg,
-        'outer dimensions': zpacq,
+        'inner dimensions': multid_sttg.copy(),
+        'outer dimensions': zpacq.copy(),
         'acquisition_settings': acq_settings,
     }
+    acquisition_config['outer dimensions']['C'] = [str(c) for c in acquisition_config['outer dimensions']['C']]
+    acquisition_config['outer dimensions']['S'] = [str(c) for c in acquisition_config['outer dimensions']['S']]
+    acquisition_config['outer dimensions']['Z'] = [float(c) for c in acquisition_config['outer dimensions']['Z']]
+    print(acquisition_config)
     with open(os.path.join(
             dirpath, 'acquisition_configuration.yaml'), 'w') as f:
         yaml.dump(acquisition_config, f)
+    acq_log = {}
+    acq_i = 0
 
     # create multi-d-acquisition events
     print(multid_sttg)
+    print('Hard-coded dimension order: PCZT')
     events = multi_d_acquisition_events(
         num_time_points=multid_sttg['T']['n'],
         time_interval_s=multid_sttg['T']['dt'] / 1000)
 
+    z_start = core.get_position(acq_settings['ztags']['pfsoffset'])
+    viewer = None
+
     # fix dimension order to SCZT
-    for i_s, pos in zp_iterate_S(zpacq):
-        for i_c, c in zp_iterate_C(zpacq):
-            for i_z, z in zp_iterate_Z(zpacq):
-                prefix = zpacq['prefix'] + '_S{:d}_C{:d}_Z{:d}'.format(
+    for i_s, pos in zp_iterate_S(zpacq, core):
+        for i_c, c in zp_iterate_C(zpacq, core):
+            for i_z, z, (zdrive_pos, pfsoffset_pos) in zp_iterate_Z(
+                        zpacq, core, acq_settings):
+                # add log entries
+                acq_log[acq_i] = {
+                    'i_s': i_s, 'i_c': i_c, 'i_z': i_z,
+                    'pos': str(pos), 'c': str(c), 'z': float(z),
+                    'curr_zpos': float(zdrive_pos[-1]),
+                    'curr_pfsoffset': float(pfsoffset_pos[-1]),
+                    'time': datetime.now().strftime('%y%m%d-%H%M:%S.%f'),
+                }
+                acq_i += 1
+                prefix = zpacq['prefix'] + '_P{:d}_C{:d}_Z{:d}'.format(
                     i_s, i_c, i_z)
-                with Acquisition(directory=dirpath, name=prefix) as acq:
+                print('acquring dataset ', acq_i)
+                with Acquisition(directory=dirpath, name=prefix, show_display=acq_settings['show_display']) as acq:
                     acq.acquire(events)
+                    if acq_settings['show_display']:
+                        viewer = acq.get_viewer()
+                time.sleep(.2)
+                if viewer is not None and acq_settings['close_display_after_acquisition']:
+                    viewer.close()
+                acq_log[acq_i-1]['dummy-acq prefix'] = prefix
+                # acq_log[acq_i-1]['dummy-acq events'] = str(events)
+
+    # move back in z to initial position
+    core.set_position(acq_settings['ztags']['pfsoffset'], z_start)
+    
+    # write log
+    with open(os.path.join(
+            dirpath, 'acquisition_log.yaml'), 'w') as f:
+        yaml.dump(acq_log, f)
 
 
-def zp_iterate_S(acq):
+def zp_iterate_S(acq, core):
     """Iterator over the S dimension of a zpaint acquisition
     Args:
         acq : dict
+        core : pycromanager Core instance
+            for hardware control
     Yields:
         iteration : int
             the iteration number
         sval : MultiPosition
             the position
     """
-    global core
-    if core is None:
-        core = Core()
-
     if not acq['usedims']['S'] or acq['S'] == []:
         yield 0, 0
     else:
@@ -263,20 +353,18 @@ def zp_iterate_S(acq):
             yield i, pos
 
 
-def zp_iterate_C(acq):
+def zp_iterate_C(acq, core):
     """Iterator over the C dimension of a zpaint acquisition
     Args:
         acq : dict
+        core : pycromanager Core instance
+            for hardware control
     Yields:
         iteration : int
             the iteration number
         cval : int
             the the channel index
     """
-    global core
-    if core is None:
-        core = Core()
-
     if not acq['usedims']['C'] or acq['C'] == []:
         yield 0, 0
     else:
@@ -287,29 +375,51 @@ def zp_iterate_C(acq):
             yield i, chan
 
 
-def zp_iterate_Z(acq):
+def zp_iterate_Z(acq, core, acq_settings):
     """Iterator over the Z dimension of a zpaint acquisition
     Args:
         acq : dict
+        core : pycromanager Core instance
+            for hardware control
+        acq_settings : dict
+            additional settings for the acquisition
+            items:
+                ztags : dict with keys 'zdrive', 'pfsoffset'
+                ztolerance : float, tolerance of z movement in um
+                zmaxiter : int, maximum number of iterations for moving in z
     Yields:
         iteration : int
             the iteration number
         zval : float
             the PFS offset position
     """
-    if not acq['usedims']['Z'] or acq['Z'] == []:
+    if not acq['usedims']['Z'] or len(acq['Z']) == 0:
         yield 0, 0
     else:
-        for i, pfsoffset in enumerate(acq['Z']['slices']):
-            core_set_pfsoffset(pfsoffset)
-            yield i, pfsoffset
+        for i, zpos in enumerate(acq['Z']):
+            # move to z position
+            zdrive_pos, pfsoffset_pos = move_pfsoffset(
+                zpos, core, acq_settings['ztags'], acq_settings['jump_factor_settings'],
+                acq_settings['zmaxiter'], acq_settings['ztolerance'])
+            yield i, zpos, (zdrive_pos, pfsoffset_pos)
 
 
 if __name__ == '__main__':
-    global core
     core = Core()
 
     acq_settings = {
-        'PFScalibration': 'PFScalibration_dummy.npy'
+        'ztags': {
+            'zdrive': 'ZDrive',
+            'pfsoffset': 'PFSOffset',
+            'pfson': ('PFS', 'FocusMaintenance')
+        },
+        'jump_factor_settings': {
+            'thresholds': (.5, 2),
+            'factors': (.2, .4, .6),
+        },
+        'ztolerance': .025,  # tolerance of z movement in um
+        'zmaxiter': 50,  # maximum number of iterations for moving in z
+        'show_display': True,  # apparently, this has to be true, otherwise a pycromanager error gets raised
+        'close_display_after_acquisition': True,
     }
-    start_acq(acq_settings)
+    start_acq(core, acq_settings)
