@@ -36,7 +36,7 @@ from logging import handlers
 from icecream import ic
 from inputimeout import inputimeout, TimeoutOccurred
 
-from pycromanager import Acquisition, multi_d_acquisition_events, start_headless, Core, Bridge
+from pycromanager import Acquisition, multi_d_acquisition_events, start_headless, Core, Studio
 # import monet.control as mcont
 from arduino_connection import AriaTrigger
 from AriaComm import AriaConnection
@@ -154,8 +154,19 @@ def main(acquisition_config, dry_run=False, break_for_slide=True):
     # Start the Java process
     # start_headless(mm_app_path, config_file, timeout=5000)
     core = Core()
+    studio = Studio(convert_camel_case=True)
 
     print('Connected to Micromanager.')
+
+    # test the possibility to acquire (fail early)
+    if studio.live().is_live_mode_on():
+        studio.live().set_live_mode_on(False)
+    events = multi_d_acquisition_events(
+        num_time_points=10,time_interval_s=.1)
+    with Acquisition(
+        directory=acquisition_config['save_dir'], name='testacquisition',
+        show_display=False, debug=True) as acq:
+        acq.acquire(events)
 
     # start aria triggering connection
     if not dry_run:
@@ -213,6 +224,8 @@ def main(acquisition_config, dry_run=False, break_for_slide=True):
         if 'illu_parameters' in acquisition_config.keys():
             laserlaunch.power = acquisition_config['illu_parameters']['power'] # mW
 
+        if studio.live().is_live_mode_on():
+            studio.live().set_live_mode_on(False)
         record_movie(acq_name, acquisition_config, core)
 
         if 'illu_parameters' in acquisition_config.keys():
