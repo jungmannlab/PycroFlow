@@ -3,12 +3,21 @@ address are unique to the whole system (same as serial address)
 
 
 """
-import PyHamiltonPSD as ham
-from .PyHamiltonMVP import MVP
-from PyHamiltonPSD.util import SyringeMovement as SyrMov
-from PyHamiltonPSD.util import SyringeTypes as SyrTypes
-from PyHamiltonPSD.util import PSDTypes
+import pyHamiltonPSD as ham
+from pyHamiltonMVP import MVP
+from pyHamiltonPSD.util import SyringeMovement as SyrMov
+from pyHamiltonPSD.util import SyringeTypes as SyrTypes
+from pyHamiltonPSD.util import PSDTypes
 import numpy as np
+
+
+def connect(port, baudrate):
+    assert isinstance(port, str)
+    ham.connect(port, baudrate)
+
+
+def disconnect(port, baudrate):
+    ham.disconnect()
 
 
 """Legacy system architecture:
@@ -115,7 +124,9 @@ class Valve():
         self.mvp = MVP(address, instrument_type)
         ham.communication.sendCommand(
             self.mvp.asciiAddress,
-            self.mvp.command.enableHFactorCommandsAndQueries()
+            self.mvp.command.initializeValve()
+            + self.mvp.command.enableValveMovement()
+            + self.mvp.command.enableHFactorCommandsAndQueries()
             + self.mvp.command.executeCommandBuffer())
         valve_type = map_valve_type(valve_type)
 
@@ -283,7 +294,7 @@ class LegacyArchitecture():
 
     def _assign_protocol(self, protocol):
         self.protocol = protocol['protocol_entries']
-        self.flow_parameters = protocol['flow_parameters']:
+        self.flow_parameters = protocol['flow_parameters']
 
     def _assign_tubing_config(self, config):
         self.tubing_config = config

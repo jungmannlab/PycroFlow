@@ -1,5 +1,4 @@
-from PyHamiltonPSD.util import *
-
+from pyHamiltonPSD.util import *
 
 class MVP:
     # default address in case that psd has address pin set on 0
