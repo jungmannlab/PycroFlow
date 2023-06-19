@@ -4,11 +4,14 @@ address are unique to the whole system (same as serial address)
 
 """
 import pyHamiltonPSD as ham
-from pyHamiltonMVP import MVP
+import PyHamiltonMVP
+from PyHamiltonMVP import MVP
 from pyHamiltonPSD.util import SyringeMovement as SyrMov
 from pyHamiltonPSD.util import SyringeTypes as SyrTypes
 from pyHamiltonPSD.util import PSDTypes
 import numpy as np
+import unittest
+from unittest.mock import patch, MagicMock
 
 
 def connect(port, baudrate):
@@ -30,8 +33,8 @@ def disconnect(port, baudrate):
 legacy_system_config = {
     'system_type': 'legacy',
     'valve_a': [
-        {'address': 0, 'intrument_type': 'MVP', 'valve_type': '8-5'},
-        {'address': 1, 'intrument_type': 'MVP', 'valve_type': '8-5'},
+        {'address': 0, 'instrument_type': 'MVP', 'valve_type': '8-5'},
+        {'address': 1, 'instrument_type': 'MVP', 'valve_type': '8-5'},
         ],
     'pump_a': {'address': 2, 'instrument_type': '4', 'valve_type': 'Y', 'syringe': '500u'},
     'pump_out': {'address': 3, 'instrument_type': '4', 'valve_type': 'Y', 'syringe': '5.0m'},
@@ -89,9 +92,9 @@ class Reservoir():
     """Representation of a fluid reservoir
     """
 
-    def __init__(self, id, valve_positions):
+    def __init__(self, id, valve_pos):
         self.id = id
-        self.valve_positions = valve_positions
+        self.valve_positions = valve_pos
 
     def get_valve_positions(self):
         return self.valve_positions
@@ -119,9 +122,11 @@ class Valve():
                 set, as they are set on the DIP switch (PSD manual, p.15)
 
         """
-        assert instrument_type == 'MVP'
+        assert instrument_type in ['MVP']
 
-        self.mvp = MVP(address, instrument_type)
+        if instrument_type == 'MVP':
+            self.mvp = MVP(address, instrument_type)
+
         ham.communication.sendCommand(
             self.mvp.asciiAddress,
             self.mvp.command.initializeValve()
@@ -266,7 +271,7 @@ class LegacyArchitecture():
     pump_a = None
     pump_out = None
     tubing_config = {}
-    reservoir_a = []
+    reservoir_a = {}
     # maps reservoir ids to the fluid paths (legacy only has 'a')
     reservoir_paths = {}
     protocol = []
@@ -274,8 +279,9 @@ class LegacyArchitecture():
 
     extractionfactor = 1
 
-    def __init__(self):
-        pass
+    def __init__(self, system_config, tubing_config):
+        self._assign_system_config(system_config)
+        self._assign_tubing_config(tubing_config)
 
     def _assign_system_config(self, config):
         """Assign a system configuration
@@ -291,6 +297,7 @@ class LegacyArchitecture():
             self.reservoir_paths[rconfig['id']] = 'a'
         self.pump_a = Pump(**config['pump_a'])
         self.pump_out = Pump(**config['pump_out'])
+        self.special_names = config['special_names']
 
     def _assign_protocol(self, protocol):
         self.protocol = protocol['protocol_entries']
@@ -340,7 +347,7 @@ class LegacyArchitecture():
             self._set_valves(pentry['reservoir_id'])
             self._inject(injection_volume, pentry['speed'])
             # afterwards, flush in buffer to get the pentry volume to the sample
-            self._set_valves(self.config['flushbuffer_a'])
+            self._set_valves(self.special_names['flushbuffer_a'])
             self._inject(flush_volume, pentry['speed'])
 
         self.last_protocol_entry = -1  # tubing full of buffer, cannot simply proceed
@@ -367,13 +374,13 @@ class LegacyArchitecture():
             if pentry['type'] != 'dispense':
                 continue
             reservoirs[idx] = pentry['reservoir_id']
-            volumes = pentry['volume']
-        reservoirs[-1] = self.config['flushbuffer_a']
+            volumes[idx] = pentry['volume']
+        reservoirs[-1] = self.special_names['flushbuffer_a']
         volumes[-1] = self._calc_vol_to_inlet(reservoirs[-1])
 
         volumes_cum = np.cumsum(volumes)
 
-        for idx, step in enumerate(range(start=i, stop=i + nsteps)):
+        for idx, step in enumerate(range(i, i + nsteps)):
             injection_tuples = []
             if idx == 0:
                 vol = (
@@ -386,12 +393,16 @@ class LegacyArchitecture():
                     - self._calc_vol_to_inlet(reservoirs[idx - 1]))
             vol_rest = vol
             cum_start = np.argwhere(volumes_cum > 0).flatten()[0]
-            cum_stop = np.arghwere(volumes_cum < vol).flatten()[0]
+            try:
+                cum_stop = np.argwhere(volumes_cum > vol).flatten()[0] + 1
+            except IndexError:
+                cum_stop = len(volumes_cum)
             for cum_idx in range(cum_start, cum_stop):
                 vol_step = min([vol_rest, volumes_cum[cum_idx]])
-                injection_tuples.append(tuple(
-                    reservoirs[cum_idx],
-                    vol_step))
+                if vol_step == 0:
+                    continue
+                injection_tuples.append(
+                    tuple([reservoirs[cum_idx], vol_step]))
                 volumes_cum -= vol_step
                 vol_rest -= vol_step
             column[step] = injection_tuples
@@ -556,3 +567,126 @@ experiment_config = {
         1: 'Imager 50pM',
     }
 }
+
+
+# @patch.dict('pyHamiltonPSD', {'PSD': MagicMock()})
+# @patch.dict('PyHamiltonMVP', {'MVP': MagicMock()})
+# @patch.dict('pyHamiltonPSD.communication', {'sendCommand': MagicMock()})
+class LegacyArchitectureTest(unittest.TestCase):
+    def setUp(self):
+        test_system_config = {
+            'system_type': 'legacy',
+            'valve_a': [
+                {'address': 0, 'instrument_type': 'MVP', 'valve_type': '8-5'},
+                {'address': 1, 'instrument_type': 'MVP', 'valve_type': '8-5'},
+                ],
+            'pump_a': {'address': 2, 'instrument_type': '4', 'valve_type': 'Y', 'syringe': '500u'},
+            'pump_out': {'address': 3, 'instrument_type': '4', 'valve_type': 'Y', 'syringe': '5.0m'},
+            'reservoir_a': [
+                {'id': 0, 'valve_pos': {0: 3, 1: 2}},
+                {'id': 1, 'valve_pos': {0: 2, 1: 2}},
+                {'id': 3, 'valve_pos': {0: 2, 1: 4}},
+                ],
+            'special_names': {
+                'flushbuffer_a': 3,  # defines the reservoir id with the buffer that can be used for flushing}
+                }
+            }
+        test_tubing_config = {
+            (0, 'pump_a'): 0,
+            (1, 'pump_a'): 0,
+            (3, 'pump_a'): 0,
+            ('pump_a', 'sample'): 0,
+        }
+        test_protocol = {
+            'flow_parameters': {
+                'start_velocity': 50,
+                'max_velocity': 1000,
+                'stop_velocity': 500,
+                'extractionfactor': 2},
+            'imaging': {
+                'frames': 30000,
+                't_exp': 100},
+            'protocol_entries': [
+                {'type': 'dispense', 'reservoir_id': 0, 'volume': 500},
+                {'type': 'dispense', 'reservoir_id': 1, 'volume': 200, 'velocity': 600},
+                {'type': 'acquire', 'frames': 10000, 't_exp': 100, 'round': 1},
+                {'type': 'dispense', 'reservoir_id': 0, 'volume': 300},   # for more commplex system: 'mix'
+            ]}
+        with patch('pyHamiltonPSD.communication.sendCommand', create=True) as psc:
+            self.va = LegacyArchitecture(test_system_config, test_tubing_config)
+            self.va._assign_protocol(test_protocol)
+
+    def test_vol_to_inlet(self):
+        # check vol to inlet calculation
+        vol = self.va._calc_vol_to_inlet(1)
+        print(vol)
+        self.assertTrue(vol == 0)
+
+    def test_tubing_column_1(self):
+        # check tubing column without volume in tubings
+        self.va._assemble_tubing_column(0)
+        print(self.va.tubing_column)
+
+        # as no tubing volume is assigned, the tubing column
+        # matches the single steps
+        tubing_column_expected = {
+            0: [(0, 500.)],
+            1: [(1, 200.)],
+            2: [],
+            3: [(0, 300.)],
+        }
+        print('expected', tubing_column_expected)
+        print('actual', self.va.tubing_column)
+        self.assertDictEqual(tubing_column_expected, self.va.tubing_column)
+
+    def test_tubing_column_2(self):
+        # check tubing column with volume in tubings
+        test_tubing_config_2 = {
+            (0, 'pump_a'): 0,
+            (1, 'pump_a'): 0,
+            (3, 'pump_a'): 0,
+            ('pump_a', 'sample'): 100,
+        }
+        self.va._assign_tubing_config(test_tubing_config_2)
+        self.va._assemble_tubing_column(0)
+        print(self.va.tubing_column)
+
+        # as no tubing volume is assigned, the tubing column
+        # matches the single steps
+        tubing_column_expected = {
+            0: [(0, 500.), (1, 100.)],
+            1: [(1, 100.), (0, 100.)],
+            2: [],
+            3: [(0, 200.), (3, 100.)],
+        }
+        print('expected', tubing_column_expected)
+        print('actual', self.va.tubing_column)
+        self.assertDictEqual(tubing_column_expected, self.va.tubing_column)
+
+    def test_tubing_column_3(self):
+        # check tubing column with volume in tubings
+        test_tubing_config_2 = {
+            (0, 'pump_a'): 100,
+            (1, 'pump_a'): 300,
+            (3, 'pump_a'): 200,
+            ('pump_a', 'sample'): 0,
+        }
+        self.va._assign_tubing_config(test_tubing_config_2)
+        self.va._assemble_tubing_column(0)
+        print(self.va.tubing_column)
+
+        # as no tubing volume is assigned, the tubing column
+        # matches the single steps
+        tubing_column_expected = {
+            0: [(0, 500.), (1, 100.)],
+            1: [(1, 100.), (0, 300.)],
+            2: [],
+            3: [(3, 200.)],
+        }
+        print('expected', tubing_column_expected)
+        print('actual', self.va.tubing_column)
+        self.assertDictEqual(tubing_column_expected, self.va.tubing_column)
+
+
+if __name__ == '__main__':
+    unittest.main()
