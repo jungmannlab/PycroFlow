@@ -1,3 +1,43 @@
+
+"""aborting an acqiusition, as proposed by chatGPT
+
+
+from pycromanager import Acquisition, multi_d_acquisition_events
+import threading
+
+def acquire_frames():
+    with Acquisition(directory='path_to_save_frames', name='acquisition_name', frames=500) as acq:
+        for event in multi_d_acquisition_events(acq):
+            acq.acquire(event)
+            if threading.main_thread().stopped:
+                acq.abort()
+
+def check_abort():
+    input("Press Enter to abort acquisition.")
+    threading.main_thread().stopped = True
+
+# Create a separate thread for checking user input
+abort_thread = threading.Thread(target=check_abort)
+abort_thread.start()
+
+# Start frame acquisition
+acquire_frames()
+"""
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 """
 Created on Tue Oct  4 17:07:56 2022
 ​
