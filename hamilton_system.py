@@ -11,7 +11,15 @@ from pyHamiltonPSD.util import SyringeTypes as SyrTypes
 from pyHamiltonPSD.util import PSDTypes
 import numpy as np
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
+import logging
+import sys
+import time
+
+
+logger = logging.getLogger()
+logger.level = logging.DEBUG
+logger.addHandler(logging.StreamHandler(sys.stdout))
 
 
 def connect(port, baudrate):
@@ -33,25 +41,66 @@ def disconnect(port, baudrate):
 legacy_system_config = {
     'system_type': 'legacy',
     'valve_a': [
-        {'address': 0, 'instrument_type': 'MVP', 'valve_type': '8-5'},
-        {'address': 1, 'instrument_type': 'MVP', 'valve_type': '8-5'},
+        {'address': 2, 'instrument_type': 'MVP', 'valve_type': '8-5'},
+        {'address': 3, 'instrument_type': 'MVP', 'valve_type': '8-5'},
+        {'address': 4, 'instrument_type': 'MVP', 'valve_type': '8-5'},
         ],
-    'pump_a': {'address': 2, 'instrument_type': '4', 'valve_type': 'Y', 'syringe': '500u'},
-    'pump_out': {'address': 3, 'instrument_type': '4', 'valve_type': 'Y', 'syringe': '5.0m'},
+    'pump_a': {'address': 0, 'instrument_type': '4', 'valve_type': 'Y', 'syringe': '500u'},
+    'pump_out': {'address': 1, 'instrument_type': '4', 'valve_type': 'Y', 'syringe': '5.0m'},
     'reservoir_a': [
-        {'id': 0, 'valve_pos': {0: 3, 1: 2}},
-        {'id': 1, 'valve_pos': {0: 2, 1: 2}},
+        {'id': 21, 'valve_pos': {2: 1, 3: 1, 4: 1}},
+        {'id': 20, 'valve_pos': {2: 1, 3: 1, 4: 2}},
+        {'id': 19, 'valve_pos': {2: 1, 3: 1, 4: 3}},
+        {'id': 18, 'valve_pos': {2: 1, 3: 1, 4: 4}},
+        {'id': 17, 'valve_pos': {2: 1, 3: 1, 4: 5}},
+        {'id': 16, 'valve_pos': {2: 1, 3: 1, 4: 6}},
+        {'id': 15, 'valve_pos': {2: 1, 3: 1, 4: 7}},
+        {'id': 14, 'valve_pos': {2: 1, 3: 1, 4: 8}},
+        {'id': 13, 'valve_pos': {2: 1, 3: 2}},
+        {'id': 12, 'valve_pos': {2: 1, 3: 3}},
+        {'id': 11, 'valve_pos': {2: 1, 3: 4}},
+        {'id': 10, 'valve_pos': {2: 1, 3: 5}},
+        {'id': 9, 'valve_pos': {2: 1, 3: 6}},
+        {'id': 8, 'valve_pos': {2: 1, 3: 7}},
+        {'id': 7, 'valve_pos': {2: 1, 3: 8}},
+        {'id': 6, 'valve_pos': {2: 2}},
+        {'id': 5, 'valve_pos': {2: 3}},
+        {'id': 4, 'valve_pos': {2: 4}},
+        {'id': 3, 'valve_pos': {2: 5}},
+        {'id': 2, 'valve_pos': {2: 6}},
+        {'id': 1, 'valve_pos': {2: 7}},
+        {'id': 0, 'valve_pos': {2: 8}},
         ],
-    'flushbuffer_a': 0,  # defines the reservoir id with the buffer that can be used for flushing
+    'flushbuffer_a': 21,  # defines the reservoir id with the buffer that can be used for flushing should be at the end of multiple MVPs
 }
 
 # description of tubing volumes between
 # reservoirs -> confluxes(if present) -> pumps
 # connections are set fixed for each system architecture
 legacy_tubing_config = {
-    (0, 'pump_a'): 153.2,
-    (1, 'pump_a'): 151.8,
-    ('pump_a', 'sample'): 30.7,
+    (21, 'pump_a'): 365,
+    (20, 'pump_a'): 365,
+    (19, 'pump_a'): 365,
+    (18, 'pump_a'): 365,
+    (17, 'pump_a'): 365,
+    (16, 'pump_a'): 365,
+    (15, 'pump_a'): 365,
+    (14, 'pump_a'): 365,
+    (13, 'pump_a'): 260,
+    (12, 'pump_a'): 260,
+    (11, 'pump_a'): 260,
+    (10, 'pump_a'): 260,
+    (9, 'pump_a'): 260,
+    (8, 'pump_a'): 260,
+    (7, 'pump_a'): 260,
+    (6, 'pump_a'): 215,
+    (5, 'pump_a'): 215,
+    (4, 'pump_a'): 215,
+    (3, 'pump_a'): 215,
+    (2, 'pump_a'): 215,
+    (1, 'pump_a'): 215,
+    (0, 'pump_a'): 215,
+    ('pump_a', 'sample'): 256,
 }
 
 """the 'flattened protocol' (in contrast to the 'aggregated' Exchange/MERPAINT protocol
@@ -65,7 +114,7 @@ protocol = {
         'start_velocity': 50,
         'max_velocity': 1000,
         'stop_velocity': 500,
-        'extractionfactor': 2},
+        'extractionfactor': 1},
     'imaging': {
         'frames': 30000,
         't_exp': 100},
@@ -125,7 +174,7 @@ class Valve():
         assert instrument_type in ['MVP']
 
         if instrument_type == 'MVP':
-            self.mvp = MVP(address, instrument_type)
+            self.mvp = MVP(str(address), instrument_type)
 
         ham.communication.sendCommand(
             self.mvp.asciiAddress,
@@ -155,6 +204,8 @@ class Valve():
 
 
 class Pump():
+    curr_vol = 0
+
     def __init__(self, address, syringe,
                  instrument_type='4', valve_type='1', resolution_mode=1):
         """
@@ -188,7 +239,7 @@ class Pump():
         """
         assert instrument_type in [member.value for member in PSDTypes]
         assert syringe in [member.value for member in SyrTypes]
-        self.psd = ham.PSD(address, instrument_type)
+        self.psd = ham.PSD(str(address), instrument_type)
         ham.communication.sendCommand(
             self.psd.asciiAddress,
             self.psd.command.enableHFactorCommandsAndQueries()
@@ -207,25 +258,32 @@ class Pump():
         self.psd.calculateSyringeStroke()
         self.psd.setVolume(syringe)
 
+        # syringe volume in µl
+        self.syringe_volume = float(syringe[:-1])
+        if syringe[-1] == 'm':
+            self.syringe_volume *= 1000
+
     def dispense(self, vol, velocity=None):
         if velocity is not None:
             cmd = self.psd.command.setMaximumVelocity(velocity)
         else:
             cmd = ''
-        cmd += self.psd.command.syringeMovement(SyrMov.relativeDispense, vol)
+        cmd += self.psd.command.syringeMovement(SyrMov.relativeDispense.value, vol)
         cmd += self.psd.command.executeCommandBuffer()
         ham.communication.sendCommand(
             self.psd.asciiAddress, cmd, waitForPump=False)
+        self.curr_vol -= vol
 
     def pickup(self, vol, velocity=None):
         if velocity is not None:
             cmd = self.psd.command.setMaximumVelocity(velocity)
         else:
             cmd = ''
-        cmd += self.psd.command.syringeMovement(SyrMov.relativePickup, vol)
+        cmd += self.psd.command.syringeMovement(SyrMov.relativePickup.value, vol)
         cmd += self.psd.command.executeCommandBuffer()
         ham.communication.sendCommand(
             self.psd.asciiAddress, cmd, waitForPump=False)
+        self.curr_vol += vol
 
     def set_velocity(self, start_velocity, max_velocity, stop_velocity):
         """Set movement start, max, and stop velocities
@@ -259,6 +317,30 @@ class Pump():
         ham.communication.sendCommand(
             self.psd.asciiAddress,
             cmd + self.psd.command.executeCommandBuffer(),
+            waitForPump=False)
+
+    def wait_until_done(self):
+        """Waits until the pump is done moving.
+        Using pyHam functionality for now, therefor eno timeout
+        Args:
+            timeout : float
+                timeout in s
+        """
+        ham.communication.sendCommand(
+            self.psd.asciiAddress,
+            ham.util.QueryCommandsEnumeration.RETURNS_255.value,
+            waitForPump=True)
+        # tic = time.time()
+        # while time.time() < tic + timeout:
+        #     time.sleep(.05)
+
+    def stop_current_move(self):
+        """Stops the current movement. The pump needs to be
+        reinitialized after this.
+        """
+        ham.communication.sendCommand(
+            self.psd.asciiAddress,
+            self.psd.command.terminateCommandBuffer(),
             waitForPump=False)
 
 
@@ -422,7 +504,7 @@ class LegacyArchitecture():
         if self.reservoir_paths[reservoir_id] == 'a':
             valve_positions = self.reservoir_a[reservoir_id].get_valve_positions()
             for valve, pos in valve_positions.items():
-                self.valve_a[valve].set(pos)
+                self.valve_a[valve].set_valve(pos)
         else:
             raise NotImplmentedError('Legacy system only has fluid path "a".')
 
@@ -460,7 +542,7 @@ class LegacyArchitecture():
         volume_quant = max([
             self.pump_a.syringe_volume,
             self.pump_out.syringe_volume / extractionfactor])
-        nr_pumpings = vol // volume_quant
+        nr_pumpings = int(vol // volume_quant)
         pump_volumes = volume_quant * np.ones(nr_pumpings + 1)
         pump_volumes[-1] = vol % volume_quant
 
@@ -471,8 +553,8 @@ class LegacyArchitecture():
             self.pump_out.dispense(
                 self.pump_a.curr_vol * extractionfactor,
                 velocity * extractionfactor)
-            self.pump_a.wait_till_done()
-            self.pump_out.wait_till_done()
+            self.pump_a.wait_until_done()
+            self.pump_out.wait_until_done()
 
             self.pump_a.set_valve('out')
             self.pump_out.set_valve('in')
@@ -480,14 +562,50 @@ class LegacyArchitecture():
             self.pump_out.pickup(
                 pump_volume * extractionfactor,
                 velocity * extractionfactor)
-            self.pump_a.wait_till_done()
-            self.pump_out.wait_till_done()
+            self.pump_a.wait_until_done()
+            self.pump_out.wait_until_done()
 
         self.pump_out.set_valve('out')
         self.pump_out.dispense(
             self.pump_a.curr_vol * extractionfactor,
             velocity * extractionfactor)
-        self.pump_out.wait_till_done()
+        self.pump_out.wait_until_done()
+
+    def fill_tubings(self):
+        """Fill the tubings with the liquids of their reservoirs.
+        """
+        for res_di, res in self.reservoir_a.items():
+            # take care of the flushbuffer last
+            if res_id == self.special_names['flushbuffer_a']:
+                continue
+            self._set_valves(res_od)
+            vol = self.tubing_config[(res_id, 'pump_a')]
+            self._inject(vol)  # could use only input pump instead
+
+        # now, flush everything with the flushbuffer
+        self._set_valves(self.special_names['flushbuffer_a'])
+        vol = (
+            self.tubing_config[(self.special_names['flushbuffer_a'], 'pump_a')]
+            + self.tubing_config[('pump_a', 'sample')])
+        self._inject(vol)
+
+    # def calibrate_tubings(self, max_tubing_vol=500):
+    #     """Measure the tubing volumes
+
+    #     Args:
+    #         max_tubing_vol : float
+    #             the maximum possible tubing volume; this is used
+    #             to pre-fill the tubings
+    #     """
+    #     print('filling tubings. Please fill tubes with > {:.1f} µl water'.format(max_tubing_vol))
+    #     max_tubing_config = {}
+    #     for res_id, res in self.reservoir_a.items():
+    #         max_tubing_config[(res_id, 'pump_a')] = max_tubing_vol
+    #     max_tubing_config[('pump_a', 'sample')] = max_tubing_vol
+    #     self.tubing_config = max_tubing_config
+    #     self.fill_tubings()
+    #     # todo: etc
+
 
 
 """
@@ -569,9 +687,6 @@ experiment_config = {
 }
 
 
-# @patch.dict('pyHamiltonPSD', {'PSD': MagicMock()})
-# @patch.dict('PyHamiltonMVP', {'MVP': MagicMock()})
-# @patch.dict('pyHamiltonPSD.communication', {'sendCommand': MagicMock()})
 class LegacyArchitectureTest(unittest.TestCase):
     def setUp(self):
         test_system_config = {
@@ -612,20 +727,40 @@ class LegacyArchitectureTest(unittest.TestCase):
                 {'type': 'acquire', 'frames': 10000, 't_exp': 100, 'round': 1},
                 {'type': 'dispense', 'reservoir_id': 0, 'volume': 300},   # for more commplex system: 'mix'
             ]}
-        with patch('pyHamiltonPSD.communication.sendCommand', create=True) as psc:
-            self.va = LegacyArchitecture(test_system_config, test_tubing_config)
-            self.va._assign_protocol(test_protocol)
+        patch_send_command = patch('pyHamiltonPSD.communication.sendCommand', create=True)
+        patch_send_command.start()
+        self.addCleanup(patch_send_command.stop)
+
+        # patch_pump = patch(__name__ + '.Pump')
+        # patch_pump.start()
+        # self.addCleanup(patch_pump.stop)
+
+        # patch_valve = patch(__name__ + '.Valve')
+        # patch_valve.start()
+        # self.addCleanup(patch_valve.stop)
+
+        # patch_res = patch(__name__ + '.Reservoir', autospec=True)
+        # patch_res.start()
+        # self.addCleanup(patch_res.stop)
+
+        self.va = LegacyArchitecture(test_system_config, test_tubing_config)
+        self.va._assign_protocol(test_protocol)
+
+        # print(self.va.pump_a.call_args_list)
+        # print(self.va.pump_out.call_args_list)
 
     def test_vol_to_inlet(self):
         # check vol to inlet calculation
         vol = self.va._calc_vol_to_inlet(1)
-        print(vol)
+        # print(vol)
         self.assertTrue(vol == 0)
+        # print(ham.communication.sendCommand.call_args_list)
+        # assert False
 
     def test_tubing_column_1(self):
         # check tubing column without volume in tubings
         self.va._assemble_tubing_column(0)
-        print(self.va.tubing_column)
+        # print(self.va.tubing_column)
 
         # as no tubing volume is assigned, the tubing column
         # matches the single steps
@@ -635,8 +770,8 @@ class LegacyArchitectureTest(unittest.TestCase):
             2: [],
             3: [(0, 300.)],
         }
-        print('expected', tubing_column_expected)
-        print('actual', self.va.tubing_column)
+        # print('expected', tubing_column_expected)
+        # print('actual', self.va.tubing_column)
         self.assertDictEqual(tubing_column_expected, self.va.tubing_column)
 
     def test_tubing_column_2(self):
@@ -649,7 +784,7 @@ class LegacyArchitectureTest(unittest.TestCase):
         }
         self.va._assign_tubing_config(test_tubing_config_2)
         self.va._assemble_tubing_column(0)
-        print(self.va.tubing_column)
+        # print(self.va.tubing_column)
 
         # as no tubing volume is assigned, the tubing column
         # matches the single steps
@@ -659,8 +794,8 @@ class LegacyArchitectureTest(unittest.TestCase):
             2: [],
             3: [(0, 200.), (3, 100.)],
         }
-        print('expected', tubing_column_expected)
-        print('actual', self.va.tubing_column)
+        # print('expected', tubing_column_expected)
+        # print('actual', self.va.tubing_column)
         self.assertDictEqual(tubing_column_expected, self.va.tubing_column)
 
     def test_tubing_column_3(self):
@@ -673,7 +808,7 @@ class LegacyArchitectureTest(unittest.TestCase):
         }
         self.va._assign_tubing_config(test_tubing_config_2)
         self.va._assemble_tubing_column(0)
-        print(self.va.tubing_column)
+        # print(self.va.tubing_column)
 
         # as no tubing volume is assigned, the tubing column
         # matches the single steps
@@ -683,10 +818,83 @@ class LegacyArchitectureTest(unittest.TestCase):
             2: [],
             3: [(3, 200.)],
         }
-        print('expected', tubing_column_expected)
-        print('actual', self.va.tubing_column)
+        # print('expected', tubing_column_expected)
+        # print('actual', self.va.tubing_column)
         self.assertDictEqual(tubing_column_expected, self.va.tubing_column)
+
+    def test_set_valve(self):
+        """
+        test the reservoir setting
+            'reservoir_a': [
+                {'id': 0, 'valve_pos': {0: 3, 1: 2}},
+                {'id': 1, 'valve_pos': {0: 2, 1: 2}},
+                {'id': 3, 'valve_pos': {0: 2, 1: 4}},
+        """
+        ham.communication.sendCommand.reset_mock()
+        self.va._set_valves(0)
+        # logger.debug(ham.communication.sendCommand.call_args_list)
+        ham.communication.sendCommand.assert_has_calls([
+            call('1', 'h26003R', waitForPump=False),
+            call('2', 'h26002R', waitForPump=False)])
+
+        ham.communication.sendCommand.reset_mock()
+        self.va._set_valves(3)
+        ham.communication.sendCommand.assert_has_calls([
+            call('1', 'h26002R', waitForPump=False),
+            call('2', 'h26004R', waitForPump=False)])
+
+    def test_inject(self):
+        """Test system injection
+        """
+        ham.communication.sendCommand.reset_mock()
+        self.va._inject(10)
+        # logger.debug(ham.communication.sendCommand.call_args_list)
+        ham.communication.sendCommand.assert_has_calls([
+            call('3', 'IR', waitForPump=False),
+            call('4', 'OR', waitForPump=False),
+            call('3', 'V1000P480R', waitForPump=False),
+            call('4', 'V2000D96R', waitForPump=False),
+            call('3', '?22', waitForPump=True),
+            call('4', '?22', waitForPump=True),
+            call('3', 'OR', waitForPump=False),
+            call('4', 'IR', waitForPump=False),
+            call('3', 'V1000D480R', waitForPump=False),
+            call('4', 'V2000P96R', waitForPump=False),
+            call('3', '?22', waitForPump=True),
+            call('4', '?22', waitForPump=True),
+            call('4', 'OR', waitForPump=False),
+            call('4', 'V2000D0R', waitForPump=False),
+            call('4', '?22', waitForPump=True)])
 
 
 if __name__ == '__main__':
     unittest.main()
+
+    # do a test run
+    arch = LegacyArchitecture(legacy_system_config, legacy_tubing_config)
+    arch._assign_protocol(protocol)
+
+    input('press any key to start')
+    arch.perform_next_protocol_entry()
+    print('performing protocol entry {:d}: '.format(arch.curr_protocol_entry),
+          protocol['protocol_entries'][arch.curr_protocol_entry])
+    input('press any key to perform next step')
+    arch.perform_next_protocol_entry()
+    print('performing protocol entry {:d}: '.format(arch.curr_protocol_entry),
+          protocol['protocol_entries'][arch.curr_protocol_entry])
+    input('press any key to perform next step')
+    arch.perform_next_protocol_entry()
+    print('performing protocol entry {:d}: '.format(arch.curr_protocol_entry),
+          protocol['protocol_entries'][arch.curr_protocol_entry])
+    input('press any key to perform next step')
+    arch.perform_next_protocol_entry()
+    print('performing protocol entry {:d}: '.format(arch.curr_protocol_entry),
+          protocol['protocol_entries'][arch.curr_protocol_entry])
+    # input('press any key to perform next step')
+    # arch.perform_next_protocol_entry()
+    # print('performing protocol entry {:d}: '.format(arch.curr_protocol_entry),
+    #       protocol['protocol_entries'][arch.curr_protocol_entry])
+    print('done')
+
+    # patch_res = patch(__name__ + '.Reservoir', autospec=True)
+    # patch_res.start()
