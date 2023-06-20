@@ -4,8 +4,8 @@ address are unique to the whole system (same as serial address)
 
 """
 import pyHamiltonPSD as ham
-import PyHamiltonMVP
-from PyHamiltonMVP import MVP
+import pyHamiltonMVP
+from pyHamiltonMVP import MVP
 from pyHamiltonPSD.util import SyringeMovement as SyrMov
 from pyHamiltonPSD.util import SyringeTypes as SyrTypes
 from pyHamiltonPSD.util import PSDTypes
@@ -27,7 +27,7 @@ def connect(port, baudrate):
     ham.connect(port, baudrate)
 
 
-def disconnect(port, baudrate):
+def disconnect():
     ham.disconnect()
 
 
@@ -45,33 +45,35 @@ legacy_system_config = {
         {'address': 3, 'instrument_type': 'MVP', 'valve_type': '8-5'},
         {'address': 4, 'instrument_type': 'MVP', 'valve_type': '8-5'},
         ],
-    'pump_a': {'address': 0, 'instrument_type': '4', 'valve_type': 'Y', 'syringe': '500u'},
-    'pump_out': {'address': 1, 'instrument_type': '4', 'valve_type': 'Y', 'syringe': '5.0m'},
+    'pump_a': {'address': 1, 'instrument_type': '4', 'valve_type': 'Y', 'syringe': '500u'},
+    'pump_out': {'address': 0, 'instrument_type': '4', 'valve_type': 'Y', 'syringe': '5.0m'},
     'reservoir_a': [
-        {'id': 21, 'valve_pos': {2: 1, 3: 1, 4: 1}},
-        {'id': 20, 'valve_pos': {2: 1, 3: 1, 4: 2}},
-        {'id': 19, 'valve_pos': {2: 1, 3: 1, 4: 3}},
-        {'id': 18, 'valve_pos': {2: 1, 3: 1, 4: 4}},
-        {'id': 17, 'valve_pos': {2: 1, 3: 1, 4: 5}},
-        {'id': 16, 'valve_pos': {2: 1, 3: 1, 4: 6}},
-        {'id': 15, 'valve_pos': {2: 1, 3: 1, 4: 7}},
-        {'id': 14, 'valve_pos': {2: 1, 3: 1, 4: 8}},
-        {'id': 13, 'valve_pos': {2: 1, 3: 2}},
-        {'id': 12, 'valve_pos': {2: 1, 3: 3}},
-        {'id': 11, 'valve_pos': {2: 1, 3: 4}},
-        {'id': 10, 'valve_pos': {2: 1, 3: 5}},
-        {'id': 9, 'valve_pos': {2: 1, 3: 6}},
-        {'id': 8, 'valve_pos': {2: 1, 3: 7}},
-        {'id': 7, 'valve_pos': {2: 1, 3: 8}},
-        {'id': 6, 'valve_pos': {2: 2}},
-        {'id': 5, 'valve_pos': {2: 3}},
+        {'id': 21, 'valve_pos': {2: 3, 3: 1, 4: 1}},
+        {'id': 20, 'valve_pos': {2: 3, 3: 1, 4: 2}},
+        {'id': 19, 'valve_pos': {2: 3, 3: 1, 4: 3}},
+        {'id': 18, 'valve_pos': {2: 3, 3: 1, 4: 4}},
+        {'id': 17, 'valve_pos': {2: 3, 3: 1, 4: 5}},
+        {'id': 16, 'valve_pos': {2: 3, 3: 1, 4: 6}},
+        {'id': 15, 'valve_pos': {2: 3, 3: 1, 4: 7}},
+        {'id': 14, 'valve_pos': {2: 3, 3: 1, 4: 8}},
+        {'id': 13, 'valve_pos': {2: 3, 3: 2}},
+        {'id': 12, 'valve_pos': {2: 3, 3: 3}},
+        {'id': 11, 'valve_pos': {2: 3, 3: 4}},
+        {'id': 10, 'valve_pos': {2: 3, 3: 5}},
+        {'id': 9, 'valve_pos': {2: 3, 3: 6}},
+        {'id': 8, 'valve_pos': {2: 3, 3: 7}},
+        {'id': 7, 'valve_pos': {2: 3, 3: 8}},
+        {'id': 6, 'valve_pos': {2: 1}},
+        {'id': 5, 'valve_pos': {2: 2}},
         {'id': 4, 'valve_pos': {2: 4}},
         {'id': 3, 'valve_pos': {2: 5}},
         {'id': 2, 'valve_pos': {2: 6}},
         {'id': 1, 'valve_pos': {2: 7}},
         {'id': 0, 'valve_pos': {2: 8}},
         ],
-    'flushbuffer_a': 21,  # defines the reservoir id with the buffer that can be used for flushing should be at the end of multiple MVPs
+    'special_names': {
+        'flushbuffer_a': 21,  # defines the reservoir id with the buffer that can be used for flushing should be at the end of multiple MVPs
+        },
 }
 
 # description of tubing volumes between
@@ -122,7 +124,7 @@ protocol = {
         {'type': 'dispense', 'reservoir_id': 0, 'volume': 500},
         {'type': 'dispense', 'reservoir_id': 1, 'volume': 500, 'velocity': 600},
         {'type': 'acquire', 'frames': 10000, 't_exp': 100, 'round': 1},
-        {'type': 'dispense', 'reservoir_id': 0, 'volume': 500},   # for more commplex system: 'mix'
+        {'type': 'dispense', 'reservoir_id': 20, 'volume': 500},   # for more commplex system: 'mix'
     ]}
 
 
@@ -242,7 +244,7 @@ class Pump():
         self.psd = ham.PSD(str(address), instrument_type)
         ham.communication.sendCommand(
             self.psd.asciiAddress,
-            self.psd.command.enableHFactorCommandsAndQueries()
+            'Z' + self.psd.command.enableHFactorCommandsAndQueries()
             + self.psd.command.executeCommandBuffer())
         # ham.communication.sendCommand(
         #     self.psd.asciiAddress,
@@ -263,7 +265,7 @@ class Pump():
         if syringe[-1] == 'm':
             self.syringe_volume *= 1000
 
-    def dispense(self, vol, velocity=None):
+    def dispense(self, vol, velocity=None, waitForPump=False):
         if velocity is not None:
             cmd = self.psd.command.setMaximumVelocity(velocity)
         else:
@@ -271,10 +273,10 @@ class Pump():
         cmd += self.psd.command.syringeMovement(SyrMov.relativeDispense.value, vol)
         cmd += self.psd.command.executeCommandBuffer()
         ham.communication.sendCommand(
-            self.psd.asciiAddress, cmd, waitForPump=False)
+            self.psd.asciiAddress, cmd, waitForPump=waitForPump)
         self.curr_vol -= vol
 
-    def pickup(self, vol, velocity=None):
+    def pickup(self, vol, velocity=None, waitForPump=False):
         if velocity is not None:
             cmd = self.psd.command.setMaximumVelocity(velocity)
         else:
@@ -282,7 +284,7 @@ class Pump():
         cmd += self.psd.command.syringeMovement(SyrMov.relativePickup.value, vol)
         cmd += self.psd.command.executeCommandBuffer()
         ham.communication.sendCommand(
-            self.psd.asciiAddress, cmd, waitForPump=False)
+            self.psd.asciiAddress, cmd, waitForPump=waitForPump)
         self.curr_vol += vol
 
     def set_velocity(self, start_velocity, max_velocity, stop_velocity):
@@ -317,7 +319,7 @@ class Pump():
         ham.communication.sendCommand(
             self.psd.asciiAddress,
             cmd + self.psd.command.executeCommandBuffer(),
-            waitForPump=False)
+            waitForPump=True)
 
     def wait_until_done(self):
         """Waits until the pump is done moving.
@@ -328,7 +330,7 @@ class Pump():
         """
         ham.communication.sendCommand(
             self.psd.asciiAddress,
-            ham.util.QueryCommandsEnumeration.RETURNS_255.value,
+            'Q',
             waitForPump=True)
         # tic = time.time()
         # while time.time() < tic + timeout:
@@ -391,7 +393,7 @@ class LegacyArchitecture():
     def perform_next_protocol_entry(self):
         """Performs the next entry in the dispension protocol
         """
-        if last_protocol_entry == -1:
+        if self.last_protocol_entry == -1:
             self._assemble_tubing_column(0)
         curr_protocol_entry = self.last_protocol_entry + 1
         for reservoir_id, vol in self.tubing_column[curr_protocol_entry]:
@@ -529,15 +531,18 @@ class LegacyArchitecture():
             velocity = self.flow_parameters['max_velocity']
         if extractionfactor is None:
             extractionfactor = self.flow_parameters['extractionfactor']
+        velocity_out = int(
+            extractionfactor * velocity
+            * self.pump_a.syringe_volume / self.pump_out.syringe_volume)
         if self.pump_a.curr_vol > 0:
             self.pump_a.set_valve('out')
             self.pump_out.set_valve('in')
             self.pump_a.dispense(self.pump_a.curr_vol, velocity)
             self.pump_out.pickup(
                 self.pump_a.curr_vol * extractionfactor,
-                velocity * extractionfactor)
-            self.pump_a.wait_till_done()
-            self.pump_out.wait_till_done()
+                velocity_out)
+            self.pump_a.wait_until_done()
+            self.pump_out.wait_until_done()
 
         volume_quant = max([
             self.pump_a.syringe_volume,
@@ -549,32 +554,32 @@ class LegacyArchitecture():
         for pump_volume in pump_volumes:
             self.pump_a.set_valve('in')
             self.pump_out.set_valve('out')
-            self.pump_a.pickup(pump_volume, velocity)
+            self.pump_a.pickup(pump_volume, velocity, waitForPump=False)
             self.pump_out.dispense(
-                self.pump_a.curr_vol * extractionfactor,
-                velocity * extractionfactor)
+                self.pump_out.curr_vol * extractionfactor,
+                velocity_out, waitForPump=False)
             self.pump_a.wait_until_done()
             self.pump_out.wait_until_done()
 
             self.pump_a.set_valve('out')
             self.pump_out.set_valve('in')
-            self.pump_a.dispense(pump_volume, velocity)
+            self.pump_a.dispense(pump_volume, velocity, waitForPump=False)
             self.pump_out.pickup(
                 pump_volume * extractionfactor,
-                velocity * extractionfactor)
+                velocity_out, waitForPump=False)
             self.pump_a.wait_until_done()
             self.pump_out.wait_until_done()
 
         self.pump_out.set_valve('out')
         self.pump_out.dispense(
-            self.pump_a.curr_vol * extractionfactor,
-            velocity * extractionfactor)
+            self.pump_out.curr_vol,
+            velocity_out, waitForPump=False)
         self.pump_out.wait_until_done()
 
     def fill_tubings(self):
         """Fill the tubings with the liquids of their reservoirs.
         """
-        for res_di, res in self.reservoir_a.items():
+        for res_id, res in self.reservoir_a.items():
             # take care of the flushbuffer last
             if res_id == self.special_names['flushbuffer_a']:
                 continue
@@ -868,9 +873,10 @@ class LegacyArchitectureTest(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    #unittest.main()
 
     # do a test run
+    connect('4', 9600)
     arch = LegacyArchitecture(legacy_system_config, legacy_tubing_config)
     arch._assign_protocol(protocol)
 
@@ -895,6 +901,7 @@ if __name__ == '__main__':
     # print('performing protocol entry {:d}: '.format(arch.curr_protocol_entry),
     #       protocol['protocol_entries'][arch.curr_protocol_entry])
     print('done')
+    disconnect()
 
     # patch_res = patch(__name__ + '.Reservoir', autospec=True)
     # patch_res.start()
