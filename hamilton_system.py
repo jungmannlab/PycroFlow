@@ -373,6 +373,18 @@ class Pump():
             waitForPump=False)
 
 
+def prep_legacy_wettest(port='4', baudrate=9600):
+    """Prepare a LegacyArchitecture instance with a wettest protocol.
+    This is a convenience function for easy setup in the command
+    line
+    """
+    la = LegacyArchitecture(
+        legacy_system_config, legacy_tubing_config,
+        port, baudrate)
+    la._create_wettest_protocol()
+    return la
+
+
 class LegacyArchitecture():
     """Represents the Legacy Architecture, with many valves and
     reservoirs, connected to an input syringe pump, connected to
@@ -441,10 +453,34 @@ class LegacyArchitecture():
         all_connected = all(conn_dev.values())
         if not all_connected:
             logger.warning('Not all devices are connected: ' + str(conn_dev))
+        else:
+            logger.info('All Hamilton devices are connected.')
+
+    def _create_wettest_protocol(self, vol):
+        """Create a test protocol, pumping an amount of fluid from all
+        reservoirs to the sample.
+        Args:
+            vol : float
+                the amount of fluid to pump
+        """
+        protocol = {
+            'flow_parameters': {
+                'start_velocity': 50,
+                'max_velocity': 1000,
+                'stop_velocity': 500,
+                'mode': 'tubing_stack',  # or 'tubing_flush'
+                'extractionfactor': 1},
+            'protocol_entries': []}
+        for rid, res in self.reseravoir_a.items():
+            protocol['protocol_entries'].append({
+                'type': 'inject',
+                'reservoir_id': rid,
+                'volume': vol})
+        self._assign_protocol(protocol)
 
     def execute_protocol_entry(self, i):
         """Execute a protocol entry.
-        When not executing the next protocol entry but jumpint to one
+        When not executing the next protocol entry but jumping to one
         out of order, the tubing-'stack' needs to be re-assembled.
 
         A protocol entry consists of:
