@@ -543,6 +543,29 @@ def do_legacy_wettest(la):
         la.execute_protocol_entry(i)
     print('****************   Test of "_calibrate_tubing" was successful.')
 
+def find_reservoirs(la):
+    la._set_valves(la.special_names['flushbuffer_a'])
+    print('****************   pumping  air (from outlet) into flushbuffer_a reservoir')
+    repeat = True
+    while repeat:
+        la._pump(la.pump_a, la.pump_a.syringe_volume, pickup_dir='out', dispense_dir='in')
+        result = input('repeat? [Y / N] | quit [Q]')
+        repeat = 'y' in result.lower()
+        if 'q' in result.lower():
+            return
+
+    for resid, res in la.reservoir_a.items():
+        la._set_valves(resid)
+        print('****************   pumping  air (from outlet) into reservoir {:s}'.format(str(resid)))
+        repeat = True
+        while repeat:
+            la._pump(la.pump_a, la.pump_a.syringe_volume, pickup_dir='out', dispense_dir='in')
+            result = input('repeat? [Y / N] | quit [Q]')
+            repeat = 'y' in result.lower()
+            if 'q' in result.lower():
+                return
+
+
 
 class LegacyArchitecture():
     """Represents the Legacy Architecture, with many valves and
