@@ -52,7 +52,7 @@ legacy_system_config = {
         {'address': 4, 'instrument_type': 'MVP', 'valve_type': '8-5'}],
     'valve_flush':
         {'address': 5, 'instrument_type': 'MVP', 'valve_type': '8-5'},
-    'flush_pos': {'inject': 1, 'flush': 0},
+    'flush_pos': {'inject': 3, 'flush': 4},
     'pump_a':
         {'address': 1, 'instrument_type': '4', 'valve_type': 'Y',
          'syringe': '500u'},
@@ -514,8 +514,34 @@ def prep_legacy_wettest(port='4', baudrate=9600):
     la = LegacyArchitecture(
         legacy_system_config, legacy_tubing_config,
         port, baudrate)
-    la._create_wettest_protocol()
+    la._create_wettest_protocol(400)
     return la
+
+
+def do_legacy_wettest(la):
+    print('testing "_set_valves"')
+    la._set_valves(1)
+    la._set_valves(20)
+    print('Test of "_set_valves" was successful.')
+    print('testing "_set_flush_valve"')
+    la._set_flush_valve()
+    print('Test of "_set_flush_valve" was successful.')
+    print('testing "_pump"')
+    la._pump(la.pump_a, 100)
+    la._pump(la.pump_a, 100, pickup_dir='out', dispense_dir='in')
+    la._pump(la.pump_a, 100, pickup_dir='in', dispense_dir='in',
+             pickup_res=la.special_names['flushbuffer_a'],
+             dispense_res=la.special_names['flushbuffer_a'])
+    print('Test of "_set_valves" was successful.')
+    print('testing "_calibrate_tubing"')
+    la._calibrate_tubing(400)
+    print('Test of "_calibrate_tubing" was successful.')
+    print('testing protocol entry execution')
+    la.execute_protocol_entry(0)
+    la.execute_single_protocol_entry(0)
+    for i in len(la.protocol['protocol_entries']):
+        la.execute_protocol_entry(i)
+    print('Test of "_calibrate_tubing" was successful.')
 
 
 class LegacyArchitecture():
@@ -605,7 +631,7 @@ class LegacyArchitecture():
                 'mode': 'tubing_stack',  # or 'tubing_flush'
                 'extractionfactor': 1},
             'protocol_entries': []}
-        for rid, res in self.reseravoir_a.items():
+        for rid, res in self.reservoir_a.items():
             protocol['protocol_entries'].append({
                 'type': 'inject',
                 'reservoir_id': rid,
@@ -660,7 +686,7 @@ class LegacyArchitecture():
                 set(nvalves_valves[nv]) - set[nvalves_valves[nv - 1]])[0]
 
         # 1. fill tubings
-        totalvol = (self.reservoir_a.len() + 2) * max_vol
+        totalvol = (self.reservoir_a.len + 2) * max_vol
         input('Please fill flushbuffer reservoir with at least '
               + '{:.1f} ml flush buffer, '.format(totalvol / 1000)
               + 'and insert weighed tubes in the other reservoirs.'
