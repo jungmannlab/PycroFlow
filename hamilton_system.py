@@ -52,7 +52,7 @@ legacy_system_config = {
         {'address': 4, 'instrument_type': 'MVP', 'valve_type': '8-5'}],
     'valve_flush':
         {'address': 5, 'instrument_type': 'MVP', 'valve_type': '8-5'},
-    'flush_pos': {'inject': 3, 'flush': 4},
+    'flush_pos': {'inject': 4, 'flush': 1}, # 1: flush/waste/pumptoblue; 2: pump sealed; 3: pump sealed; 4: inject/sample/pumptored
     'pump_a':
         {'address': 1, 'instrument_type': '4', 'valve_type': 'Y',
          'syringe': '500u'},
@@ -60,31 +60,31 @@ legacy_system_config = {
         'address': 0, 'instrument_type': '4', 'valve_type': 'Y',
         'syringe': '5.0m'},
     'reservoir_a': [
-        {'id': 21, 'valve_pos': {2: 3, 3: 1, 4: 1}},
-        {'id': 20, 'valve_pos': {2: 3, 3: 1, 4: 2}},
-        {'id': 19, 'valve_pos': {2: 3, 3: 1, 4: 3}},
-        {'id': 18, 'valve_pos': {2: 3, 3: 1, 4: 4}},
-        {'id': 17, 'valve_pos': {2: 3, 3: 1, 4: 5}},
-        {'id': 16, 'valve_pos': {2: 3, 3: 1, 4: 6}},
-        {'id': 15, 'valve_pos': {2: 3, 3: 1, 4: 7}},
-        {'id': 14, 'valve_pos': {2: 3, 3: 1, 4: 8}},
-        {'id': 13, 'valve_pos': {2: 3, 3: 2}},
-        {'id': 12, 'valve_pos': {2: 3, 3: 3}},
-        {'id': 11, 'valve_pos': {2: 3, 3: 4}},
-        {'id': 10, 'valve_pos': {2: 3, 3: 5}},
-        {'id': 9, 'valve_pos': {2: 3, 3: 6}},
-        {'id': 8, 'valve_pos': {2: 3, 3: 7}},
-        {'id': 7, 'valve_pos': {2: 3, 3: 8}},
-        {'id': 6, 'valve_pos': {2: 1}},
-        {'id': 5, 'valve_pos': {2: 2}},
-        {'id': 4, 'valve_pos': {2: 4}},
-        {'id': 3, 'valve_pos': {2: 5}},
-        {'id': 2, 'valve_pos': {2: 6}},
-        {'id': 1, 'valve_pos': {2: 7}},
-        {'id': 0, 'valve_pos': {2: 8}},
+        {'id': 0, 'valve_pos': {4: 2}},
+        {'id': 1, 'valve_pos': {4: 3}},
+        {'id': 2, 'valve_pos': {4: 4}},
+        {'id': 3, 'valve_pos': {4: 5}},
+        {'id': 4, 'valve_pos': {4: 6}},
+        {'id': 5, 'valve_pos': {4: 7}},
+        {'id': 6, 'valve_pos': {4: 8}},
+        {'id': 7, 'valve_pos': {4: 1, 3: 2}},
+        {'id': 8, 'valve_pos': {4: 1, 3: 3}},
+        {'id': 9, 'valve_pos': {4: 1, 3: 4}},
+        {'id': 10, 'valve_pos': {4: 1, 3: 5}},
+        {'id': 11, 'valve_pos': {4: 1, 3: 6}},
+        {'id': 12, 'valve_pos': {4: 1, 3: 7}},
+        {'id': 13, 'valve_pos': {4: 1, 3: 8}},
+        {'id': 14, 'valve_pos': {4: 1, 3: 1, 2: 1}},
+        {'id': 15, 'valve_pos': {4: 1, 3: 1, 2: 2}},
+        {'id': 16, 'valve_pos': {4: 1, 3: 1, 2: 3}},
+        {'id': 17, 'valve_pos': {4: 1, 3: 1, 2: 4}},
+        {'id': 18, 'valve_pos': {4: 1, 3: 1, 2: 5}},
+        {'id': 19, 'valve_pos': {4: 1, 3: 1, 2: 6}},
+        {'id': 20, 'valve_pos': {4: 1, 3: 1, 2: 7}},
+        {'id': 21, 'valve_pos': {4: 1, 3: 1, 2: 8}},
         ],
     'special_names': {
-        'flushbuffer_a': 21,  # defines the reservoir id with the buffer that can be used for flushing should be at the end of multiple MVPs
+        'flushbuffer_a': 14,  # defines the reservoir id with the buffer that can be used for flushing should be at the end of multiple MVPs
         },
 }
 
@@ -544,6 +544,7 @@ def do_legacy_wettest(la):
     print('****************   Test of "_calibrate_tubing" was successful.')
 
 def find_reservoirs(la):
+    la._set_flush_valve(to_flush=True)
     la._set_valves(la.special_names['flushbuffer_a'])
     print('****************   pumping  air (from outlet) into flushbuffer_a reservoir')
     repeat = True
