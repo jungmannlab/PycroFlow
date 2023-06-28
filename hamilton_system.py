@@ -519,29 +519,29 @@ def prep_legacy_wettest(port='4', baudrate=9600):
 
 
 def do_legacy_wettest(la):
-    print('testing "_set_valves"')
+    print('****************   testing "_set_valves"')
     la._set_valves(1)
     la._set_valves(20)
-    print('Test of "_set_valves" was successful.')
-    print('testing "_set_flush_valve"')
+    print('****************   Test of "_set_valves" was successful.')
+    print('****************   testing "_set_flush_valve"')
     la._set_flush_valve()
-    print('Test of "_set_flush_valve" was successful.')
-    print('testing "_pump"')
+    print('****************   Test of "_set_flush_valve" was successful.')
+    print('****************   testing "_pump"')
     la._pump(la.pump_a, 100)
     la._pump(la.pump_a, 100, pickup_dir='out', dispense_dir='in')
     la._pump(la.pump_a, 100, pickup_dir='in', dispense_dir='in',
              pickup_res=la.special_names['flushbuffer_a'],
              dispense_res=la.special_names['flushbuffer_a'])
-    print('Test of "_set_valves" was successful.')
-    print('testing "_calibrate_tubing"')
+    print('****************   Test of "_set_valves" was successful.')
+    print('****************   testing "_calibrate_tubing"')
     la._calibrate_tubing(400)
-    print('Test of "_calibrate_tubing" was successful.')
-    print('testing protocol entry execution')
+    print('****************   Test of "_calibrate_tubing" was successful.')
+    print('****************   testing protocol entry execution')
     la.execute_protocol_entry(0)
     la.execute_single_protocol_entry(0)
     for i in len(la.protocol['protocol_entries']):
         la.execute_protocol_entry(i)
-    print('Test of "_calibrate_tubing" was successful.')
+    print('****************   Test of "_calibrate_tubing" was successful.')
 
 
 class LegacyArchitecture():
@@ -740,7 +740,7 @@ class LegacyArchitecture():
                     + ' Please only provide "sample" and "flush"')
 
         # empty flushbuffer tubing
-        self.set_valves(self.special_names['flushbuffer_a'])
+        self._set_valves(self.special_names['flushbuffer_a'])
         self._pump(
             self.pump_a, max_vol, pickup_dir='out', dispense_dir='in')
         for resid, res in self.reservoir_a.items():
@@ -961,7 +961,7 @@ class LegacyArchitecture():
                 fold of tubing volume to flush
         """
         self._set_flush_valve(to_flush=True)
-        self.set_valves(self.special_names['flushbuffer_a'])
+        self._set_valves(self.special_names['flushbuffer_a'])
         tubing_vol = (
             self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
             + self.tubing_config.get('pump_a', 'valve_flush'))
@@ -1007,7 +1007,7 @@ class LegacyArchitecture():
         if pump.curr_vol > 0:
             pump.set_valve(dispense_dir)
             if dispense_res is not None:
-                self.set_valves(dispense_res)
+                self._set_valves(dispense_res)
             pump.dispense(pump.curr_vol, velocity)
             pump.wait_until_done()
 
@@ -1019,11 +1019,11 @@ class LegacyArchitecture():
         for pump_volume in pump_volumes:
             pump.set_valve(pickup_dir)
             if pickup_res is not None:
-                self.set_valves(pickup_res)
+                self._set_valves(pickup_res)
             pump.pickup(pump_volume, velocity, waitForPump=True)
             pump.set_valve(dispense_dir)
             if dispense_res is not None:
-                self.set_valves(dispense_res)
+                self._set_valves(dispense_res)
             pump.dispense(pump_volume, velocity, waitForPump=True)
 
     def _inject(self, vol, velocity=None, extractionfactor=None):
