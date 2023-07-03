@@ -533,15 +533,23 @@ def do_legacy_wettest(la):
              pickup_res=la.special_names['flushbuffer_a'],
              dispense_res=la.special_names['flushbuffer_a'])
     print('****************   Test of "_set_valves" was successful.')
+
+
+def do_test_caltube(la):
     print('****************   testing "_calibrate_tubing"')
     la._calibrate_tubing(400)
     print('****************   Test of "_calibrate_tubing" was successful.')
+
+
+def do_test_protocol(la):
     print('****************   testing protocol entry execution')
     la.execute_protocol_entry(0)
     la.execute_single_protocol_entry(0)
     for i in len(la.protocol['protocol_entries']):
+        print('********************   protocol entry ', i)
         la.execute_protocol_entry(i)
     print('****************   Test of "_calibrate_tubing" was successful.')
+
 
 def find_reservoirs(la):
     la._set_flush_valve(to_flush=True)
