@@ -401,7 +401,8 @@ class Pump():
         ham.communication.sendCommand(
             self.psd.asciiAddress,
             'Z' + self.psd.command.enableHFactorCommandsAndQueries()
-            + self.psd.command.executeCommandBuffer())
+            + self.psd.command.executeCommandBuffer(),
+            waitForPump=True)
         # ham.communication.sendCommand(
         #     self.psd.asciiAddress,
         #     self.psd.command.standardHighResolutionSelection(resolution_mode),
@@ -718,14 +719,17 @@ class LegacyArchitecture():
                 list(set(nvalves_valves[nv]) - set(nvalves_valves[nv - 1])))[0]
 
         # 1. fill tubings
-        totalvol = (self.reservoir_a.len + 3) * max_vol
+        totalvol = (self.reservoir_a.len * max_vol
+                    + 3 * self.pump_a.syringe_volume)
         input('Please fill flushbuffer reservoir with at least '
               + '{:.1f} ml flush buffer, '.format(totalvol / 1000)
               + 'and insert weighed tubes in the other reservoirs.'
               + ' Press enter to proceed.')
+        # pre-fill tubing from Flushbuffer to syringe, including the syringe
         for i in range(3):
             self._pump(
-                self.pump_a, max_vol, pickup_dir='in', dispense_dir='out',
+                self.pump_a, self.pump_a.syringe_volume,
+                pickup_dir='in', dispense_dir='out',
                 pickup_res=self.special_names['flushbuffer_a'])
         for resid, res in self.reservoir_a.items():
             # fill reservoir tubings
@@ -750,14 +754,17 @@ class LegacyArchitecture():
         dispensevol_per_stroke = self.pump_a.syringe_volume - max_vol
         if dispensevol_per_stroke < 0:
             raise ValueError('Cannot continue this calibration procedure.')
-        n_strokes = int(np.ceil(max_vol / dispensevol_per_stroke)) + 2  # 2 for safety
+        # add 2 to n_strokes for safety
+        n_strokes = int(np.ceil(max_vol / dispensevol_per_stroke)) + 2
         for i in range(n_strokes):
             self._pump(
-                self.pump_a, self.pump_a.syringe_volume, pickup_dir='out', dispense_dir='out')
+                self.pump_a, self.pump_a.syringe_volume,
+                pickup_dir='out', dispense_dir='out')
         self._set_flush_valve(to_flush=False)
         for i in range(n_strokes):
             self._pump(
-                self.pump_a, self.pump_a.syringe_volume, pickup_dir='out', dispense_dir='out')
+                self.pump_a, self.pump_a.syringe_volume,
+                pickup_dir='out', dispense_dir='out')
         result = input(
             'Please replace sample and flush tube with an empty '
             + 'tube and weigh the dispensed volume. Enter the results in '
@@ -779,15 +786,19 @@ class LegacyArchitecture():
 
         # empty flushbuffer tubing
         self._set_valves(self.special_names['flushbuffer_a'])
-        for i in range(2):
+        for i in range(2):  # 2 to make sure
             self._pump(
-                self.pump_a, self.pump_a.syringe_volume, pickup_dir='out', dispense_dir='in')
+                self.pump_a, self.pump_a.syringe_volume,
+                pickup_dir='out', dispense_dir='in')
         for resid, res in self.reservoir_a.items():
             # fill reservoir tubings
             for i in range(2):
                 self._pump(
-                    self.pump_a, self.pump_a.syringe_volume, pickup_dir='out', dispense_dir='in',
+                    self.pump_a, self.pump_a.syringe_volume,
+                    pickup_dir='out', dispense_dir='in',
                     dispense_res=resid)
+        vol_used = (2 * self.pump_a.syringe_volume
+                    + nvalves * max_vol)
         result = input(
             'Please replace reservoir tubes with an empty tube and weigh '
             + 'the dispensed volume. Fill flushbuffer reservoir with at '
@@ -813,19 +824,29 @@ class LegacyArchitecture():
             measured_volumes[parts[0].strip()] = float(parts[1].strip())
 
         # fill flushbuffer and thus main path
-        for i in range(3):
-            self._pump(
-                self.pump_a, self.pump_a.syringe_volume, pickup_dir='in', dispense_dir='out',
-                pickup_res=self.special_names['flushbuffer_a'])
-
-        for resid in nvalves_res:
-            for i in range(2):
-                self._pump(
-                    self.pump_a, self.pump_a.syringe_volume, pickup_dir='out', dispense_dir='in',
-                    dispense_res=resid)
+        self._set_flush_valve(to_flush=False)
         for i in range(2):
             self._pump(
-                self.pump_a, self.pump_a.syringe_volume, pickup_dir='out', dispense_dir='in',
+                self.pump_a, self.pump_a.syringe_volume,
+                pickup_dir='in', dispense_dir='out',
+                pickup_res=self.special_names['flushbuffer_a'])
+        # empty the outlet tube
+        for i in range(3):
+            self._pump(
+                self.pump_a, self.pump_a.syringe_volume,
+                pickup_dir='out', dispense_dir='out',
+                pickup_flushvalve=True, dispense_flushvalve=False)
+        # empty into the reservoirs
+        for resid in nvalves_res:
+            for i in range(1):
+                self._pump(
+                    self.pump_a, max_vol,
+                    pickup_dir='out', dispense_dir='in',
+                    dispense_res=resid)
+        for i in range(1):
+            self._pump(
+                self.pump_a, max_vol,
+                pickup_dir='out', dispense_dir='in',
                 dispense_res=self.special_names['flushbuffer_a'])
         result = input(
             'Please weigh the flushbuffer tube and reservoirs '
@@ -1025,7 +1046,8 @@ class LegacyArchitecture():
 
     def _pump(self, pump, vol, velocity=None,
               pickup_dir='in', dispense_dir='out',
-              pickup_res=None, dispense_res=None):
+              pickup_res=None, dispense_res=None,
+              pickup_flushvalve=None, dispense_flushvalve=None):
         """Pump fluid with a given pump. By default, pump from the currently
         set reservoir valve position to the pump outlet. Arguments can be
         set to pump e.g. from one reservoir to another.
@@ -1042,8 +1064,10 @@ class LegacyArchitecture():
                 one of ['in', 'out']. where to pump from. Default: 'in'
             dispense_dir : str
                 one of ['in', 'out']. where to pump from. Default: 'out'
-            pickup_res : int or None
-                the reservoir to pickup from
+            pickup_res, dispense_res : int or None
+                the reservoir to pickup from / dispense to
+            pickup_flushvalve, dispense_flushvalve : int or None
+                the flush valve position during pickup / dispense
         """
         if velocity is None:
             velocity = self.flow_parameters['max_velocity']
@@ -1051,6 +1075,8 @@ class LegacyArchitecture():
             pump.set_valve(dispense_dir)
             if dispense_res is not None:
                 self._set_valves(dispense_res)
+            if dispense_flushvalve is not None:
+                self._set_flush_valve(dispense_flushvalve)
             pump.dispense(pump.curr_vol, velocity)
             pump.wait_until_done()
 
@@ -1063,10 +1089,14 @@ class LegacyArchitecture():
             pump.set_valve(pickup_dir)
             if pickup_res is not None:
                 self._set_valves(pickup_res)
+            if pickup_flushvalve is not None:
+                self._set_flush_valve(pickup_flushvalve)
             pump.pickup(pump_volume, velocity, waitForPump=True)
             pump.set_valve(dispense_dir)
             if dispense_res is not None:
                 self._set_valves(dispense_res)
+            if dispense_flushvalve is not None:
+                self._set_flush_valve(dispense_flushvalve)
             pump.dispense(pump_volume, velocity, waitForPump=True)
 
     def _inject(self, vol, velocity=None, extractionfactor=None):
