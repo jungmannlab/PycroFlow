@@ -65,10 +65,40 @@ protocol_illumination = [
 ]
 
 
-class SystemHandler(threading.Thread, abc.ABC):
+class AbstractSystem(abc.ABC):
+    def __init__(self):
+        pass
+
+    @abc.abstractmethod
+    def execute_protocol_entry(self, i):
+        """execute protocol entry i
+        """
+        pass
+
+    @abc.abstractmethod
+    def pause_execution(self):
+        """Pause protocol execution
+        """
+        pass
+
+    @abc.abstractmethod
+    def resume_execution(self):
+        """Resume protocol execution after pausing
+        """
+        pass
+
+    @abc.abstractmethod
+    def abort_execution(self):
+        """Abort protocol execution
+        """
+        pass
+
+
+class AbstractSystemHandler(threading.Thread, abc.ABC):
     def __init__(self, protocol, threadexchange):
         self.protocol = protocol
         self.txchange = threadexchange
+        self.system = None  # is set in Handler subclasses
 
     def run(self):
         while True:
@@ -76,6 +106,7 @@ class SystemHandler(threading.Thread, abc.ABC):
             goon_housekeeping = self.housekeeping()
 
             if (not goon_main) or (not goon_housekeeping):
+                self.send_message('Ending.')
                 return
 
             time.sleep(.05)
@@ -86,6 +117,10 @@ class SystemHandler(threading.Thread, abc.ABC):
 
     def housekeeping(self):
         if self.txchange['abort_flag'].is_set():
+            self.system.abort_protocol()
+            return False
+        elif self.txchange['pause_flag'].is_set():
+            self.system.pause_protocol()
             return False
         else:
             return True
@@ -94,7 +129,7 @@ class SystemHandler(threading.Thread, abc.ABC):
         busy = True
         while (busy
                and not self.txchange['abort_flag'].is_set()
-               and not self.txchange['halt_flag'].is_set()):
+               and not self.txchange['pause_flag'].is_set()):
             with self.txchange[target + '_lock']:
                 if message in self.txchange[target]:
                     busy = False
@@ -106,7 +141,7 @@ class SystemHandler(threading.Thread, abc.ABC):
             self.txchange[self.target].append(message)
 
 
-class FluidHandler(SystemHandler):
+class FluidHandler(AbstractSystemHandler):
     def __init__(self, fluid_system, protocol, threadexchange):
         self.super().__init__(protocol, threadexchange)
         self.target = 'fluid'
@@ -134,10 +169,11 @@ class FluidHandler(SystemHandler):
             self.system.execute_protocol_entry(i)
 
 
-class ImagingHandler(SystemHandler):
-    def __init__(self, protocol, threadexchange):
+class ImagingHandler(AbstractSystemHandler):
+    def __init__(self, imaging_system, protocol, threadexchange):
         self.super().__init__(protocol, threadexchange)
         self.target = 'imaging'
+        self.system = imaging_system
 
     def main_loop(self):
         pass
@@ -146,10 +182,12 @@ class ImagingHandler(SystemHandler):
         self.send_message('round 1 done')
 
 
-class IlluminationHandler(SystemHandler):
-    def __init__(self, protocol, threadexchange):
+class IlluminationHandler(AbstractSystemHandler):
+    def __init__(self, illumination_system, protocol, threadexchange):
         self.super().__init__(protocol, threadexchange)
         self.target = 'illumination'
+
+        self.system = illumination_system
 
     def main_loop(self):
         pass
@@ -169,7 +207,7 @@ class ProtocolOrchestrator():
         'imaging': [],
         'illumination_lock': threading.Lock(),
         'illumination': [],
-        'halt_flag': threading.Event(),
+        'pause_flag': threading.Event(),
         'abort_flag': threading.Event()
     }
 
@@ -177,13 +215,16 @@ class ProtocolOrchestrator():
                  imaging_system=None, fluid_system=None,
                  illumination_system=None):
         self.fluid_system = fluid_system
-        self.fluid_handler = FluidHandler(fluid_system, protocol, self.threadexchange)
+        self.fluid_handler = FluidHandler(
+            fluid_system, protocol, self.threadexchange)
 
         self.imaging_system = imaging_system
-        self.imaging_handler = ImagingHandler(protocol, self.threadexchange)
+        self.imaging_handler = ImagingHandler(
+            imaging_system, protocol, self.threadexchange)
 
         self.illumination_system = illumination_system
-        self.illumination_handler = IlluminationHandler(protocol, self.threadexchange)
+        self.illumination_handler = IlluminationHandler(
+            illumination_system, protocol, self.threadexchange)
 
         self.protocol = protocol
 
@@ -191,6 +232,12 @@ class ProtocolOrchestrator():
         self.fluid_handler.start()
         self.imaging_handler.start()
         self.illumination_handler.start()
+
+    def pause_orchestration(self):
+        self.threadexchange['pause_flag'].set()
+
+    def resume_orchestration(self):
+        self.threadexchange['pause_flag'].clear()
 
     def abort_orchestration(self):
         self.threadexchange['abort_flag'].set()
