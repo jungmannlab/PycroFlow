@@ -8,6 +8,7 @@ import numpy as np
 import unittest
 import logging
 import sys
+import yaml
 
 
 logger = logging.getLogger()
@@ -55,26 +56,26 @@ legacy_system_config = {
     'reservoir_a': [
         {'id': 0, 'valve_pos': {4: 2}},
         {'id': 1, 'valve_pos': {4: 3}},
-        {'id': 2, 'valve_pos': {4: 4}},
-        {'id': 3, 'valve_pos': {4: 5}},
-        {'id': 4, 'valve_pos': {4: 6}},
-        {'id': 5, 'valve_pos': {4: 7}},
-        {'id': 6, 'valve_pos': {4: 8}},
+        # {'id': 2, 'valve_pos': {4: 4}},
+        # {'id': 3, 'valve_pos': {4: 5}},
+        # {'id': 4, 'valve_pos': {4: 6}},
+        # {'id': 5, 'valve_pos': {4: 7}},
+        # {'id': 6, 'valve_pos': {4: 8}},
         {'id': 7, 'valve_pos': {4: 1, 3: 2}},
         {'id': 8, 'valve_pos': {4: 1, 3: 3}},
-        {'id': 9, 'valve_pos': {4: 1, 3: 4}},
-        {'id': 10, 'valve_pos': {4: 1, 3: 5}},
-        {'id': 11, 'valve_pos': {4: 1, 3: 6}},
-        {'id': 12, 'valve_pos': {4: 1, 3: 7}},
-        {'id': 13, 'valve_pos': {4: 1, 3: 8}},
+        # {'id': 9, 'valve_pos': {4: 1, 3: 4}},
+        # {'id': 10, 'valve_pos': {4: 1, 3: 5}},
+        # {'id': 11, 'valve_pos': {4: 1, 3: 6}},
+        # {'id': 12, 'valve_pos': {4: 1, 3: 7}},
+        # {'id': 13, 'valve_pos': {4: 1, 3: 8}},
         {'id': 14, 'valve_pos': {4: 1, 3: 1, 2: 1}},
         {'id': 15, 'valve_pos': {4: 1, 3: 1, 2: 2}},
         {'id': 16, 'valve_pos': {4: 1, 3: 1, 2: 3}},
-        {'id': 17, 'valve_pos': {4: 1, 3: 1, 2: 4}},
-        {'id': 18, 'valve_pos': {4: 1, 3: 1, 2: 5}},
-        {'id': 19, 'valve_pos': {4: 1, 3: 1, 2: 6}},
-        {'id': 20, 'valve_pos': {4: 1, 3: 1, 2: 7}},
-        {'id': 21, 'valve_pos': {4: 1, 3: 1, 2: 8}},
+        # {'id': 17, 'valve_pos': {4: 1, 3: 1, 2: 4}},
+        # {'id': 18, 'valve_pos': {4: 1, 3: 1, 2: 5}},
+        # {'id': 19, 'valve_pos': {4: 1, 3: 1, 2: 6}},
+        # {'id': 20, 'valve_pos': {4: 1, 3: 1, 2: 7}},
+        # {'id': 21, 'valve_pos': {4: 1, 3: 1, 2: 8}},
         ],
     'special_names': {
         'flushbuffer_a': 14,  # defines the reservoir id with the buffer that can be used for flushing should be at the end of multiple MVPs
@@ -120,7 +121,7 @@ for the fluid-control steps.
 protocol = {
     'flow_parameters': {
         'start_velocity': 50,
-        'max_velocity': 1000,
+        'max_velocity': 3000,
         'stop_velocity': 500,
         'mode': 'tubing_stack',  # or 'tubing_flush'
         'extractionfactor': 1,},
@@ -290,7 +291,7 @@ class LegacyArchitecture(AbstractSystem):
         protocol = {
             'flow_parameters': {
                 'start_velocity': 50,
-                'max_velocity': 1000,
+                'max_velocity': 3000,
                 'stop_velocity': 500,
                 'mode': 'tubing_stack',  # or 'tubing_flush'
                 'extractionfactor': 1},
@@ -323,6 +324,7 @@ class LegacyArchitecture(AbstractSystem):
             max_vol : float
                 all releveant tubing volumes are definitely below this.
         """
+        # print(self.reservoir_a.reservoirs)
         measured_volumes = {}
         # find reservoirs for each valve to measure the inter-valve volumes
         # this is assuming a linear arrangement
@@ -348,6 +350,9 @@ class LegacyArchitecture(AbstractSystem):
             # find the additional valve
             valve_order[nv] = (
                 list(set(nvalves_valves[nv]) - set(nvalves_valves[nv - 1])))[0]
+        # print('nvalves-res', nvalves_res)
+        # print('nvalves_valves', nvalves_valves)
+        # print('valve_order', valve_order)
 
         # 1. fill tubings
         totalvol = (self.reservoir_a.len * max_vol
@@ -355,7 +360,7 @@ class LegacyArchitecture(AbstractSystem):
         input('Please fill flushbuffer reservoir with at least '
               + '{:.1f} ml flush buffer, '.format(totalvol / 1000)
               + 'and insert weighed tubes in the other reservoirs.'
-              + ' Press enter to proceed.')
+              + ' Press enter to proceed.\r\n')
         # pre-fill tubing from Flushbuffer to syringe, including the syringe
         for i in range(3):
             self._pump(
@@ -379,7 +384,9 @@ class LegacyArchitecture(AbstractSystem):
             pickup_res=self.special_names['flushbuffer_a'])
         # empty syringe through the flush valve outlet
         input('Please replace all tubes with empty and weighed tubes.'
-              + ' Press enter to proceed.')
+              + ' Make sure dispensed fluids are not picked up in'
+              + ' the flush tube.'
+              + ' Press enter to proceed.\r\n')
 
         # empty flush and sample tubing
         dispensevol_per_stroke = self.pump_a.syringe_volume - max_vol
@@ -390,24 +397,27 @@ class LegacyArchitecture(AbstractSystem):
         for i in range(n_strokes):
             self._pump(
                 self.pump_a, self.pump_a.syringe_volume,
-                pickup_dir='out', dispense_dir='out')
-        self._set_flush_valve(to_flush=False)
-        for i in range(n_strokes):
+                pickup_dir='out', dispense_dir='out',
+                pickup_flushvalve=True, dispense_flushvalve=True)
+        # self._set_flush_valve(to_flush=False)
+        for i in range(2):
             self._pump(
                 self.pump_a, self.pump_a.syringe_volume,
-                pickup_dir='out', dispense_dir='out')
+                pickup_dir='out', dispense_dir='out',
+                pickup_flushvalve=True, dispense_flushvalve=False)
         result = input(
             'Please replace sample and flush tube with an empty '
             + 'tube and weigh the dispensed volume. Enter the results in '
             + 'the format "sample: xxx.xx; flush: xxx.xx" with xxx.xx being'
-            + ' the measured net weight in mg. Press enter to proceed.')
+            + ' the measured net weight in mg. Press enter to proceed.\r\n')
+        # print(result)
         result = result.split(';')
         for sglres in result:
-            destination, tubvol = result.split(':')
+            destination, tubvol = sglres.split(':')
             tubvol = float(tubvol.strip())
             destination = destination.strip()
             if destination == 'flush':
-                measured_volumes[('pump_a', 'valve_flush')] = tubvol
+                measured_volumes[('pump_a', 'flush_waste')] = tubvol
             elif destination == 'sample':
                 measured_volumes[('valve_flush', 'sample')] = tubvol
             else:
@@ -437,36 +447,41 @@ class LegacyArchitecture(AbstractSystem):
             + 'Enter the measurement results in the format "flushbuffer: '
             + 'xxx.xx; ID1: xxx.xx; ID2: xxx.xx" with IDn being the reseroir '
             + 'IDs and xxx.xx the measured net weight in mg. Press enter to '
-            + 'proceed.')
+            + 'proceed.\r\n') 
         result = result.split(';')
         for sglres in result:
-            destination, tubvol = result.split(':')
+            destination, tubvol = sglres.split(':')
             tubvol = float(tubvol.strip())
             destination = destination.strip()
             if destination == 'flushbuffer':
-                key = ('R' + self.special_names['flushbuffer_a'],
-                       'V' + str(valve_order[-1]))
+                continue
+                # key = ('R' + str(self.special_names['flushbuffer_a']),
+                #        'V' + str(valve_order[-1]))
             else:
                 nv = self.reservoir_a.get_reservoir_nvalves(destination)
                 key = ('R' + destination, 'V' + str(valve_order[nv - 1]))
             measured_volumes[key] = tubvol
 
-            parts = result.split(':')
-            measured_volumes[parts[0].strip()] = float(parts[1].strip())
+            # parts = result.split(':')
+            # measured_volumes[parts[0].strip()] = float(parts[1].strip())
 
         # fill flushbuffer and thus main path
-        self._set_flush_valve(to_flush=False)
-        for i in range(2):
-            self._pump(
-                self.pump_a, self.pump_a.syringe_volume,
-                pickup_dir='in', dispense_dir='out',
-                pickup_res=self.special_names['flushbuffer_a'])
-        # empty the outlet tube
         for i in range(3):
             self._pump(
                 self.pump_a, self.pump_a.syringe_volume,
+                pickup_dir='in', dispense_dir='out',
+                pickup_res=self.special_names['flushbuffer_a'],
+                dispense_flushvalve=True)
+        result = input(
+            'Please replace flushbuffer and sample tube with an empty tube.'
+            + ' Make sure sample tubing does not pick up liquid. '
+            + 'Press enter to proceed.\r\n') 
+        # empty the outlet tube
+        for i in range(n_strokes):
+            self._pump(
+                self.pump_a, self.pump_a.syringe_volume,
                 pickup_dir='out', dispense_dir='out',
-                pickup_flushvalve=True, dispense_flushvalve=False)
+                pickup_flushvalve=False, dispense_flushvalve=False)
         # empty into the reservoirs
         for resid in nvalves_res:
             for i in range(1):
@@ -480,22 +495,29 @@ class LegacyArchitecture(AbstractSystem):
                 pickup_dir='out', dispense_dir='in',
                 dispense_res=self.special_names['flushbuffer_a'])
         result = input(
-            'Please weigh the flushbuffer tube and reservoirs '
-            + str(nvalves_res) + '. Press enter to proceed.')
+            'Please weigh the flushbuffer and sample tube and reservoirs '
+            + str(nvalves_res) + '.'
+            + 'Enter the measurement results in the format "flushbuffer: '
+            + 'xxx.xx; sample: '
+            + 'xxx.xx; ID1: xxx.xx; ID2: xxx.xx" with IDn being the reseroir '
+            + 'IDs and xxx.xx the measured net weight in mg. Press enter to '
+            + 'proceed.\r\n') 
         result = result.split(';')
         for sglres in result:
-            destination, tubvol = result.split(':')
+            destination, tubvol = sglres.split(':')
             tubvol = float(tubvol.strip())
             destination = destination.strip()
             if destination == 'flushbuffer':
-                key = ('R' + self.special_names['flushbuffer_a'],
+                key = ('R' + str(self.special_names['flushbuffer_a']),
                        'V' + str(valve_order[-1]))
+            elif destination == 'sample':
+                key = ('pump_a', 'valve_flush')
             else:
                 nv = self.reservoir_a.get_reservoir_nvalves(destination)
                 if nv == 1:
-                    key = ('V' + valve_order[nv - 1], 'pump_a')
+                    key = ('V' + str(valve_order[nv - 1]), 'pump_a')
                 else:
-                    key = ('V' + valve_order[nv - 1],
+                    key = ('V' + str(valve_order[nv - 1]),
                            'V' + str(valve_order[nv - 2]))
             measured_volumes[key] = tubvol
 
@@ -503,16 +525,196 @@ class LegacyArchitecture(AbstractSystem):
         # only the single steps via the valves
         for resid, res in self.reservoir_a.items():
             steps = ['R' + str(resid)]
-            nv = self.reservoir_a.get_reservoir_nvalves(destination)
-            for n in range(nv - 1, 0, -1):
+            nv = self.reservoir_a.get_reservoir_nvalves(resid)
+            for n in range(nv - 1, -1, -1):
                 steps.append('V' + str(valve_order[n]))
             steps.append('pump_a')
             totvol = 0
             for sta, sto in zip(steps[:-1], steps[1:]):
                 totvol += measured_volumes[(sta, sto)]
             measured_volumes[(steps[0], steps[-1])] = totvol
+        measured_volumes[('valve_flush', 'flush_waste')] = (
+            measured_volumes[('pump_a', 'flush_waste')]
+            - measured_volumes[('pump_a', 'valve_flush')])
+
+        print(measured_volumes)
 
         self._assign_tubing_config(measured_volumes)
+
+        with open('measured_volumes.yaml', 'w') as f:
+            yaml.dump(measured_volumes, f)
+
+    def _calibrate_tubing_dry(self, max_vol):
+        """Calibrate the tubings of the system.
+
+        1. Fill all reservoir tubings
+        2. ask user to insert empty and weighed tubes, also to flush and
+            outlet
+        3. empty flush and outlet tubings
+        4. fill flushbuffer tubing with its tubing volume plus all the pump
+            connecting volumes
+        5. empty into all reservoirs (this is only reservoir to nearest pump
+            volume)
+        6. ask user to weigh all reservoirs and enter values, and fill
+            flushbuffer reservoir
+        7. fill flushbuffer path
+        8. empty outlet tubing
+        9. empty the flushbuffer path into
+
+        Args:
+            max_vol : float
+                all releveant tubing volumes are definitely below this.
+        """
+        print(self.reservoir_a.reservoirs)
+        measured_volumes = {}
+        # find reservoirs for each valve to measure the inter-valve volumes
+        # this is assuming a linear arrangement
+
+        # assuming a linear arrangement of valves, find the valve order
+        # according to the config: valve IDs in order of appearance
+        # from the pump, and one reservoir each that is connected to them
+        nvalves = len(self.valve_a.keys())
+        # a reseroir ID for each valve, sorted by number of valves from pump
+        nvalves_res = [0] * nvalves
+        # all valves present, sorted by number of valves from pump
+        nvalves_valves = [[]] * nvalves
+        # the additional valve, sorted by number of valves from pump
+        valve_order = [0] * nvalves
+        for resid, res in self.reservoir_a.items():
+            nvalves = len(res.valve_positions.keys())
+            nvalves_res[nvalves - 1] = resid
+            nvalves_valves[nvalves - 1] = list(res.valve_positions.keys())
+        for nv in range(nvalves):
+            if nv == 0:
+                valve_order[nv] = nvalves_valves[nv][0]
+                continue
+            # find the additional valve
+            valve_order[nv] = (
+                list(set(nvalves_valves[nv]) - set(nvalves_valves[nv - 1])))[0]
+        print('nvalves-res', nvalves_res)
+        print('nvalves_valves', nvalves_valves)
+        print('valve_order', valve_order)
+
+        # 1. fill tubings
+        totalvol = (self.reservoir_a.len * max_vol
+                    + 3 * self.pump_a.syringe_volume)
+        print('Please fill flushbuffer reservoir with at least '
+              + '{:.1f} ml flush buffer, '.format(totalvol / 1000)
+              + 'and insert weighed tubes in the other reservoirs.'
+              + ' Press enter to proceed.\r\n')
+
+        # empty syringe through the flush valve outlet
+        print('Please replace all tubes with empty and weighed tubes.'
+              + ' Make sure dispensed fluids are not picked up in'
+              + ' sample and flush tubes.'
+              + ' Press enter to proceed.\r\n')
+
+        # empty flush and sample tubing
+        dispensevol_per_stroke = self.pump_a.syringe_volume - max_vol
+        if dispensevol_per_stroke < 0:
+            raise ValueError('Cannot continue this calibration procedure.')
+        # add 2 to n_strokes for safety
+        n_strokes = int(np.ceil(max_vol / dispensevol_per_stroke)) + 2
+        print(
+            'Please replace sample and flush tube with an empty '
+            + 'tube and weigh the dispensed volume. Enter the results in '
+            + 'the format "sample: xxx.xx; flush: xxx.xx" with xxx.xx being'
+            + ' the measured net weight in mg. Press enter to proceed.\r\n')
+        result = 'sample: 250; flush: 300'
+        # print(result)
+        result = result.split(';')
+        for sglres in result:
+            destination, tubvol = sglres.split(':')
+            tubvol = float(tubvol.strip())
+            destination = destination.strip()
+            if destination == 'flush':
+                measured_volumes[('pump_a', 'flush_waste')] = tubvol
+            elif destination == 'sample':
+                measured_volumes[('valve_flush', 'sample')] = tubvol
+            else:
+                raise KeyError(
+                    'Cannot process catoegory {:s}.'.format(destination)
+                    + ' Please only provide "sample" and "flush"')
+
+        # empty flushbuffer tubing
+        vol_used = (2 * self.pump_a.syringe_volume
+                    + nvalves * max_vol)
+        print(
+            'Please replace reservoir tubes with an empty tube and weigh '
+            + 'the dispensed volume. Fill flushbuffer reservoir with at '
+            + 'least {:.1f} ml flush buffer. '.format(vol_used / 1000)
+            + 'Enter the measurement results in the format "flushbuffer: '
+            + 'xxx.xx; ID1: xxx.xx; ID2: xxx.xx" with IDn being the reseroir '
+            + 'IDs and xxx.xx the measured net weight in mg. Press enter to '
+            + 'proceed.\r\n') 
+        result = 'flushbuffer: 800; 0: 150; 1: 150; 7: 200; 8: 150; 15: 200; 16: 200'
+        result = result.split(';')
+        for sglres in result:
+            destination, tubvol = sglres.split(':')
+            tubvol = float(tubvol.strip())
+            destination = destination.strip()
+            if destination == 'flushbuffer':
+                continue
+                # key = ('R' + str(self.special_names['flushbuffer_a']),
+                #        'V' + str(valve_order[-1]))
+            else:
+                nv = self.reservoir_a.get_reservoir_nvalves(destination)
+                key = ('R' + destination, 'V' + str(valve_order[nv - 1]))
+            measured_volumes[key] = tubvol
+
+            # parts = result.split(':')
+            # measured_volumes[parts[0].strip()] = float(parts[1].strip())
+
+        # fill flushbuffer and thus main path
+        print(
+            'Please replace flushbuffer tube with an empty tube.'
+            + 'Press enter to proceed.\r\n') 
+        # empty the outlet tube
+        # empty into the reservoirs
+        print(
+            'Please weigh the flushbuffer tube and reservoirs '
+            + str(nvalves_res) + '.'
+            + 'Enter the measurement results in the format "flushbuffer: '
+            + 'xxx.xx; ID1: xxx.xx; ID2: xxx.xx" with IDn being the reseroir '
+            + 'IDs and xxx.xx the measured net weight in mg. Press enter to '
+            + 'proceed.\r\n') 
+        result = 'flushbuffer: 800; 1: 200; 8: 150; 16: 175'
+        result = result.split(';')
+        print('measured volumes from first measurements')
+        print(measured_volumes)
+        for sglres in result:
+            destination, tubvol = sglres.split(':')
+            tubvol = float(tubvol.strip())
+            destination = destination.strip()
+            if destination == 'flushbuffer':
+                key = ('R' + str(self.special_names['flushbuffer_a']),
+                       'V' + str(valve_order[-1]))
+            else:
+                nv = self.reservoir_a.get_reservoir_nvalves(destination)
+                if nv == 1:
+                    key = ('V' + str(valve_order[nv - 1]), 'pump_a')
+                else:
+                    key = ('V' + str(valve_order[nv - 1]),
+                           'V' + str(valve_order[nv - 2]))
+            print('adding mesurement of ', sglres, ' central column: ', key)
+            print(measured_volumes)
+            measured_volumes[key] = tubvol
+
+        # Now, concatenate resID-pump volumes, instead of using
+        # only the single steps via the valves
+        for resid, res in self.reservoir_a.items():
+            steps = ['R' + str(resid)]
+            nv = self.reservoir_a.get_reservoir_nvalves(resid)
+            for n in range(nv-1, -1, -1):
+                steps.append('V' + str(valve_order[n]))
+            steps.append('pump_a')
+            print(steps)
+            totvol = 0
+            for sta, sto in zip(steps[:-1], steps[1:]):
+                totvol += measured_volumes[(sta, sto)]
+            measured_volumes[(steps[0], steps[-1])] = totvol
+
+        print(measured_volumes)
 
     def execute_protocol_entry(self, i):
         """Execute a protocol entry.
@@ -723,13 +925,14 @@ class LegacyArchitecture(AbstractSystem):
         """
         if velocity is None:
             velocity = self.flow_parameters['max_velocity']
-        if pump.curr_vol > 0:
+        curr_pump_vol = pump.get_current_volume()
+        if curr_pump_vol > 0:
             pump.set_valve(dispense_dir)
             if dispense_res is not None:
                 self._set_valves(dispense_res)
             if dispense_flushvalve is not None:
                 self._set_flush_valve(dispense_flushvalve)
-            pump.dispense(pump.curr_vol, velocity)
+            pump.dispense(curr_pump_vol, velocity)
             pump.wait_until_done()
 
         volume_quant = pump.syringe_volume
@@ -777,12 +980,13 @@ class LegacyArchitecture(AbstractSystem):
             * self.pump_a.syringe_volume / self.pump_out.syringe_volume)
 
         self._set_flush_valve(to_flush=False)
-        if self.pump_a.curr_vol > 0:
+        curr_pumpa_vol = self.pump_a.get_current_volume()
+        if curr_pumpa_vol > 0:
             self.pump_a.set_valve('out')
             self.pump_out.set_valve('in')
-            self.pump_a.dispense(self.pump_a.curr_vol, velocity)
+            self.pump_a.dispense(curr_pumpa_vol, velocity)
             self.pump_out.pickup(
-                self.pump_a.curr_vol * extractionfactor,
+                curr_pumpa_vol * extractionfactor,
                 velocity_out)
             self.pump_a.wait_until_done()
             self.pump_out.wait_until_done()
@@ -798,8 +1002,9 @@ class LegacyArchitecture(AbstractSystem):
             self.pump_a.set_valve('in')
             self.pump_out.set_valve('out')
             self.pump_a.pickup(pump_volume, velocity, waitForPump=False)
+            curr_pumpout_vol = self.pump_a.get_current_volume()
             self.pump_out.dispense(
-                self.pump_out.curr_vol * extractionfactor,
+                curr_pumpout_vol * extractionfactor,
                 velocity_out, waitForPump=False)
             self.pump_a.wait_until_done()
             self.pump_out.wait_until_done()
@@ -815,7 +1020,7 @@ class LegacyArchitecture(AbstractSystem):
 
         self.pump_out.set_valve('out')
         self.pump_out.dispense(
-            self.pump_out.curr_vol,
+            curr_pumpout_vol,
             velocity_out, waitForPump=False)
         self.pump_out.wait_until_done()
 
@@ -826,7 +1031,7 @@ class LegacyArchitecture(AbstractSystem):
             # take care of the flushbuffer last
             if res_id == self.special_names['flushbuffer_a']:
                 continue
-            self._set_valves(res_od)
+            self._set_valves(res_id)
             vol = self.tubing_config.get_reservoir_to_pump(res_id, 'a')
             self._pump(self.pump_a, vol)  # could use only input pump instead
 
@@ -837,7 +1042,6 @@ class LegacyArchitecture(AbstractSystem):
             + self.tubing_config.get('pump_a', 'valve_flush')
             + self.tubing_config.get('valve_flush', 'sample'))
         self._pump(self.pump_a, vol)
-
 
 
 """

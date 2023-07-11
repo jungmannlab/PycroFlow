@@ -41,7 +41,7 @@ class Reservoir():
 
     @property
     def nvalves(self):
-        return len(self.valve_positoins.keys())
+        return len(self.valve_positions.keys())
 
 
 class ReservoirDict():
@@ -80,7 +80,7 @@ class ReservoirDict():
             nvalves : int
                 the number of valves between this reservoir and the pump
         """
-        if not isinstance(res, str):
+        if isinstance(res, str):
             # if coming from the input funciton, this might be a string
             res = int(res)
         return self.reservoirs[res].nvalves
@@ -95,6 +95,9 @@ class ReservoirDict():
             valve_positions : dict
                 the dict of valve address : valve position
         """
+        if isinstance(res, str):
+            # if coming from the input funciton, this might be a string
+            res = int(res)
         return self.reservoirs[res].get_valve_positions()
 
 
@@ -382,7 +385,7 @@ class Pump():
             self.psd.asciiAddress,
             self.psd.command.absoluteSyringePosition(),
             waitForPump=True)
-        pos_steps = self.decode_response(response)
+        pos_steps = int(self.decode_response(response))
         current_volume = (
             pos_steps / self.psd.command.steps * self.syringe_volume)
         return current_volume
@@ -420,7 +423,7 @@ class Pump():
             '`': ready
         ETX: End of transmission; have to check the ascii
         """
-        etx = '*'
+        etx = '\x03'
         if '`' not in response:
             raise ValueError('Not ready yet')
         if etx not in response:
