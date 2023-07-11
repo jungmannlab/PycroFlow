@@ -433,7 +433,7 @@ class LegacyArchitecture(AbstractSystem):
         result = input(
             'Please replace reservoir tubes with an empty tube and weigh '
             + 'the dispensed volume. Fill flushbuffer reservoir with at '
-            + 'least {:.1f} ml flush buffer. '.format(max_vol / 1000)
+            + 'least {:.1f} ml flush buffer. '.format(vol_used / 1000)
             + 'Enter the measurement results in the format "flushbuffer: '
             + 'xxx.xx; ID1: xxx.xx; ID2: xxx.xx" with IDn being the reseroir '
             + 'IDs and xxx.xx the measured net weight in mg. Press enter to '

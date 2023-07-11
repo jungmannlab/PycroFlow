@@ -3,6 +3,14 @@ illumination.py
 
 Provides illumination functionality to be used as a system
 in orchestration.
+
+illumination protocol e.g.
+protocol_illumination = [
+    {'type': 'power', 'value': 1},
+    {'type': 'wait for signal', 'target': 'fluid', 'value': 'round 1 done'},
+    {'type': 'power', 'value': 50},
+    {'type': 'wait for signal', 'target': 'imaging', 'value': 'round 1 done'},
+]
 """
 from orchestration import AbstractSystem
 
