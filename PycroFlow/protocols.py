@@ -69,7 +69,7 @@ protocol_illumination = [
 ]
 
 """
-import ic
+# import ic
 import logging
 import os
 import yaml
@@ -77,14 +77,15 @@ from datetime import datetime
 
 
 logger = logging.getLogger(__name__)
-ic.configureOutput(outputFunction=logger.debug)
+# ic.configureOutput(outputFunction=logger.debug)
 
 
 class ProtocolBuilder:
     def __init__(self):
         self.steps = {'fluid': [], 'img': [], 'illu': []}
+        self.reservoir_vols = {}
 
-    def create_protocol(self, config, base_name):
+    def create_protocol(self, config):
         """Create a protocol based on a configuration file.
 
         Args:
@@ -100,7 +101,7 @@ class ProtocolBuilder:
         protocol = steps
 
         # save protocol
-        fname = base_name + datetime.now().strftime('_%y%m%d-%H%M') + '.yaml'
+        fname = config['base_name'] + datetime.now().strftime('_%y%m%d-%H%M') + '.yaml'
         filename = os.path.join(config['protocol_folder'], fname)
 
         with open(filename, 'w') as f:
@@ -125,6 +126,9 @@ class ProtocolBuilder:
             reservoir_vols : dict
                 keys: reservoir names, values: volumes
         """
+        self.steps = {'fluid': [], 'img': [], 'illu': []}
+        self.reservoir_vols = {
+            id: 0 for id in config['fluid_settings']['reservoir_names']}
         exptype = config['fluid_settings']['experiment']['type']
         if exptype.lower() == 'exchange':
             steps, reservoir_vols = self.create_steps_exchange(config)
@@ -176,7 +180,7 @@ class ProtocolBuilder:
             self.create_step_signal(
                 system='fluid', message='done round {:d}'.format(round))
             self.create_step_waitfor_signal(
-                system='img', fromsystem='fluid',
+                system='img', target='fluid',
                 message='done round {:d}'.format(round))
             self.create_step_acquire(
                 imgsttg['frames'], imgsttg['t_exp'],
@@ -184,8 +188,8 @@ class ProtocolBuilder:
             self.create_step_signal(
                 system='img', message='done imaging round {:d}'.format(round))
             self.create_step_waitfor_signal(
-                system='fluid', fromsystem='img',
-                message='done imaging round {:d}')
+                system='fluid', target='img',
+                message='done imaging round {:d}'.format(round))
             self.create_step_inject(
                 volume=int(imager_vol_post), reservoir_id=res_idcs[imager])
             if round < len(experiment['imagers']) - 1:
@@ -263,7 +267,7 @@ class ProtocolBuilder:
         imgbufvol = experiment['imaging_buffer_vol']
         imagervol = experiment['imager_vol']
         adaptervol = experiment['adapter_vol']
-        # eraservol = experiment['adapter_vol']
+        eraservol = experiment['adapter_vol']
         hybtime = experiment['hybridization_time']
 
         darkframes = experiment.get('check_dark_frames')
@@ -275,7 +279,7 @@ class ProtocolBuilder:
 
         imgsttg = config['imaging_settings']
 
-        res_idcs = {name: nr - 1 for nr, name in reservoirs.items()}
+        res_idcs = {name: nr for nr, name in reservoirs.items()}
 
         self.create_step_inject(10, res_idcs[washbuf])
         for merpaintround, (adapter, eraser) in enumerate(zip(
@@ -300,7 +304,7 @@ class ProtocolBuilder:
                     + ', imager round {:d}'.format(imager_round))
                 self.create_step_signal(system='fluid', message=sglmsg)
                 self.create_step_waitfor_signal(
-                    system='img', fromsystem='fluid', message=sglmsg)
+                    system='img', target='fluid', message=sglmsg)
                 fname = (
                     'merpaintround{:d}'.format(merpaintround)
                     + '-imagerround{:d}'.format(imager_round))
@@ -311,14 +315,14 @@ class ProtocolBuilder:
                     + ', imager round {:d}'.format(imager_round))
                 self.create_step_signal(system='img', message=sglmsg)
                 self.create_step_waitfor_signal(
-                    system='fluid', fromsystem='img', message=sglmsg)
+                    system='fluid', target='img', message=sglmsg)
             # de-hybridize adapter
             # washbuf
             self.create_step_inject(washvol, res_idcs[washbuf])
             # hybridization buffer
             self.create_step_inject(hybvol, res_idcs[hybbuf])
-            # adapter
-            self.create_step_inject(adaptervol, res_idcs[adapter])
+            # eraser
+            self.create_step_inject(eraservol, res_idcs[eraser])
             # incubation
             self.create_step_incubate(hybtime)
             # washbuf
@@ -331,7 +335,7 @@ class ProtocolBuilder:
                 self.create_step_signal(
                     system='fluid', message=sglmsg)
                 self.create_step_waitfor_signal(
-                    system='img', fromsystem='fluid', message=sglmsg)
+                    system='img', target='fluid', message=sglmsg)
                 fname = (
                     'darktest-merpaintround{:d}'.format(merpaintround)
                     + '-imagerround{:d}'.format(imager_round))
@@ -341,7 +345,7 @@ class ProtocolBuilder:
                 self.create_step_signal(
                     system='img', message=sglmsg)
                 self.create_step_waitfor_signal(
-                    system='fluid', fromsystem='img', message=sglmsg)
+                    system='fluid', target='img', message=sglmsg)
                 # washbuf
                 self.create_step_inject(washvol, res_idcs[washbuf])
 
@@ -370,17 +374,15 @@ class ProtocolBuilder:
             imground_descriptions : list of str
                 a description of each imaging round
         """
-        experiment = config['experiment']
-        reservoirs = config['reservoir_names']
-        assert experiment['wash_buffer'] in reservoirs.values()
+        experiment = config['fluid_settings']['experiment']
+        reservoirs = config['fluid_settings']['reservoir_names']
         assert all(
             [name in reservoirs.values() for name in experiment['fluids']])
 
-        washbuf = experiment['wash_buffer']
         res_idcs = {name: nr - 1 for nr, name in reservoirs.items()}
 
-        # extended prefill
-        self.create_step_inject(10, res_idcs[washbuf])
+        imgsttg = config['imaging_settings']
+
         for round, (fluid, fluid_vol) in enumerate(
                 zip(experiment['fluids'], experiment['fluid_vols'])):
             # flush during acquisition
@@ -388,7 +390,7 @@ class ProtocolBuilder:
             fname = (
                 'flush-image-round{:d}'.format(round))
             self.create_step_acquire(
-                config['frames'], config['t_exp'], message=fname)
+                imgsttg['frames'], imgsttg['t_exp'], message=fname)
             # after flushing and acquiring, synchronize again
             sglmsg_i = 'done imaging round {:d}'.format(round)
             sglmsg_f = 'done flushing round {:d}'.format(round)
@@ -397,9 +399,9 @@ class ProtocolBuilder:
             self.create_step_signal(
                 system='fluid', message=sglmsg_f)
             self.create_step_waitfor_signal(
-                system='img', fromsystem='fluid', message=sglmsg_f)
+                system='img', target='fluid', message=sglmsg_f)
             self.create_step_waitfor_signal(
-                system='fluid', fromsystem='img', message=sglmsg_i)
+                system='fluid', target='img', message=sglmsg_i)
 
         return self.steps, self.reservoir_vols
 
@@ -415,7 +417,7 @@ class ProtocolBuilder:
             step : dict
                 the step configuration
         """
-        timeoutstr = datetime.timedelta(seconds=t_incu).strftime('%H:%M:%S')
+        timeoutstr = str(t_incu)
         self.steps['fluid'].append(
             {'$type': 'incubate', 'duration': timeoutstr})
 
@@ -423,8 +425,6 @@ class ProtocolBuilder:
             self, volume, reservoir_id):
         """Creates a step to wait for a TTL pulse.
         Args:
-            step_idx : int
-                the index of the step, starting at 0
             volume : int
                 volume to inject in integer µl
             reservoir_id : int
@@ -446,7 +446,7 @@ class ProtocolBuilder:
 
     def create_step_waitfor_signal(self, system, target, message):
         self.steps[system].append(
-            {'$type': 'signal',
+            {'$type': 'wait for signal',
              'target': target,
              'value': message})
 

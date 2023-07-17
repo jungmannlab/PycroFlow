@@ -1,3 +1,5 @@
 .smbdelete*
 .DS_Store
 __pycache__
+PycroFlow/TestData/*
+*.log

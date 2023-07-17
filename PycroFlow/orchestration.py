@@ -216,15 +216,15 @@ class ProtocolOrchestrator():
                  illumination_system=None):
         self.fluid_system = fluid_system
         self.fluid_handler = FluidHandler(
-            fluid_system, protocol, self.threadexchange)
+            fluid_system, protocol['fluid'], self.threadexchange)
 
         self.imaging_system = imaging_system
         self.imaging_handler = ImagingHandler(
-            imaging_system, protocol, self.threadexchange)
+            imaging_system, protocol['imaging'], self.threadexchange)
 
         self.illumination_system = illumination_system
         self.illumination_handler = IlluminationHandler(
-            illumination_system, protocol, self.threadexchange)
+            illumination_system, protocol['illumination'], self.threadexchange)
 
         self.protocol = protocol
 
