@@ -24,44 +24,44 @@ protocol = {
         'frames': 30000,
         't_exp': 100},
     'protocol_entries': [
-        {'target': 'illumination', 'type': 'power',
+        {'target': 'illumination', '$type': 'power',
          'value': 1},
-        {'target': 'fluid', 'type': 'inject',
+        {'target': 'fluid', '$type': 'inject',
          'reservoir_id': 0, 'volume': 500},
-        {'target': 'fluid', 'type': 'incubate',
+        {'target': 'fluid', '$type': 'incubate',
          'duration': 120},
-        {'target': 'fluid', 'type': 'inject',
+        {'target': 'fluid', '$type': 'inject',
          'reservoir_id': 1, 'volume': 500, 'velocity': 600},
-        {'target': 'imaging', 'type': 'acquire',
+        {'target': 'imaging', '$type': 'acquire',
          'frames': 10000, 't_exp': 100, 'round': 1},
-        {'target': 'fluid', 'type': 'flush',
+        {'target': 'fluid', '$type': 'flush',
          'flushfactor': 1},
-        {'target': 'fluid', 'type': 'await_acquisition'},
-        {'target': 'fluid', 'type': 'inject',
+        {'target': 'fluid', '$type': 'await_acquisition'},
+        {'target': 'fluid', '$type': 'inject',
          'reservoir_id': 20, 'volume': 500},
     ]}
 
 protocol_fluid = [
-    {'type': 'inject', 'reservoir_id': 0, 'volume': 500},
-    {'type': 'incubate', 'duration': 120},
-    {'type': 'inject', 'reservoir_id': 1, 'volume': 500, 'velocity': 600},
-    {'target': 'fluid', 'type': 'signal', 'value': 'fluid round 1 done'},
-    {'type': 'flush', 'flushfactor': 1},
-    {'type': 'wait for signal', 'target': 'imaging', 'value': 'round 1 done'},
-    {'type': 'inject', 'reservoir_id': 20, 'volume': 500},
+    {'$type': 'inject', 'reservoir_id': 0, 'volume': 500},
+    {'$type': 'incubate', 'duration': 120},
+    {'$type': 'inject', 'reservoir_id': 1, 'volume': 500, 'velocity': 600},
+    {'target': 'fluid', '$type': 'signal', 'value': 'fluid round 1 done'},
+    {'$type': 'flush', 'flushfactor': 1},
+    {'$type': 'wait for signal', 'target': 'imaging', 'value': 'round 1 done'},
+    {'$type': 'inject', 'reservoir_id': 20, 'volume': 500},
 ]
 
 protocol_imaging = [
-    {'type': 'wait for signal', 'target': 'fluid', 'value': 'round 1 done'},
-    {'type': 'acquire', 'frames': 10000, 't_exp': 100, 'round': 1},
-    {'type': 'signal', 'value': 'imaging round 1 done'},
+    {'$type': 'wait for signal', 'target': 'fluid', 'value': 'round 1 done'},
+    {'$type': 'acquire', 'frames': 10000, 't_exp': 100, 'round': 1},
+    {'$type': 'signal', 'value': 'imaging round 1 done'},
 ]
 
 protocol_illumination = [
-    {'type': 'power', 'value': 1},
-    {'type': 'wait for signal', 'target': 'fluid', 'value': 'round 1 done'},
-    {'type': 'power', 'value': 50},
-    {'type': 'wait for signal', 'target': 'imaging', 'value': 'round 1 done'},
+    {'$type': 'power', 'value': 1},
+    {'$type': 'wait for signal', 'target': 'fluid', 'value': 'round 1 done'},
+    {'$type': 'power', 'value': 50},
+    {'$type': 'wait for signal', 'target': 'imaging', 'value': 'round 1 done'},
 ]
 
 
@@ -150,11 +150,11 @@ class FluidHandler(AbstractSystemHandler):
     def main_loop(self):
         while not self.txchange['abort_flag'].is_set():
             for i, step in enumerate(self.protocol):
-                if step['type'] == 'signal':
+                if step['$type'].lower() == 'signal':
                     self.send_message(self.target, step['value'])
-                elif step['type'] == 'wait for signal':
+                elif step['$type'].lower() == 'wait for signal':
                     self.wait_xchange(step['target'], step['value'])
-                elif step['type'] == 'incubate':
+                elif step['$type'].lower() == 'incubate':
                     tic = time.time()
                     while time.time() < tic + step['duration']:
                         if self.txchange['abort_flag'].is_set():

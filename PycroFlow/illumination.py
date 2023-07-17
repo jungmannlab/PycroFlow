@@ -6,18 +6,18 @@ in orchestration.
 
 illumination protocol e.g.
 protocol_illumination = [
-    {'type': 'power', 'value': 1},
-    {'type': 'wait for signal', 'target': 'fluid', 'value': 'round 1 done'},
-    {'type': 'power', 'value': 50},
-    {'type': 'wait for signal', 'target': 'imaging', 'value': 'round 1 done'},
+    {'$type': 'power', 'value': 1},
+    {'$type': 'wait for signal', 'target': 'fluid', 'value': 'round 1 done'},
+    {'$type': 'power', 'value': 50},
+    {'$type': 'wait for signal', 'target': 'imaging', 'value': 'round 1 done'},
 ]
 """
 from orchestration import AbstractSystem
 
 
 class IlluminationSystem(AbstractSystem):
-    def __init__(self):
-        pass
+    def __init__(self, protocol):
+        self.protocol = protocol
 
     def execute_protocol_entry(self, i):
         """execute protocol entry i

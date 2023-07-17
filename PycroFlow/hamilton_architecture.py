@@ -1,9 +1,9 @@
 """
 """
 import pyHamiltonPSD as ham
-from hamilton_components import (
+from pycroflow.hamilton_components import (
     Reservoir, ReservoirDict, Pump, Valve, TubingConfig)
-from orchestration import AbstractSystem
+from pycroflow.orchestration import AbstractSystem
 import numpy as np
 import unittest
 import logging
@@ -129,13 +129,13 @@ protocol = {
         'frames': 30000,
         't_exp': 100},
     'protocol_entries': [
-        {'type': 'inject', 'reservoir_id': 0, 'volume': 500},
-        {'type': 'incubate', 'duration': 120},
-        {'type': 'inject', 'reservoir_id': 1, 'volume': 500, 'velocity': 600},
-        {'type': 'acquire', 'frames': 10000, 't_exp': 100, 'round': 1},
-        {'type': 'flush', 'flushfactor': 1},
-        {'type': 'await_acquisition'},
-        {'type': 'inject', 'reservoir_id': 20, 'volume': 500},   # for more commplex system: 'mix'
+        {'$type': 'inject', 'reservoir_id': 0, 'volume': 500},
+        {'$type': 'incubate', 'duration': 120},
+        {'$type': 'inject', 'reservoir_id': 1, 'volume': 500, 'velocity': 600},
+        {'$type': 'acquire', 'frames': 10000, 't_exp': 100, 'round': 1},
+        {'$type': 'flush', 'flushfactor': 1},
+        {'$type': 'await_acquisition'},
+        {'$type': 'inject', 'reservoir_id': 20, 'volume': 500},   # for more commplex system: 'mix'
     ]}
 
 
@@ -298,7 +298,7 @@ class LegacyArchitecture(AbstractSystem):
             'protocol_entries': []}
         for rid, res in self.reservoir_a.items():
             protocol['protocol_entries'].append({
-                'type': 'inject',
+                '$type': 'inject',
                 'reservoir_id': rid,
                 'volume': vol})
         self._assign_protocol(protocol)
@@ -749,7 +749,7 @@ class LegacyArchitecture(AbstractSystem):
         but with buffer.
         """
         pentry = self.protocol[i]
-        if pentry['type'] == 'inject':
+        if pentry['$type'] == 'inject':
             flush_volume = self._calc_vol_to_inlet(pentry['reservoir_id'])
             injection_volume = pentry['volume']
             # first, set up the volume required
@@ -803,10 +803,10 @@ class LegacyArchitecture(AbstractSystem):
         volumes = np.zeros(nsteps + 1, dtype=np.float64)
 
         for idx, pentry in enumerate(self.protocol[i:]):
-            if pentry['type'] == 'inject':
+            if pentry['$type'] == 'inject':
                 reservoirs[idx] = pentry['reservoir_id']
                 volumes[idx] = pentry['volume']
-            elif pentry['type'] == 'flush':
+            elif pentry['$type'] == 'flush':
                 # flush step is meant only for mode 'tubing_flush', this 
                 # _assemble_tubing_stack si meant for mode 'tubing_stack'
                 # however, let's add this; will go through sample and not
@@ -1162,10 +1162,10 @@ class LegacyArchitectureTest(unittest.TestCase):
                 'frames': 30000,
                 't_exp': 100},
             'protocol_entries': [
-                {'type': 'inject', 'reservoir_id': 0, 'volume': 500},
-                {'type': 'inject', 'reservoir_id': 1, 'volume': 200, 'velocity': 600},
-                {'type': 'acquire', 'frames': 10000, 't_exp': 100, 'round': 1},
-                {'type': 'inject', 'reservoir_id': 0, 'volume': 300},   # for more commplex system: 'mix'
+                {'$type': 'inject', 'reservoir_id': 0, 'volume': 500},
+                {'$type': 'inject', 'reservoir_id': 1, 'volume': 200, 'velocity': 600},
+                {'$type': 'acquire', 'frames': 10000, 't_exp': 100, 'round': 1},
+                {'$type': 'inject', 'reservoir_id': 0, 'volume': 300},   # for more commplex system: 'mix'
             ]}
         patch_send_command = patch('pyHamiltonPSD.communication.sendCommand', create=True)
         patch_send_command.start()
