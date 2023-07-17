@@ -5,7 +5,7 @@ Provides imaging functionality to be used as a system
 in orchestration.
 
 imaging config e.g.
-imaging_settings ={
+imaging_settings = {
     'frames': 50000,
     't_exp': 100,  # in ms
     'ROI': [512, 512, 512, 512],
@@ -30,17 +30,19 @@ protocol_imaging = [
 ]
 
 """
+import os
+import time
 import logging
 import threading
-import ic
+# import ic
 from datetime import datetime
 from pycromanager import Acquisition, multi_d_acquisition_events, Core, Studio
 
-from monet.orchestration import AbstractSystem
+from PycroFlow.orchestration import AbstractSystem
 
 
 logger = logging.getLogger(__name__)
-ic.configureOutput(outputFunction=logger.debug)
+# ic.configureOutput(outputFunction=logger.debug)
 
 
 class ImagingSystem(AbstractSystem):
@@ -95,7 +97,8 @@ class ImagingSystem(AbstractSystem):
             acq_name = (
                 acquisition_config['base_name']
                 + self.starttime_str
-                + '_round{:d}_{:s}'.format(round, desc))
+                + '_round{:d}_{:s}'.format(
+                    round, acquisition_config['message']))
             self.record_movie(acq_name, acquisition_config)
 
     def pause_execution(self):
@@ -126,8 +129,8 @@ class ImagingSystem(AbstractSystem):
         events = multi_d_acquisition_events(
             num_time_points=10, time_interval_s=.1)
         with Acquisition(
-            directory=self.config['save_dir'], name='testacquisition',
-            show_display=False, debug=True) as acq:
+                directory=self.config['save_dir'], name='testacquisition',
+                show_display=False, debug=True) as acq:
             acq.acquire(events)
 
     def record_movie(self, acq_name, acquisition_config):
@@ -149,28 +152,16 @@ class ImagingSystem(AbstractSystem):
         # filter = acquisition_config['mm_parameters']['filter']
         # roi = acquisition_config['ROI']
 
-    #    if core is not None:
-    #       core.set_exposure(t_exp)
-    #       core.set_config(chan_group, filter)
-    #       core.set_roi(*roi)
-
-        # start_progress('Acquisition', n_frames)
-
         with Acquisition(directory=acq_dir, name=acq_name, show_display=True,
-                         image_process_fn=image_process_fn,
                          ) as acq:
             events = multi_d_acquisition_events(
                 num_time_points=n_frames,
-                time_interval_s=0,#t_exp/1000,
-                #channel_group=chan_group, channels=[filter],
-                channel_exposures_ms= [t_exp],
+                time_interval_s=0,  # t_exp/1000,
+                # channel_group=chan_group, channels=[filter],
+                channel_exposures_ms=[t_exp],
                 order='tcpz',
             )
-            #for e in events:
-            #    ic(e)
             acq.acquire(events)
-
-        # end_progress()
 
     def record_movie_in_thread(self, acq_name, acquisition_config):
         """Records a movie via pycromanager
@@ -233,7 +224,7 @@ class AcquisitionThread(threading.Thread):
     def pause_on_event(self):
         while self.ev_pause.is_set():
             time.sleep(.02)
-            abort_on_event()
+            self.abort_on_event()
 
     def abort_on_event(self):
         if self.ev_abort.is_set():

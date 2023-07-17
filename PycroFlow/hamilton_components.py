@@ -153,6 +153,31 @@ class TubingConfig():
             res = 'R' + str(res_id)
         return self.config[(res, 'pump_' + pump_name)]
 
+    def get_reservoir_to_closest_valve(self, res_id):
+        """Scan the configuration for an entry from reservoir to
+        a valve, which must then be the closest one.
+        """
+        if isinstance(res_id, str):
+            if res_id in self.special_names.keys():
+                res = 'R' + str(self.special_names[res_id])
+            else:
+                res = res_id
+        else:
+            res = 'R' + str(res_id)
+        entries = [
+            ent for ent in self.config.keys()
+            if ent[0] == res and 'V' in ent[1]]
+        if len(entries) == 1:
+            return self.config[entries[0]]
+        elif len(entries) < 0:
+            raise KeyError(
+                'Cannot find any tubing configuation entry '
+                + 'leading from {:s} to a valve'.format(res))
+        else:
+            raise KeyError(
+                'Found multiple entries from res {:s}'.format(res)
+                + ' to a valve.')
+
     def set_reservoir_to_pump(self, res_id, pump_name, vol):
         """convenience function to get the volume from reservoir
         to pump

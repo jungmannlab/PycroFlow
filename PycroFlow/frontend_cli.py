@@ -17,13 +17,18 @@ def start():
     acquisition_config = {}
 
     pbuilder = ProtocolBuilder()
-    protocol, vols = pbuilder.create_protocol(acquisition_config, '')
+    protocol, vols = pbuilder.create_protocol(acquisition_config)
 
     la = ha.LegacyArchitecture(system_config, tubing_config)
     la._assign_protocol(protocol['fluid'])
+    la.fill_tubings()
 
-    imgsys = im.ImagingSystem({}, protocol['imaging'])
-    illusys = il.IlluminationSystem(protocol['illumination'])
+    imgsys = im.ImagingSystem({}, protocol['img'])
+
+    if protocol.get('illu'):
+        illusys = il.IlluminationSystem(protocol['illumination'])
+    else:
+        illusys = None
 
     po = ProtocolOrchestrator(
         protocol, imaging_system=imgsys, fluid_system=la,

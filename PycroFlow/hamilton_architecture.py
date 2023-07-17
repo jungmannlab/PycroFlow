@@ -1031,17 +1031,20 @@ class LegacyArchitecture(AbstractSystem):
             # take care of the flushbuffer last
             if res_id == self.special_names['flushbuffer_a']:
                 continue
-            self._set_valves(res_id)
-            vol = self.tubing_config.get_reservoir_to_pump(res_id, 'a')
-            self._pump(self.pump_a, vol)  # could use only input pump instead
+            # vol = self.tubing_config.get_reservoir_to_pump(res_id, 'a')
+            vol = self.tubing_config.get_reservoir_to_closest_valve(res_id)
+            self._pump(
+                self.pump_a, vol, pickup_res=res_id, dispense_flushvalve=True)
 
         # now, flush everything with the flushbuffer
-        self._set_valves(self.special_names['flushbuffer_a'])
         vol = (
             self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
             + self.tubing_config.get('pump_a', 'valve_flush')
             + self.tubing_config.get('valve_flush', 'sample'))
-        self._pump(self.pump_a, vol)
+        self._pump(
+            self.pump_a, vol,
+            pickup_res=self.special_names['flushbuffer_a'],
+            dispense_flushvalve=False)
 
 
 """
