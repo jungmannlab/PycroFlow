@@ -1,5 +1,6 @@
 import logging
 from logging import handlers
+import os
 
 
 # configure logger
@@ -19,5 +20,13 @@ def config_logger():
     # logger.addHandler(stream_handler)
 
 
+def rem_old_logfiles():
+    files = os.listdir('.')
+    files = [fil for fil in files if 'pycroflow.log' in fil]
+    for fil in files:
+        os.remove(fil)
+
+
+rem_old_logfiles()  # comment out if old logs are relevant
 config_logger()
 logger = logging.getLogger(__name__)

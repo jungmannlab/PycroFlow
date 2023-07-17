@@ -96,6 +96,8 @@ class AbstractSystem(abc.ABC):
 
 class AbstractSystemHandler(threading.Thread, abc.ABC):
     def __init__(self, protocol, threadexchange):
+        # super(threading.Thread, self).__init__()
+        super().__init__()
         self.protocol = protocol
         self.txchange = threadexchange
         self.system = None  # is set in Handler subclasses
@@ -143,7 +145,7 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
 
 class FluidHandler(AbstractSystemHandler):
     def __init__(self, fluid_system, protocol, threadexchange):
-        self.super().__init__(protocol, threadexchange)
+        super().__init__(protocol, threadexchange)
         self.target = 'fluid'
         self.system = fluid_system
 
@@ -171,7 +173,7 @@ class FluidHandler(AbstractSystemHandler):
 
 class ImagingHandler(AbstractSystemHandler):
     def __init__(self, imaging_system, protocol, threadexchange):
-        self.super().__init__(protocol, threadexchange)
+        super().__init__(protocol, threadexchange)
         self.target = 'imaging'
         self.system = imaging_system
 
@@ -184,7 +186,7 @@ class ImagingHandler(AbstractSystemHandler):
 
 class IlluminationHandler(AbstractSystemHandler):
     def __init__(self, illumination_system, protocol, threadexchange):
-        self.super().__init__(protocol, threadexchange)
+        super().__init__(protocol, threadexchange)
         self.target = 'illumination'
 
         self.system = illumination_system
