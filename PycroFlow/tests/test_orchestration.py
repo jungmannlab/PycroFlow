@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import MagicMock, call
 import logging
 import threading
+import queue
 import time
 
 import PycroFlow.orchestration as por
@@ -18,17 +19,28 @@ class TestOrchestration(unittest.TestCase):
     def tearDown(self):
         pass
 
-    def test_01(self):
+    def get_threadexchange(self):
         threadexchange = {
             'fluid_lock': threading.Lock(),
             'fluid': [],
+            'fluid_finished': threading.Event(),
+            'fluid_queue': queue.Queue(),
             'imaging_lock': threading.Lock(),
             'imaging': [],
+            'imaging_finished': threading.Event(),
             'illumination_lock': threading.Lock(),
             'illumination': [],
-            'pause_flag': threading.Event(),
-            'abort_flag': threading.Event()
+            'illumination_finished': threading.Event(),
+            'start_protocol_flag': threading.Event(),
+            'pause_protocol_flag': threading.Event(),
+            'abort_protocol_flag': threading.Event(),
+            'abort_flag': threading.Event(),
+            'graceful_stop_flag': threading.Event(),
         }
+        return threadexchange
+
+    def test_01(self):
+        threadexchange = self.get_threadexchange()
         protocol_fluid = [
             {'$type': 'inject', 'reservoir_id': 0, 'volume': 500},
             {'$type': 'incubate', 'duration': 120},
@@ -48,16 +60,7 @@ class TestOrchestration(unittest.TestCase):
 
     def test_02(self):
         logger.debug('TESTING FluidHandler')
-        threadexchange = {
-            'fluid_lock': threading.Lock(),
-            'fluid': [],
-            'imaging_lock': threading.Lock(),
-            'imaging': [],
-            'illumination_lock': threading.Lock(),
-            'illumination': [],
-            'pause_flag': threading.Event(),
-            'abort_flag': threading.Event()
-        }
+        threadexchange = self.get_threadexchange()
         protocol_fluid = [
             {'$type': 'inject', 'reservoir_id': 0, 'volume': 500},
             {'$type': 'signal', 'value': 'fluid round 1 done'},
@@ -67,10 +70,12 @@ class TestOrchestration(unittest.TestCase):
         ]
         dummy_system = MagicMock()
         fh = por.FluidHandler(dummy_system, protocol_fluid, threadexchange)
+        threadexchange['start_protocol_flag'].set()
         fh.start()
         # now running in separate thread
         time.sleep(1)
         threadexchange['abort_flag'].set()
+        threadexchange['abort_protocol_flag'].set()
 
         txch_expected = ['fluid round 1 done']
         self.assertEqual(threadexchange['fluid'], txch_expected)
@@ -79,16 +84,7 @@ class TestOrchestration(unittest.TestCase):
 
     def test_03(self):
         logger.debug('TESTING ImagingHandler')
-        threadexchange = {
-            'fluid_lock': threading.Lock(),
-            'fluid': [],
-            'imaging_lock': threading.Lock(),
-            'imaging': [],
-            'illumination_lock': threading.Lock(),
-            'illumination': [],
-            'pause_flag': threading.Event(),
-            'abort_flag': threading.Event()
-        }
+        threadexchange = self.get_threadexchange()
         protocol_fluid = [
             {'$type': 'acquire', 'frames': 1000, 't_exp': 100},
             {'$type': 'signal', 'value': 'imaging round 1 done'},
@@ -97,6 +93,7 @@ class TestOrchestration(unittest.TestCase):
         ]
         dummy_system = MagicMock()
         fh = por.ImagingHandler(dummy_system, protocol_fluid, threadexchange)
+        threadexchange['start_protocol_flag'].set()
         fh.start()
         # now running in separate thread
         time.sleep(1)
@@ -109,16 +106,7 @@ class TestOrchestration(unittest.TestCase):
 
     def test_04(self):
         logger.debug('TESTING IlluminationHandler')
-        threadexchange = {
-            'fluid_lock': threading.Lock(),
-            'fluid': [],
-            'imaging_lock': threading.Lock(),
-            'imaging': [],
-            'illumination_lock': threading.Lock(),
-            'illumination': [],
-            'pause_flag': threading.Event(),
-            'abort_flag': threading.Event()
-        }
+        threadexchange = self.get_threadexchange()
         protocol_fluid = [
             {'$type': 'power', 'value': 20},
             {'$type': 'signal', 'value': 'illumination round 1 done'},
@@ -127,6 +115,7 @@ class TestOrchestration(unittest.TestCase):
         ]
         dummy_system = MagicMock()
         fh = por.IlluminationHandler(dummy_system, protocol_fluid, threadexchange)
+        threadexchange['start_protocol_flag'].set()
         fh.start()
         # now running in separate thread
         time.sleep(1)
@@ -155,10 +144,11 @@ class TestOrchestration(unittest.TestCase):
         po = por.ProtocolOrchestrator(
             protocol, fluid_system=dummy_fluid, imaging_system=dummy_imaging)
         po.start_orchestration()
+        po.start_protocol()
         # now running in separate thread
         time.sleep(1)
         # po.abort_orchestration()
-        po.poll_orchestration_finished()
+        logger.debug('protocol finished' + str(po.poll_orchestration_finished()))
         po.end_orchestration()
 
         txch_expected = ['fluid round 1 done']

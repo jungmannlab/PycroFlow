@@ -755,11 +755,24 @@ class LegacyArchitecture(AbstractSystem):
             # first, set up the volume required
             self._set_valves(pentry['reservoir_id'])
             self._inject(injection_volume, pentry['speed'])
-            # afterwards, flush in buffer to get the pentry volume to the sample
+            # afterwards, flush in buffer to get the pentry
+            # volume to the sample
             self._set_valves(self.special_names['flushbuffer_a'])
             self._inject(flush_volume, pentry['speed'])
 
-        self.last_protocol_entry = -1  # tubing full of buffer, cannot simply proceed
+        # tubing full of buffer, cannot simply proceed
+        self.last_protocol_entry = -1
+
+    def deliver_fluid(self, reservoir_id, volume):
+        """Deliver fluid to the sample without regard to the protocol.
+        """
+        flush_volume = self._calc_vol_to_inlet(reservoir_id)
+        # first, set up the volume required
+        self._set_valves(reservoir_id)
+        self._inject(volume)
+        # afterwards, flush in buffer to get the pentry volume to the sample
+        self._set_valves(self.special_names['flushbuffer_a'])
+        self._inject(flush_volume)
 
     def pause_execution(self):
         """Pause the execution of a protocol step. Specifically,

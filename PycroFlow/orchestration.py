@@ -9,6 +9,7 @@
     :copyright: Copyright (c) 2023 Jungmann Lab, MPI of Biochemistry
 """
 import threading
+import queue
 import time
 import abc
 import logging
@@ -106,50 +107,22 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         self.txchange = threadexchange
         self.system = None  # is set in Handler subclasses
 
-    @abc.abstractmethod
     def run(self):
-        while True:
-            goon_housekeeping = self.housekeeping()
+        while ((not self.txchange['abort_flag'].is_set())
+               and (not self.txchange['graceful_stop_flag'].is_set())):
+            if self.txchange['start_protocol_flag'].is_set():
+                self.run_protocol()
+                while not self.poll_protocol_finished():
+                    if ((self.txchange['abort_flag'].is_set()
+                         or self.txchange['abort_protocol_flag'].is_set())):
+                        return
+                    time.sleep(.05)
+                self.txchange['start_protocol_flag'].clear()
 
-            if not goon_housekeeping:
-                self.send_message('Ending.')
-                return
-
+            self.work_queue()
             time.sleep(.05)
 
-    def housekeeping(self):
-        if self.txchange['abort_flag'].is_set():
-            self.system.abort_protocol()
-            return False
-        elif self.txchange['pause_flag'].is_set():
-            self.system.pause_protocol()
-            return False
-        else:
-            return True
-
-    def wait_xchange(self, target, message):
-        busy = True
-        while (busy
-               and not self.txchange['abort_flag'].is_set()
-               and not self.txchange['pause_flag'].is_set()):
-            with self.txchange[target + '_lock']:
-                if message in self.txchange[target]:
-                    busy = False
-                    break
-            time.sleep(.05)
-
-    def send_message(self, message):
-        with self.txchange[self.target + '_lock']:
-            self.txchange[self.target].append(message)
-
-
-class FluidHandler(AbstractSystemHandler):
-    def __init__(self, fluid_system, protocol, threadexchange):
-        super().__init__(protocol, threadexchange)
-        self.target = 'fluid'
-        self.system = fluid_system
-
-    def run(self):
+    def run_protocol(self):
         for i, step in enumerate(self.protocol):
             if step['$type'].lower() == 'signal':
                 self.send_message(step['value'])
@@ -158,7 +131,8 @@ class FluidHandler(AbstractSystemHandler):
             elif step['$type'].lower() == 'incubate':
                 tic = time.time()
                 while time.time() < tic + step['duration']:
-                    if self.txchange['abort_flag'].is_set():
+                    if ((self.txchange['abort_flag'].is_set()
+                         or self.txchange['abort_protocol_flag'].is_set())):
                         return
                     time.sleep(.05)
             else:
@@ -172,9 +146,69 @@ class FluidHandler(AbstractSystemHandler):
         self.txchange[self.target + '_finished'].set()
         return
 
+    def housekeeping(self):
+        if ((self.txchange['abort_protocol_flag'].is_set()
+             or self.txchange['abort_flag'].is_set())):
+            self.system.abort_protocol()
+            return False
+        elif self.txchange['pause_protocol_flag'].is_set():
+            self.system.pause_protocol()
+            return False
+        else:
+            return True
+
+    def wait_xchange(self, target, message):
+        busy = True
+        while (busy
+               and not self.txchange['abort_flag'].is_set()
+               and not self.txchange['abort_protocol_flag'].is_set()
+               and not self.txchange['pause_protocol_flag'].is_set()):
+            with self.txchange[target + '_lock']:
+                if message in self.txchange[target]:
+                    busy = False
+                    break
+            time.sleep(.05)
+
+    def send_message(self, message):
+        with self.txchange[self.target + '_lock']:
+            self.txchange[self.target].append(message)
+
+    def poll_protocol_finished(self):
+        events = [
+            v for k, v in self.txchange.items()
+            if '_finished' in k]
+        finished = [ev.is_set() for ev in events]
+        return all(finished)
+
+    @abc.abstractmethod
+    def work_queue(self):
+        pass
+
+
+class FluidHandler(AbstractSystemHandler):
+    def __init__(self, fluid_system, protocol, threadexchange):
+        super().__init__(protocol, threadexchange)
+        self.target = 'fluid'
+        self.system = fluid_system
+
     def execute_protocol_entry(self, i):
         with self.txchange[self.target + '_lock']:
             self.system.execute_protocol_entry(i)
+
+    def work_queue(self):
+        try:
+            item = self.txchange['fluid_queue'].get(timeout=.05)
+        except queue.Empty:
+            item = None
+        if item:
+            if item['fun'] == 'deliver':
+                self.deliver_fluid(*item['args'], **item('kwargs'))
+
+    def deliver_fluid(self, reservoir_id, volume):
+        """Deliver fluid of a given reservoir
+        """
+        with self.txchange[self.target + '_lock']:
+            self.system.deliver_fluid(reservoir_id, volume)
 
 
 class ImagingHandler(AbstractSystemHandler):
@@ -183,26 +217,12 @@ class ImagingHandler(AbstractSystemHandler):
         self.target = 'imaging'
         self.system = imaging_system
 
-    def run(self):
-        for i, step in enumerate(self.protocol):
-            if step['$type'].lower() == 'signal':
-                self.send_message(step['value'])
-            elif step['$type'].lower() == 'wait for signal':
-                self.wait_xchange(step['target'], step['value'])
-            else:
-                self.execute_protocol_entry(i)
-
-            goon_housekeeping = self.housekeeping()
-            if not goon_housekeeping:
-                self.send_message('Ending.')
-                return
-
-        self.txchange[self.target + '_finished'].set()
-        return
-
     def execute_protocol_entry(self, i):
         with self.txchange[self.target + '_lock']:
             self.system.execute_protocol_entry(i)
+
+    def work_queue(self):
+        pass
 
 
 class IlluminationHandler(AbstractSystemHandler):
@@ -212,26 +232,12 @@ class IlluminationHandler(AbstractSystemHandler):
 
         self.system = illumination_system
 
-    def run(self):
-        for i, step in enumerate(self.protocol):
-            if step['$type'].lower() == 'signal':
-                self.send_message(step['value'])
-            elif step['$type'].lower() == 'wait for signal':
-                self.wait_xchange(step['target'], step['value'])
-            else:
-                self.execute_protocol_entry(i)
-
-            goon_housekeeping = self.housekeeping()
-            if not goon_housekeeping:
-                self.send_message('Ending.')
-                return
-
-        self.txchange[self.target + '_finished'].set()
-        return
-
     def execute_protocol_entry(self, i):
         with self.txchange[self.target + '_lock']:
             self.system.execute_protocol_entry(i)
+
+    def work_queue(self):
+        pass
 
 
 class ProtocolOrchestrator():
@@ -242,14 +248,18 @@ class ProtocolOrchestrator():
         'fluid_lock': threading.Lock(),
         'fluid': [],
         'fluid_finished': threading.Event(),
+        'fluid_queue': queue.Queue(),
         'imaging_lock': threading.Lock(),
         'imaging': [],
         'imaging_finished': threading.Event(),
         'illumination_lock': threading.Lock(),
         'illumination': [],
         'illumination_finished': threading.Event(),
-        'pause_flag': threading.Event(),
-        'abort_flag': threading.Event()
+        'start_protocol_flag': threading.Event(),
+        'pause_protocol_flag': threading.Event(),
+        'abort_protocol_flag': threading.Event(),
+        'abort_flag': threading.Event(),
+        'graceful_stop_flag': threading.Event(),
     }
 
     def __init__(self, protocol,
@@ -277,14 +287,23 @@ class ProtocolOrchestrator():
         self.imaging_handler.start()
         self.illumination_handler.start()
 
+    def start_protocol(self):
+        self.threadexchange['start_protocol_flag'].set()
+
+    def abort_protocol(self):
+        self.threadexchange['abort_protocol_flag'].set()
+
     def pause_orchestration(self):
-        self.threadexchange['pause_flag'].set()
+        self.threadexchange['pause_protocol_flag'].set()
 
     def resume_orchestration(self):
-        self.threadexchange['pause_flag'].clear()
+        self.threadexchange['pause_protocol_flag'].clear()
 
     def abort_orchestration(self):
         self.threadexchange['abort_flag'].set()
+        self.fluid_handler.join()
+        self.imaging_handler.join()
+        self.illumination_handler.join()
 
     def poll_orchestration_finished(self):
         events = [
@@ -294,9 +313,14 @@ class ProtocolOrchestrator():
         return all(finished)
 
     def end_orchestration(self):
+        self.threadexchange['graceful_stop_flag'].set()
         self.fluid_handler.join()
         self.imaging_handler.join()
         self.illumination_handler.join()
+
+    def enqueue_fluid_function(self, function, args, kwargs):
+        self.threadexchange['fluid_queue'].put(
+            {'fun': function, 'args': args, 'kwargs': kwargs})
 
     def execute_system_function(self, target, fun, args=[], kwargs={}):
         """Execute a function of a target system (e.g. Hamilton fluid system).
