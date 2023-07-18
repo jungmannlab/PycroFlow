@@ -11,6 +11,10 @@
 import threading
 import time
 import abc
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 protocol = {
@@ -102,20 +106,16 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         self.txchange = threadexchange
         self.system = None  # is set in Handler subclasses
 
+    @abc.abstractmethod
     def run(self):
         while True:
-            goon_main = self.main_loop()
             goon_housekeeping = self.housekeeping()
 
-            if (not goon_main) or (not goon_housekeeping):
+            if not goon_housekeeping:
                 self.send_message('Ending.')
                 return
 
             time.sleep(.05)
-
-    @abc.abstractmethod
-    def main_loop(self):
-        pass
 
     def housekeeping(self):
         if self.txchange['abort_flag'].is_set():
@@ -149,22 +149,28 @@ class FluidHandler(AbstractSystemHandler):
         self.target = 'fluid'
         self.system = fluid_system
 
-    def main_loop(self):
-        while not self.txchange['abort_flag'].is_set():
-            for i, step in enumerate(self.protocol):
-                if step['$type'].lower() == 'signal':
-                    self.send_message(self.target, step['value'])
-                elif step['$type'].lower() == 'wait for signal':
-                    self.wait_xchange(step['target'], step['value'])
-                elif step['$type'].lower() == 'incubate':
-                    tic = time.time()
-                    while time.time() < tic + step['duration']:
-                        if self.txchange['abort_flag'].is_set():
-                            return
-                        time.sleep(.05)
-                else:
-                    self.execute_protocol_entry(i)
-        self.send_message('round 1 done')
+    def run(self):
+        for i, step in enumerate(self.protocol):
+            if step['$type'].lower() == 'signal':
+                self.send_message(step['value'])
+            elif step['$type'].lower() == 'wait for signal':
+                self.wait_xchange(step['target'], step['value'])
+            elif step['$type'].lower() == 'incubate':
+                tic = time.time()
+                while time.time() < tic + step['duration']:
+                    if self.txchange['abort_flag'].is_set():
+                        return
+                    time.sleep(.05)
+            else:
+                self.execute_protocol_entry(i)
+
+            goon_housekeeping = self.housekeeping()
+            if not goon_housekeeping:
+                self.send_message('Ending.')
+                return
+
+        self.txchange[self.target + '_finished'].set()
+        return
 
     def execute_protocol_entry(self, i):
         with self.txchange[self.target + '_lock']:
@@ -177,11 +183,26 @@ class ImagingHandler(AbstractSystemHandler):
         self.target = 'imaging'
         self.system = imaging_system
 
-    def main_loop(self):
-        pass
-        while not self.txchange['abort_flag'].is_set():
-            pass
-        self.send_message('round 1 done')
+    def run(self):
+        for i, step in enumerate(self.protocol):
+            if step['$type'].lower() == 'signal':
+                self.send_message(step['value'])
+            elif step['$type'].lower() == 'wait for signal':
+                self.wait_xchange(step['target'], step['value'])
+            else:
+                self.execute_protocol_entry(i)
+
+            goon_housekeeping = self.housekeeping()
+            if not goon_housekeeping:
+                self.send_message('Ending.')
+                return
+
+        self.txchange[self.target + '_finished'].set()
+        return
+
+    def execute_protocol_entry(self, i):
+        with self.txchange[self.target + '_lock']:
+            self.system.execute_protocol_entry(i)
 
 
 class IlluminationHandler(AbstractSystemHandler):
@@ -191,11 +212,26 @@ class IlluminationHandler(AbstractSystemHandler):
 
         self.system = illumination_system
 
-    def main_loop(self):
-        pass
-        while not self.txchange['abort_flag'].is_set():
-            pass
-        self.send_message('round 1 done')
+    def run(self):
+        for i, step in enumerate(self.protocol):
+            if step['$type'].lower() == 'signal':
+                self.send_message(step['value'])
+            elif step['$type'].lower() == 'wait for signal':
+                self.wait_xchange(step['target'], step['value'])
+            else:
+                self.execute_protocol_entry(i)
+
+            goon_housekeeping = self.housekeeping()
+            if not goon_housekeeping:
+                self.send_message('Ending.')
+                return
+
+        self.txchange[self.target + '_finished'].set()
+        return
+
+    def execute_protocol_entry(self, i):
+        with self.txchange[self.target + '_lock']:
+            self.system.execute_protocol_entry(i)
 
 
 class ProtocolOrchestrator():
@@ -205,10 +241,13 @@ class ProtocolOrchestrator():
     threadexchange = {
         'fluid_lock': threading.Lock(),
         'fluid': [],
+        'fluid_finished': threading.Event(),
         'imaging_lock': threading.Lock(),
         'imaging': [],
+        'imaging_finished': threading.Event(),
         'illumination_lock': threading.Lock(),
         'illumination': [],
+        'illumination_finished': threading.Event(),
         'pause_flag': threading.Event(),
         'abort_flag': threading.Event()
     }
@@ -218,15 +257,18 @@ class ProtocolOrchestrator():
                  illumination_system=None):
         self.fluid_system = fluid_system
         self.fluid_handler = FluidHandler(
-            fluid_system, protocol['fluid'], self.threadexchange)
+            fluid_system, protocol.get('fluid', []),
+            self.threadexchange)
 
         self.imaging_system = imaging_system
         self.imaging_handler = ImagingHandler(
-            imaging_system, protocol['imaging'], self.threadexchange)
+            imaging_system, protocol.get('imaging', []),
+            self.threadexchange)
 
         self.illumination_system = illumination_system
         self.illumination_handler = IlluminationHandler(
-            illumination_system, protocol['illumination'], self.threadexchange)
+            illumination_system, protocol.get('illumination', []),
+            self.threadexchange)
 
         self.protocol = protocol
 
@@ -243,6 +285,13 @@ class ProtocolOrchestrator():
 
     def abort_orchestration(self):
         self.threadexchange['abort_flag'].set()
+
+    def poll_orchestration_finished(self):
+        events = [
+            v for k, v in self.threadexchange.items()
+            if '_finished' in k]
+        finished = [ev.is_set() for ev in events]
+        return all(finished)
 
     def end_orchestration(self):
         self.fluid_handler.join()

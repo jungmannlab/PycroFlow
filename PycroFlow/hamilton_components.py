@@ -4,8 +4,8 @@ address are unique to the whole system (same as serial address)
 
 """
 import pyHamiltonPSD as ham
-import pyHamiltonMVP
-from pyHamiltonMVP import MVP
+import PycroFlow.pyHamiltonMVP
+from PycroFlow.pyHamiltonMVP import MVP
 from pyHamiltonPSD.util import SyringeMovement as SyrMov
 from pyHamiltonPSD.util import SyringeTypes as SyrTypes
 from pyHamiltonPSD.util import PSDTypes
