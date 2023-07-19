@@ -148,7 +148,7 @@ class TestOrchestration(unittest.TestCase):
         # now running in separate thread
         time.sleep(1)
         # po.abort_orchestration()
-        logger.debug('protocol finished' + str(po.poll_orchestration_finished()))
+        logger.debug('protocol finished' + str(po.poll_protocol_finished()))
         po.end_orchestration()
 
         txch_expected = ['fluid round 1 done']

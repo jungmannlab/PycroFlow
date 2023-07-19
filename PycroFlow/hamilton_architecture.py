@@ -139,7 +139,6 @@ protocol = {
     ]}
 
 
-
 def prep_legacy_wettest(port='4', baudrate=9600):
     """Prepare a LegacyArchitecture instance with a wettest protocol.
     This is a convenience function for easy setup in the command
@@ -227,15 +226,20 @@ class LegacyArchitecture(AbstractSystem):
 
     extractionfactor = 1
 
-    def __init__(self, system_config, tubing_config, port='4', baudrate=9600):
+    def __init__(self, system_config, tubing_config=None, port='4', baudrate=9600):
         self._assign_system_config(system_config)
-        self._assign_tubing_config(tubing_config)
+
         global is_connected
         if not is_connected:
             if 'COM' in port:
                 port = port[3:]
             connect(port, baudrate)
         self._test_communication()
+
+        if tubing_config:
+            self._assign_tubing_config(tubing_config)
+        else:
+            self._calibrate_tubing()
 
     def _assign_system_config(self, config):
         """Assign a system configuration
@@ -447,7 +451,7 @@ class LegacyArchitecture(AbstractSystem):
             + 'Enter the measurement results in the format "flushbuffer: '
             + 'xxx.xx; ID1: xxx.xx; ID2: xxx.xx" with IDn being the reseroir '
             + 'IDs and xxx.xx the measured net weight in mg. Press enter to '
-            + 'proceed.\r\n') 
+            + 'proceed.\r\n')
         result = result.split(';')
         for sglres in result:
             destination, tubvol = sglres.split(':')
@@ -475,7 +479,7 @@ class LegacyArchitecture(AbstractSystem):
         result = input(
             'Please replace flushbuffer and sample tube with an empty tube.'
             + ' Make sure sample tubing does not pick up liquid. '
-            + 'Press enter to proceed.\r\n') 
+            + 'Press enter to proceed.\r\n')
         # empty the outlet tube
         for i in range(n_strokes):
             self._pump(
@@ -501,7 +505,7 @@ class LegacyArchitecture(AbstractSystem):
             + 'xxx.xx; sample: '
             + 'xxx.xx; ID1: xxx.xx; ID2: xxx.xx" with IDn being the reseroir '
             + 'IDs and xxx.xx the measured net weight in mg. Press enter to '
-            + 'proceed.\r\n') 
+            + 'proceed.\r\n')
         result = result.split(';')
         for sglres in result:
             destination, tubvol = sglres.split(':')
@@ -614,7 +618,7 @@ class LegacyArchitecture(AbstractSystem):
         if dispensevol_per_stroke < 0:
             raise ValueError('Cannot continue this calibration procedure.')
         # add 2 to n_strokes for safety
-        n_strokes = int(np.ceil(max_vol / dispensevol_per_stroke)) + 2
+        # n_strokes = int(np.ceil(max_vol / dispensevol_per_stroke)) + 2
         print(
             'Please replace sample and flush tube with an empty '
             + 'tube and weigh the dispensed volume. Enter the results in '
@@ -646,8 +650,9 @@ class LegacyArchitecture(AbstractSystem):
             + 'Enter the measurement results in the format "flushbuffer: '
             + 'xxx.xx; ID1: xxx.xx; ID2: xxx.xx" with IDn being the reseroir '
             + 'IDs and xxx.xx the measured net weight in mg. Press enter to '
-            + 'proceed.\r\n') 
-        result = 'flushbuffer: 800; 0: 150; 1: 150; 7: 200; 8: 150; 15: 200; 16: 200'
+            + 'proceed.\r\n')
+        result = ('flushbuffer: 800; 0: 150; 1: 150; 7: 200; 8: 150; '
+                  + '15: 200; 16: 200')
         result = result.split(';')
         for sglres in result:
             destination, tubvol = sglres.split(':')
@@ -668,7 +673,7 @@ class LegacyArchitecture(AbstractSystem):
         # fill flushbuffer and thus main path
         print(
             'Please replace flushbuffer tube with an empty tube.'
-            + 'Press enter to proceed.\r\n') 
+            + 'Press enter to proceed.\r\n')
         # empty the outlet tube
         # empty into the reservoirs
         print(
@@ -677,7 +682,7 @@ class LegacyArchitecture(AbstractSystem):
             + 'Enter the measurement results in the format "flushbuffer: '
             + 'xxx.xx; ID1: xxx.xx; ID2: xxx.xx" with IDn being the reseroir '
             + 'IDs and xxx.xx the measured net weight in mg. Press enter to '
-            + 'proceed.\r\n') 
+            + 'proceed.\r\n')
         result = 'flushbuffer: 800; 1: 200; 8: 150; 16: 175'
         result = result.split(';')
         print('measured volumes from first measurements')
@@ -705,7 +710,7 @@ class LegacyArchitecture(AbstractSystem):
         for resid, res in self.reservoir_a.items():
             steps = ['R' + str(resid)]
             nv = self.reservoir_a.get_reservoir_nvalves(resid)
-            for n in range(nv-1, -1, -1):
+            for n in range(nv - 1, -1, -1):
                 steps.append('V' + str(valve_order[n]))
             steps.append('pump_a')
             print(steps)
@@ -773,6 +778,78 @@ class LegacyArchitecture(AbstractSystem):
         # afterwards, flush in buffer to get the pentry volume to the sample
         self._set_valves(self.special_names['flushbuffer_a'])
         self._inject(flush_volume)
+
+    def clean_tubings(self):
+        """Clean the tubings by flushing through detergent and ethanol.
+        This is analog to the Fluigent Aria cleaning procedure (but faster)
+        """
+        input(
+            'Please fill the flushbuffer reservoir with 10% Detergent '
+            + '(Fluigent) and empty all reservoirs. Put the sample tubing'
+            + ' into a reservoir. Press Enter to continue.')
+        # Go through all tubings and wash/shake
+        self.fill_and_shake_tubings(
+            input_res=self.special_names['flushbuffer_a'])
+        input(
+            'Please empty the flushbuffer reservoir '
+            + 'and empty all reservoirs. Put the sample tubing'
+            + ' into a reservoir. Press Enter to continue.')
+        # Empty all tubings
+        self.fill_and_shake_tubings(
+            input_res=self.special_names['flushbuffer_a'], do_shake=False)
+        # will with Ethanol
+        input(
+            'Please fill the flushbuffer reservoir with Ethanol '
+            + '(Fluigent) and empty all reservoirs. Put the sample tubing'
+            + ' into a reservoir. Press Enter to continue.')
+        # Go through all tubings and wash/shake
+        self.fill_and_shake_tubings(
+            input_res=self.special_names['flushbuffer_a'])
+        input(
+            'Please empty the flushbuffer reservoir '
+            + 'and empty all reservoirs. Put the sample tubing'
+            + ' into a reservoir. Press Enter to continue.')
+        # Empty all tubings
+        self.fill_and_shake_tubings(
+            input_res=self.special_names['flushbuffer_a'], do_shake=False)
+
+    def fill_and_shake_tubings(self, input_res, do_shake=True):
+        for ires, (resid, res) in enumerate(self.reservoir_a.items()):
+            # fill reservoir tubings
+            if ires == 0:
+                nstrokes = 5
+            else:
+                nstrokes = 2
+            for i in range(nstrokes):
+                self._pump(
+                    self.pump_a, self.pump_a.syringe_volume,
+                    pickup_dir='in', dispense_dir='in',
+                    pickup_res=input_res,
+                    dispense_res=resid)
+            # shake
+            if do_shake:
+                for i in range(2):
+                    self._pump(
+                        self.pump_a, self.pump_a.syringe_volume,
+                        pickup_dir='in', dispense_dir='in',
+                        pickup_res=resid,
+                        dispense_res=resid)
+        # flush and sample tubing
+        for do_flushvalve in [True, False]:
+            for i in range(2):
+                self._pump(
+                    self.pump_a, self.pump_a.syringe_volume,
+                    pickup_dir='in', dispense_dir='out',
+                    pickup_res=input_res,
+                    dispense_flushvalve=do_flushvalve)
+            # shake
+            if do_shake:
+                for i in range(2):
+                    self._pump(
+                        self.pump_a, self.pump_a.syringe_volume,
+                        pickup_dir='in', dispense_dir='in',
+                        pickup_flushvalve=do_flushvalve,
+                        dispense_flushvalve=do_flushvalve)
 
     def pause_execution(self):
         """Pause the execution of a protocol step. Specifically,

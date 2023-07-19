@@ -293,10 +293,10 @@ class ProtocolOrchestrator():
     def abort_protocol(self):
         self.threadexchange['abort_protocol_flag'].set()
 
-    def pause_orchestration(self):
+    def pause_protocol(self):
         self.threadexchange['pause_protocol_flag'].set()
 
-    def resume_orchestration(self):
+    def resume_protocol(self):
         self.threadexchange['pause_protocol_flag'].clear()
 
     def abort_orchestration(self):
@@ -305,7 +305,7 @@ class ProtocolOrchestrator():
         self.imaging_handler.join()
         self.illumination_handler.join()
 
-    def poll_orchestration_finished(self):
+    def poll_protocol_finished(self):
         events = [
             v for k, v in self.threadexchange.items()
             if '_finished' in k]
