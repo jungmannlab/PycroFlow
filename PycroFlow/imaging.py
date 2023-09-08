@@ -5,17 +5,13 @@ Provides imaging functionality to be used as a system
 in orchestration.
 
 imaging config e.g.
-imaging_settings = {
-    'frames': 50000,
-    't_exp': 100,  # in ms
-    'ROI': [512, 512, 512, 512],
-}
 flow_acq_config = {
     'save_dir': r'Z://users//grabmayr//microscopy_data',
     'base_name': 'AutomationTest_R2R4',
-    'fluid_settings': fluid_settings,
-    'imaging_settings': imaging_settings,
-    'illumination_settings': illumination_settings,
+    'imaging_settings': {
+        'frames': 50000,
+        't_exp': 100,  # in ms
+        'ROI': [512, 512, 512, 512],},
     'mm_parameters': {
         'channel_group': 'Filter turret',
         'filter': '2-G561',

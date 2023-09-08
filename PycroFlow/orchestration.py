@@ -53,7 +53,7 @@ protocol_fluid = [
     {'target': 'fluid', '$type': 'signal', 'value': 'fluid round 1 done'},
     {'$type': 'flush', 'flushfactor': 1},
     {'$type': 'wait for signal', 'target': 'imaging', 'value': 'round 1 done'},
-    {'$type': 'inject', 'reservoir_id': 20, 'volume': 500},
+    {'$type': 'inject', 'reservoir_id': 14, 'volume': 500},
 ]
 
 protocol_imaging = [
@@ -104,6 +104,7 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         # super(threading.Thread, self).__init__()
         super().__init__()
         self.protocol = protocol
+        print('starting system handler with protocol', self.protocol)
         self.txchange = threadexchange
         self.system = None  # is set in Handler subclasses
 
@@ -124,6 +125,7 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
 
     def run_protocol(self):
         for i, step in enumerate(self.protocol):
+            print('System performing step', i, ':', step)
             if step['$type'].lower() == 'signal':
                 self.send_message(step['value'])
             elif step['$type'].lower() == 'wait for signal':
@@ -187,9 +189,14 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
 
 class FluidHandler(AbstractSystemHandler):
     def __init__(self, fluid_system, protocol, threadexchange):
-        super().__init__(protocol, threadexchange)
+        super().__init__(protocol['fluid'], threadexchange)
         self.target = 'fluid'
         self.system = fluid_system
+        # assign the protocol - restructure this later on
+        prot = {}
+        prot['flow_parameters'] = protocol['flow_parameters']
+        prot['protocol_entries'] = protocol['fluid']
+        self.system._assign_protocol(prot)
 
     def execute_protocol_entry(self, i):
         with self.txchange[self.target + '_lock']:
@@ -266,8 +273,11 @@ class ProtocolOrchestrator():
                  imaging_system=None, fluid_system=None,
                  illumination_system=None):
         self.fluid_system = fluid_system
+        fluid_protocol = {
+            'flow_parameters': protocol.get('flow_parameters', {}),
+            'fluid': protocol.get('fluid', [])}
         self.fluid_handler = FluidHandler(
-            fluid_system, protocol.get('fluid', []),
+            fluid_system, fluid_protocol,
             self.threadexchange)
 
         self.imaging_system = imaging_system

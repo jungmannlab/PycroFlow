@@ -45,7 +45,7 @@ legacy_system_config = {
         {'address': 3, 'instrument_type': 'MVP', 'valve_type': '8-5'},
         {'address': 4, 'instrument_type': 'MVP', 'valve_type': '8-5'}],
     'valve_flush':
-        {'address': 5, 'instrument_type': 'MVP', 'valve_type': '8-5'},
+        {'address': 5, 'instrument_type': 'MVP', 'valve_type': '4-2'},
     'flush_pos': {'inject': 4, 'flush': 1}, # 1: flush/waste/pumptoblue; 2: pump sealed; 3: pump sealed; 4: inject/sample/pumptored
     'pump_a':
         {'address': 1, 'instrument_type': '4', 'valve_type': 'Y',
@@ -135,7 +135,7 @@ protocol = {
         {'$type': 'acquire', 'frames': 10000, 't_exp': 100, 'round': 1},
         {'$type': 'flush', 'flushfactor': 1},
         {'$type': 'await_acquisition'},
-        {'$type': 'inject', 'reservoir_id': 20, 'volume': 500},   # for more commplex system: 'mix'
+        {'$type': 'inject', 'reservoir_id': 14, 'volume': 500},   # for more commplex system: 'mix'
     ]}
 
 
@@ -154,7 +154,7 @@ def prep_legacy_wettest(port='4', baudrate=9600):
 def do_legacy_wettest(la):
     print('****************   testing "_set_valves"')
     la._set_valves(1)
-    la._set_valves(20)
+    la._set_valves(14)
     print('****************   Test of "_set_valves" was successful.')
     print('****************   testing "_set_flush_valve"')
     la._set_flush_valve()
@@ -165,7 +165,7 @@ def do_legacy_wettest(la):
     la._pump(la.pump_a, 100, pickup_dir='in', dispense_dir='in',
              pickup_res=la.special_names['flushbuffer_a'],
              dispense_res=la.special_names['flushbuffer_a'])
-    print('****************   Test of "_set_valves" was successful.')
+    print('****************   Test of "_pump" was successful.')
 
 
 def do_test_caltube(la):
@@ -1222,7 +1222,7 @@ if __name__ == '__main__':
     # unittest.main()
 
     # # do a test run
-    # connect('4', 9600)
+    # connect('18', 9600)
     # arch = LegacyArchitecture(legacy_system_config, legacy_tubing_config)
     # arch._assign_protocol(protocol)
 

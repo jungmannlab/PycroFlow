@@ -8,5 +8,8 @@ import shutil
 import os
 
 
-shutil.rmtree('PycroFlow//TestData')
+try:
+	shutil.rmtree('PycroFlow//TestData')
+except:
+	pass
 os.mkdir('PycroFlow//TestData')
