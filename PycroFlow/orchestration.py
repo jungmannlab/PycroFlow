@@ -5,6 +5,36 @@
 
     Concertation between Fluid automation, image acquisition, and illumination
 
+------
+# Test of fluid-only orchestration:
+import PycroFlow.orchestration as por
+import PycroFlow.hamilton_architecture as ha
+
+prot = {'fluid': por.protocol['fluid']}
+ha.connect('18', 9600)
+la = ha.LegacyArchitecture(ha.legacy_system_config, ha.legacy_tubing_config, '18', 9600)
+po = por.ProtocolOrchestrator(prot, fluid_system=la)
+po.start_orchestration()
+po.start_protocol()
+po.abort_protocol()
+po.abort_orchestration()
+------
+# Test of imaging-only orchestration:
+import PycroFlow.orchestration as por
+import PycroFlow.imaging as pi
+prot = {'imaging': por.protocol['imaging']}
+prot['imaging']['protocol_entries'] = prot['imaging']['protocol_entries'][1:]  # skip first wait
+imaging_config = {'save_dir': r'.', 'base_name': 'test', 'imaging_settings': {'frames': 50, 't_exp': 100}, 'mm_parameters': {'channel_group': 'Filter turret', 'filter': '2-G561',},}
+
+isy = pi.ImagingSystem(imaging_config)
+po = por.ProtocolOrchestrator(prot, imaging_system=isy)
+# po.imaging_handler.run_protocol()  # non-threaded execution
+# or threaded execution
+po.start_orchestration()
+po.start_protocol()
+------
+
+
     :authors: Heinrich Grabmayr, 2023
     :copyright: Copyright (c) 2023 Jungmann Lab, MPI of Biochemistry
 """
@@ -18,34 +48,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-protocol = {
-    'flow_parameters': {
-        'start_velocity': 50,
-        'max_velocity': 1000,
-        'stop_velocity': 500,
-        'mode': 'tubing_stack',  # or 'tubing_flush'
-        'extractionfactor': 1},
-    'imaging': {
-        'frames': 30000,
-        't_exp': 100},
-    'protocol_entries': [
-        {'target': 'illumination', '$type': 'power',
-         'value': 1},
-        {'target': 'fluid', '$type': 'inject',
-         'reservoir_id': 0, 'volume': 500},
-        {'target': 'fluid', '$type': 'incubate',
-         'duration': 120},
-        {'target': 'fluid', '$type': 'inject',
-         'reservoir_id': 1, 'volume': 500, 'velocity': 600},
-        {'target': 'imaging', '$type': 'acquire',
-         'frames': 10000, 't_exp': 100, 'round': 1},
-        {'target': 'fluid', '$type': 'flush',
-         'flushfactor': 1},
-        {'target': 'fluid', '$type': 'await_acquisition'},
-        {'target': 'fluid', '$type': 'inject',
-         'reservoir_id': 20, 'volume': 500},
-    ]}
-
 protocol_fluid = [
     {'$type': 'inject', 'reservoir_id': 0, 'volume': 500},
     {'$type': 'incubate', 'duration': 120},
@@ -58,7 +60,7 @@ protocol_fluid = [
 
 protocol_imaging = [
     {'$type': 'wait for signal', 'target': 'fluid', 'value': 'round 1 done'},
-    {'$type': 'acquire', 'frames': 10000, 't_exp': 100, 'round': 1},
+    {'$type': 'acquire', 'frames': 100, 't_exp': 100, 'round': 1, 'message': 'R3'},
     {'$type': 'signal', 'value': 'imaging round 1 done'},
 ]
 
@@ -68,6 +70,23 @@ protocol_illumination = [
     {'$type': 'power', 'value': 50},
     {'$type': 'wait for signal', 'target': 'imaging', 'value': 'round 1 done'},
 ]
+
+protocol = {
+    'fluid': {
+        'parameters': {
+            'start_velocity': 50,
+            'max_velocity': 1000,
+            'stop_velocity': 500,
+            'mode': 'tubing_stack',  # or 'tubing_flush'
+            'extractionfactor': 1},
+        'protocol_entries': protocol_fluid},
+    'imaging': {
+        'protocol_entries': protocol_imaging},
+    'illumination': {
+        'protocol_entries': protocol_illumination}
+}
+
+
 
 
 class AbstractSystem(abc.ABC):
@@ -104,14 +123,18 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         # super(threading.Thread, self).__init__()
         super().__init__()
         self.protocol = protocol
-        print('starting system handler with protocol', self.protocol)
+        logger.debug('starting system handler with protocol', self.protocol)
         self.txchange = threadexchange
         self.system = None  # is set in Handler subclasses
 
     def run(self):
+        if self.system is None:
+            self.txchange[self.target + '_finished'].set()
+            return
         while ((not self.txchange['abort_flag'].is_set())
                and (not self.txchange['graceful_stop_flag'].is_set())):
             if self.txchange['start_protocol_flag'].is_set():
+                logger.debug('starting to run protocol')
                 self.run_protocol()
                 while not self.poll_protocol_finished():
                     if ((self.txchange['abort_flag'].is_set()
@@ -121,10 +144,12 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
                 self.txchange['start_protocol_flag'].clear()
 
             self.work_queue()
-            time.sleep(.05)
+            time.sleep(.1)
 
     def run_protocol(self):
-        for i, step in enumerate(self.protocol):
+        logger.debug('start running protocol: {:s}'.format(str(self.protocol['protocol_entries'])))
+        for i, step in enumerate(self.protocol['protocol_entries']):
+            logger.debug('System performing step {:d}: {:s}'.format(i, str(step)))
             print('System performing step', i, ':', step)
             if step['$type'].lower() == 'signal':
                 self.send_message(step['value'])
@@ -151,10 +176,10 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
     def housekeeping(self):
         if ((self.txchange['abort_protocol_flag'].is_set()
              or self.txchange['abort_flag'].is_set())):
-            self.system.abort_protocol()
+            self.system.abort_execution()
             return False
         elif self.txchange['pause_protocol_flag'].is_set():
-            self.system.pause_protocol()
+            self.system.pause_execution()
             return False
         else:
             return True
@@ -189,14 +214,12 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
 
 class FluidHandler(AbstractSystemHandler):
     def __init__(self, fluid_system, protocol, threadexchange):
-        super().__init__(protocol['fluid'], threadexchange)
+        super().__init__(protocol, threadexchange)
         self.target = 'fluid'
         self.system = fluid_system
-        # assign the protocol - restructure this later on
-        prot = {}
-        prot['flow_parameters'] = protocol['flow_parameters']
-        prot['protocol_entries'] = protocol['fluid']
-        self.system._assign_protocol(prot)
+        if self.system is not None:
+            # assign the protocol - restructure this later on
+            self.system._assign_protocol(protocol)
 
     def execute_protocol_entry(self, i):
         with self.txchange[self.target + '_lock']:
@@ -223,6 +246,8 @@ class ImagingHandler(AbstractSystemHandler):
         super().__init__(protocol, threadexchange)
         self.target = 'imaging'
         self.system = imaging_system
+        if self.system is not None:
+            self.system._assign_protocol(protocol)
 
     def execute_protocol_entry(self, i):
         with self.txchange[self.target + '_lock']:
@@ -273,11 +298,8 @@ class ProtocolOrchestrator():
                  imaging_system=None, fluid_system=None,
                  illumination_system=None):
         self.fluid_system = fluid_system
-        fluid_protocol = {
-            'flow_parameters': protocol.get('flow_parameters', {}),
-            'fluid': protocol.get('fluid', [])}
         self.fluid_handler = FluidHandler(
-            fluid_system, fluid_protocol,
+            fluid_system, protocol.get('fluid', []),
             self.threadexchange)
 
         self.imaging_system = imaging_system

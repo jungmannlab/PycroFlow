@@ -119,7 +119,7 @@ Protocol entries are stepped through in the upper system, calling 'LegacyArchite
 for the fluid-control steps.
 """
 protocol = {
-    'flow_parameters': {
+    'parameters': {
         'start_velocity': 50,
         'max_velocity': 3000,
         'stop_velocity': 500,
@@ -262,7 +262,7 @@ class LegacyArchitecture(AbstractSystem):
 
     def _assign_protocol(self, protocol):
         self.protocol = protocol['protocol_entries']
-        self.flow_parameters = protocol['flow_parameters']
+        self.parameters = protocol['parameters']
 
     def _assign_tubing_config(self, config):
         self.tubing_config = TubingConfig(config)
@@ -293,7 +293,7 @@ class LegacyArchitecture(AbstractSystem):
                 the amount of fluid to pump
         """
         protocol = {
-            'flow_parameters': {
+            'parameters': {
                 'start_velocity': 50,
                 'max_velocity': 3000,
                 'stop_velocity': 500,
@@ -733,20 +733,20 @@ class LegacyArchitecture(AbstractSystem):
             type='wait_image',
             type='wait_time', duration
         """
-        if self.flow_parameters['mode'] == 'tubing_stack':
+        if self.parameters['mode'] == 'tubing_stack':
             if (self.last_protocol_entry != i - 1) or (i == 0):
                 self._assemble_tubing_stack(i)
             for reservoir_id, vol in self.tubing_stack[i]:
                 self._set_valves(reservoir_id)
                 self._inject(vol)
             self.last_protocol_entry = i
-        elif self.flow_parameters['mode'] == 'tubing_flush':
+        elif self.parameters['mode'] == 'tubing_flush':
             # this way, we flush (1+flushfactor)
             # and also through sample. But that shouldn't matter for now.
             self._flush()
             self.execute_single_protocol_entry(i)
         else:
-            raise NotImplmentedError('Mode ' + self.flow_parameters['mode'])
+            raise NotImplmentedError('Mode ' + self.parameters['mode'])
 
     def execute_single_protocol_entry(self, i):
         """Execute only one single entry of the protocol; do not fill the
@@ -1014,7 +1014,7 @@ class LegacyArchitecture(AbstractSystem):
                 the flush valve position during pickup / dispense
         """
         if velocity is None:
-            velocity = self.flow_parameters['max_velocity']
+            velocity = self.parameters['max_velocity']
         curr_pump_vol = pump.get_current_volume()
         if curr_pump_vol > 0:
             pump.set_valve(dispense_dir)
@@ -1062,9 +1062,9 @@ class LegacyArchitecture(AbstractSystem):
                 extraction performed faster than injection
         """
         if velocity is None:
-            velocity = self.flow_parameters['max_velocity']
+            velocity = self.parameters['max_velocity']
         if extractionfactor is None:
-            extractionfactor = self.flow_parameters['extractionfactor']
+            extractionfactor = self.parameters['extractionfactor']
         velocity_out = int(
             extractionfactor * velocity
             * self.pump_a.syringe_volume / self.pump_out.syringe_volume)

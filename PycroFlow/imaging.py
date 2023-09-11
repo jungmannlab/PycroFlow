@@ -20,9 +20,9 @@ flow_acq_config = {
 
 imaging protocol e.g.
 protocol_imaging = [
-    {'type': 'wait for signal', 'target': 'fluid', 'value': 'round 1 done'},
-    {'type': 'acquire', 'frames': 10000, 't_exp': 100, 'message': 'round_1'},
-    {'type': 'signal', 'value': 'imaging round 1 done'},
+    {'$type': 'wait for signal', 'target': 'fluid', 'value': 'round 1 done'},
+    {'$type': 'acquire', 'frames': 10000, 't_exp': 100, 'message': 'round_1'},
+    {'$type': 'signal', 'value': 'imaging round 1 done'},
 ]
 
 """
@@ -42,9 +42,8 @@ logger = logging.getLogger(__name__)
 
 
 class ImagingSystem(AbstractSystem):
-    def __init__(self, config, protocol, core=None, studio=None):
+    def __init__(self, config, core=None, studio=None):
         self.config = config
-        self.protocol = protocol
 
         if core is not None:
             self.core = core
@@ -78,10 +77,13 @@ class ImagingSystem(AbstractSystem):
     def create_starttime(self):
         self.starttime_str = datetime.now().strftime('_%y-%m-%d_%H%M')
 
+    def _assign_protocol(self, protocol):
+        self.protocol = protocol
+
     def execute_protocol_entry(self, i):
         """execute protocol entry i
         """
-        pentry = self.protocol[i]
+        pentry = self.protocol['protocol_entries'][i]
         if pentry['$type'] == 'acquire':
             logger.debug(
                 'executing protocol entry {:d}: {:s}'.format(i, str(pentry)))
@@ -94,8 +96,9 @@ class ImagingSystem(AbstractSystem):
                 acquisition_config['base_name']
                 + self.starttime_str
                 + '_round{:d}_{:s}'.format(
-                    round, acquisition_config['message']))
+                    i, pentry['message']))
             self.record_movie(acq_name, acquisition_config)
+            logger.debug('done executing protocol entry {:d}'.format(i))
 
     def pause_execution(self):
         """Pause protocol execution
