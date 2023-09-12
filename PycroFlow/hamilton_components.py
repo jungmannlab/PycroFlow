@@ -3,12 +3,12 @@ address are unique to the whole system (same as serial address)
 
 
 """
-import pyHamiltonPSD as ham
-import PycroFlow.pyHamiltonMVP
-from PycroFlow.pyHamiltonMVP import MVP
-from pyHamiltonPSD.util import SyringeMovement as SyrMov
-from pyHamiltonPSD.util import SyringeTypes as SyrTypes
-from pyHamiltonPSD.util import PSDTypes
+import PycroFlow.pyHamilton as ham
+import PycroFlow.pyHamilton.mvp
+from PycroFlow.pyHamilton.mvp import MVP
+from PycroFlow.pyHamilton.util import SyringeMovement as SyrMov
+from PycroFlow.pyHamilton.util import SyringeTypes as SyrTypes
+from PycroFlow.pyHamilton.util import PSDTypes
 import numpy as np
 import unittest
 from unittest.mock import patch, MagicMock, call

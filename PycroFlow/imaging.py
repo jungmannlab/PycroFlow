@@ -129,7 +129,7 @@ class ImagingSystem(AbstractSystem):
             num_time_points=10, time_interval_s=.1)
         with Acquisition(
                 directory=self.config['save_dir'], name='testacquisition',
-                show_display=False, debug=True) as acq:
+                show_display=False, debug=False) as acq:
             acq.acquire(events)
 
     def record_movie(self, acq_name, acquisition_config):
@@ -151,7 +151,7 @@ class ImagingSystem(AbstractSystem):
         # filter = acquisition_config['mm_parameters']['filter']
         # roi = acquisition_config['ROI']
 
-        with Acquisition(directory=acq_dir, name=acq_name, show_display=True,
+        with Acquisition(directory=acq_dir, name=acq_name, show_display=False,
                          ) as acq:
             events = multi_d_acquisition_events(
                 num_time_points=n_frames,

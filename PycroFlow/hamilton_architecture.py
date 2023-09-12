@@ -1,6 +1,6 @@
 """
 """
-import pyHamiltonPSD as ham
+import PycroFlow.pyHamilton as ham
 from PycroFlow.hamilton_components import (
     Reservoir, ReservoirDict, Pump, Valve, TubingConfig)
 from PycroFlow.orchestration import AbstractSystem

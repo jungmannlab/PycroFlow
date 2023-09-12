@@ -33,7 +33,23 @@ po = por.ProtocolOrchestrator(prot, imaging_system=isy)
 po.start_orchestration()
 po.start_protocol()
 ------
+# Test of fluid-and-imaging orchestration:
+import PycroFlow.orchestration as por
+import PycroFlow.hamilton_architecture as ha
+import PycroFlow.imaging as pi
 
+prot = {'imaging': por.protocol['imaging'], 'fluid': por.protocol['fluid']}
+imaging_config = {'save_dir': r'.', 'base_name': 'test', 'imaging_settings': {'frames': 50, 't_exp': 100}, 'mm_parameters': {'channel_group': 'Filter turret', 'filter': '2-G561',},}
+
+ha.connect('18', 9600)
+la = ha.LegacyArchitecture(ha.legacy_system_config, ha.legacy_tubing_config, '18', 9600)
+isy = pi.ImagingSystem(imaging_config)
+po = por.ProtocolOrchestrator(prot, imaging_system=isy, fluid_system=la)
+po.start_orchestration()
+po.start_protocol()
+#po.abort_protocol()
+#po.abort_orchestration()
+------
 
     :authors: Heinrich Grabmayr, 2023
     :copyright: Copyright (c) 2023 Jungmann Lab, MPI of Biochemistry
@@ -119,11 +135,14 @@ class AbstractSystem(abc.ABC):
 
 
 class AbstractSystemHandler(threading.Thread, abc.ABC):
+
+    target = ''
+
     def __init__(self, protocol, threadexchange):
         # super(threading.Thread, self).__init__()
         super().__init__()
         self.protocol = protocol
-        logger.debug('starting system handler with protocol', self.protocol)
+        logger.debug('starting {:s} system handler with protocol {:s}'.format(self.target, str(self.protocol)))
         self.txchange = threadexchange
         self.system = None  # is set in Handler subclasses
 
@@ -149,7 +168,7 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
     def run_protocol(self):
         logger.debug('start running protocol: {:s}'.format(str(self.protocol['protocol_entries'])))
         for i, step in enumerate(self.protocol['protocol_entries']):
-            logger.debug('System performing step {:d}: {:s}'.format(i, str(step)))
+            logger.debug('System {:s} performing step {:d}: {:s}'.format(self.target, i, str(step)))
             print('System performing step', i, ':', step)
             if step['$type'].lower() == 'signal':
                 self.send_message(step['value'])
@@ -191,7 +210,8 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
                and not self.txchange['abort_protocol_flag'].is_set()
                and not self.txchange['pause_protocol_flag'].is_set()):
             with self.txchange[target + '_lock']:
-                if message in self.txchange[target]:
+                if ((message in self.txchange[target]
+                     or (target + ' ' + message) in self.txchange[target])):
                     busy = False
                     break
             time.sleep(.05)
@@ -213,9 +233,11 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
 
 
 class FluidHandler(AbstractSystemHandler):
+
+    target = 'fluid'
+
     def __init__(self, fluid_system, protocol, threadexchange):
         super().__init__(protocol, threadexchange)
-        self.target = 'fluid'
         self.system = fluid_system
         if self.system is not None:
             # assign the protocol - restructure this later on
@@ -242,9 +264,11 @@ class FluidHandler(AbstractSystemHandler):
 
 
 class ImagingHandler(AbstractSystemHandler):
+    
+    target = 'imaging'
+    
     def __init__(self, imaging_system, protocol, threadexchange):
         super().__init__(protocol, threadexchange)
-        self.target = 'imaging'
         self.system = imaging_system
         if self.system is not None:
             self.system._assign_protocol(protocol)
@@ -258,10 +282,11 @@ class ImagingHandler(AbstractSystemHandler):
 
 
 class IlluminationHandler(AbstractSystemHandler):
+
+    target = 'illumination'
+
     def __init__(self, illumination_system, protocol, threadexchange):
         super().__init__(protocol, threadexchange)
-        self.target = 'illumination'
-
         self.system = illumination_system
 
     def execute_protocol_entry(self, i):
@@ -372,3 +397,8 @@ class ProtocolOrchestrator():
         with self.threadexchange[target + '_lock']:
             fun(*args, **kwargs)
 
+    def __del__(self):
+        try:
+            self.abort_orchestration()
+        except:
+            pass
