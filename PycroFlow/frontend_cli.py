@@ -6,13 +6,13 @@ Provides a command line interface frontend.
 import os
 import cmd
 import yaml
-import NotImplmentedError
+# import NotImplmentedError
 
-import pycroflow.hamilton_architecture as ha
-from pycroflow.protocols import ProtocolBuilder
-import pycroflow.imaging as im
-import pycroflow.illumination as il
-from pycroflow.orchestration import ProtocolOrchestrator
+import PycroFlow.hamilton_architecture as ha
+from PycroFlow.protocols import ProtocolBuilder
+import PycroFlow.imaging as im
+import PycroFlow.illumination as il
+from PycroFlow.orchestration import ProtocolOrchestrator
 
 
 def start():
@@ -47,6 +47,13 @@ class PycroFlowInteractive(cmd.Cmd):
     intro = '''Welcome to PycroFlowInteractive.
         Use this to orchestrate fluid dispension, acquisition
         and illumination.
+
+        Typical workflow:
+        * load protocol
+        * (calibrate tubings)
+        * fill tubings
+        * start orchestration
+        * start protocol
         '''
     prompt = '(PycroFlow)'
     fluid_system = None
@@ -76,6 +83,8 @@ class PycroFlowInteractive(cmd.Cmd):
             self.protocol = yaml.full_load(f)
         if self.fluid_system:
             self.fluid_system._assign_protocol(self.protocol['fluid'])
+        if self.imaging_system:
+            self.imaging_system._assign_protocol(self.protocol['img'])
 
         if self.protocol.get('illu'):
             self.illumination_system = il.IlluminationSystem(
@@ -85,12 +94,28 @@ class PycroFlowInteractive(cmd.Cmd):
 
     def do_load_hamilton(self, fname_hamilton, fname_tubing):
         """Load the Hamilton Fluid System configuration
-        """
-        with open(fname_hamilton, 'r') as f:
-            hamilton_config = yaml.full_load(f)
-        with open(fname_tubing, 'r') as f:
-            tubing_config = yaml.full_load(f)
 
+        Args:
+            fname_hamilton : str (or dict)
+                the filename to the hamilton system configuration file
+                alternatively, this can be the config itself as a dict
+            fname_tubing : str (or dict)
+                the filename to the hamilton system tubing configuration file
+                alternatively, this can be the config itself as a dict
+        """
+        if isinstance(fname_hamilton, str):
+            with open(fname_hamilton, 'r') as f:
+                hamilton_config = yaml.full_load(f)
+        else:
+            hamilton_config = fname_hamilton
+        if isinstance(fname_tubing, str):
+            with open(fname_tubing, 'r') as f:
+                tubing_config = yaml.full_load(f)
+        else:
+            tubing_config = fname_tubing
+
+        interface = hamilton_config['interface']
+        ha.connect(interface['COM'], interface['baud'])
         if hamilton_config['system_type'] == 'legacy':
             self.fluid_system = ha.LegacyArchitecture(
                 hamilton_config, tubing_config)
@@ -109,17 +134,29 @@ class PycroFlowInteractive(cmd.Cmd):
         else:
             print('Fluid system needs to be initialized first.')
 
+    def do_calibrate_tubings(self, line):
+        """Calibrate the tubings of the fluid system
+        """
+        if self.fluid_system:
+            self.fluid_system._calibrate_tubing(500)
+        else:
+            print('Fluid system needs to be initialized first.')
+
     def do_load_imaging(self, fname_imaging):
         """Load the imaging system
-        """
-        if not self.protocol:
-            print('Load the protocol first')
-            return
 
-        with open(fname_imaging, 'r') as f:
-            imaging_config = yaml.full_load(f)
-        self.imaging_system = im.ImagingSystem(
-            imaging_config, self.protocol['img'])
+        Args:
+            fname_imaging : str (or dict)
+                the filename to the imaging configuration file
+                alternatively, this can be the configuration dict itself
+        """
+        if isinstance(fname_imaging, str):
+            with open(fname_imaging, 'r') as f:
+                imaging_config = yaml.full_load(f)
+        else:
+            imaging_config = fname_imaging
+
+        self.imaging_system = im.ImagingSystem(imaging_config)
 
     def do_start_orchestration(self, line):
         """Start the orchestration of the systems.
@@ -212,8 +249,10 @@ class PycroFlowInteractive(cmd.Cmd):
 
     def close(self):
         if self.orchestrator:
-            self.orchestrator.end_orchestration()
-            self.orchestrator.abort_orchestration()
+            if self.orchestrator.poll_protocol_finished():
+                self.orchestrator.end_orchestration()
+            else:
+                self.orchestrator.abort_orchestration()
 
 
 if __name__ == '__main__':

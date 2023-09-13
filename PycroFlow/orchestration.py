@@ -22,8 +22,8 @@ po.abort_orchestration()
 # Test of imaging-only orchestration:
 import PycroFlow.orchestration as por
 import PycroFlow.imaging as pi
-prot = {'imaging': por.protocol['imaging']}
-prot['imaging']['protocol_entries'] = prot['imaging']['protocol_entries'][1:]  # skip first wait
+prot = {'img': por.protocol['img']}
+prot['img']['protocol_entries'] = prot['img']['protocol_entries'][1:]  # skip first wait
 imaging_config = {'save_dir': r'.', 'base_name': 'test', 'imaging_settings': {'frames': 50, 't_exp': 100}, 'mm_parameters': {'channel_group': 'Filter turret', 'filter': '2-G561',},}
 
 isy = pi.ImagingSystem(imaging_config)
@@ -38,7 +38,7 @@ import PycroFlow.orchestration as por
 import PycroFlow.hamilton_architecture as ha
 import PycroFlow.imaging as pi
 
-prot = {'imaging': por.protocol['imaging'], 'fluid': por.protocol['fluid']}
+prot = {'img': por.protocol['img'], 'fluid': por.protocol['fluid']}
 imaging_config = {'save_dir': r'.', 'base_name': 'test', 'imaging_settings': {'frames': 50, 't_exp': 100}, 'mm_parameters': {'channel_group': 'Filter turret', 'filter': '2-G561',},}
 
 ha.connect('18', 9600)
@@ -70,7 +70,7 @@ protocol_fluid = [
     {'$type': 'inject', 'reservoir_id': 1, 'volume': 500, 'velocity': 600},
     {'target': 'fluid', '$type': 'signal', 'value': 'fluid round 1 done'},
     {'$type': 'flush', 'flushfactor': 1},
-    {'$type': 'wait for signal', 'target': 'imaging', 'value': 'round 1 done'},
+    {'$type': 'wait for signal', 'target': 'img', 'value': 'round 1 done'},
     {'$type': 'inject', 'reservoir_id': 14, 'volume': 500},
 ]
 
@@ -84,7 +84,7 @@ protocol_illumination = [
     {'$type': 'power', 'value': 1},
     {'$type': 'wait for signal', 'target': 'fluid', 'value': 'round 1 done'},
     {'$type': 'power', 'value': 50},
-    {'$type': 'wait for signal', 'target': 'imaging', 'value': 'round 1 done'},
+    {'$type': 'wait for signal', 'target': 'img', 'value': 'round 1 done'},
 ]
 
 protocol = {
@@ -96,9 +96,9 @@ protocol = {
             'mode': 'tubing_stack',  # or 'tubing_flush'
             'extractionfactor': 1},
         'protocol_entries': protocol_fluid},
-    'imaging': {
+    'img': {
         'protocol_entries': protocol_imaging},
-    'illumination': {
+    'illu': {
         'protocol_entries': protocol_illumination}
 }
 
@@ -265,7 +265,7 @@ class FluidHandler(AbstractSystemHandler):
 
 class ImagingHandler(AbstractSystemHandler):
     
-    target = 'imaging'
+    target = 'img'
     
     def __init__(self, imaging_system, protocol, threadexchange):
         super().__init__(protocol, threadexchange)
@@ -283,7 +283,7 @@ class ImagingHandler(AbstractSystemHandler):
 
 class IlluminationHandler(AbstractSystemHandler):
 
-    target = 'illumination'
+    target = 'illu'
 
     def __init__(self, illumination_system, protocol, threadexchange):
         super().__init__(protocol, threadexchange)
@@ -306,12 +306,12 @@ class ProtocolOrchestrator():
         'fluid': [],
         'fluid_finished': threading.Event(),
         'fluid_queue': queue.Queue(),
-        'imaging_lock': threading.Lock(),
-        'imaging': [],
-        'imaging_finished': threading.Event(),
-        'illumination_lock': threading.Lock(),
-        'illumination': [],
-        'illumination_finished': threading.Event(),
+        'img_lock': threading.Lock(),
+        'img': [],
+        'img_finished': threading.Event(),
+        'illu_lock': threading.Lock(),
+        'illu': [],
+        'illu_finished': threading.Event(),
         'start_protocol_flag': threading.Event(),
         'pause_protocol_flag': threading.Event(),
         'abort_protocol_flag': threading.Event(),
@@ -329,12 +329,12 @@ class ProtocolOrchestrator():
 
         self.imaging_system = imaging_system
         self.imaging_handler = ImagingHandler(
-            imaging_system, protocol.get('imaging', []),
+            imaging_system, protocol.get('img', []),
             self.threadexchange)
 
         self.illumination_system = illumination_system
         self.illumination_handler = IlluminationHandler(
-            illumination_system, protocol.get('illumination', []),
+            illumination_system, protocol.get('illu', []),
             self.threadexchange)
 
         self.protocol = protocol

@@ -147,9 +147,9 @@ class ImagingSystem(AbstractSystem):
         acq_dir = acquisition_config['save_dir']
         n_frames = acquisition_config['frames']
         t_exp = acquisition_config['t_exp']
-        # chan_group = acquisition_config['mm_parameters']['channel_group']
-        # filter = acquisition_config['mm_parameters']['filter']
-        # roi = acquisition_config['ROI']
+        # chan_group = self.protocol['parameters']['channel_group']
+        # filter = self.protocol['parameters']['filter']
+        # roi = self.protocol['parameters']['ROI']
 
         with Acquisition(directory=acq_dir, name=acq_name, show_display=False,
                          ) as acq:

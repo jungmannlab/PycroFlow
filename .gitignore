@@ -1,5 +1,6 @@
 .smbdelete*
 .DS_Store
 __pycache__
+PycroFlow.egg-info/*
 PycroFlow/TestData/*
 *.log

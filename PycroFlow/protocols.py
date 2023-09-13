@@ -82,7 +82,7 @@ logger = logging.getLogger(__name__)
 
 class ProtocolBuilder:
     def __init__(self):
-        self.steps = {'fluid': [], 'img': [], 'illu': []}
+        self.steps = {'fluid': {}, 'img': {}, 'illu': {}}
         self.reservoir_vols = {}
 
     def create_protocol(self, config):
@@ -98,11 +98,23 @@ class ProtocolBuilder:
             fname = filename of saved protocol
         """
         steps, reservoir_vols = self.create_steps(config)
-        protocol = steps
+        protocol = {}
+        if 'fluid' in config.keys():
+            protocol['fluid'] = {'protocol_entries': steps['fluid']}
+            if 'parameters' in config['fluid'].keys():
+                protocol['fluid']['parameters'] = config['fluid']['parameters']
+        if 'img' in config.keys():
+            protocol['img'] = {'protocol_entries': steps['img']}
+            if 'parameters' in config['img'].keys():
+                protocol['img']['parameters'] = config['img']['parameters']
+        if 'illu' in config.keys():
+            protocol['illu'] = {'protocol_entries': steps['illu']}
+            if 'parameters' in config['illu'].keys():
+                protocol['illu']['parameters'] = config['illu']['parameters']
 
         # save protocol
         fname = config['base_name'] + datetime.now().strftime('_%y%m%d-%H%M') + '.yaml'
-        filename = os.path.join(config['protocol_folder'], fname)
+        filename = os.path.join(config['save_dir'], fname)
 
         with open(filename, 'w') as f:
             yaml.dump(
@@ -128,8 +140,8 @@ class ProtocolBuilder:
         """
         self.steps = {'fluid': [], 'img': [], 'illu': []}
         self.reservoir_vols = {
-            id: 0 for id in config['fluid_settings']['reservoir_names']}
-        exptype = config['fluid_settings']['experiment']['type']
+            id: 0 for id in config['fluid']['settings']['reservoir_names']}
+        exptype = config['fluid']['settings']['experiment']['type']
         if exptype.lower() == 'exchange':
             steps, reservoir_vols = self.create_steps_exchange(config)
         elif exptype.lower() == 'merpaint':
@@ -157,13 +169,13 @@ class ProtocolBuilder:
             imground_descriptions : list of str
                 a description of each imaging round
         """
-        experiment = config['fluid_settings']['experiment']
-        reservoirs = config['fluid_settings']['reservoir_names']
-        imager_vol_pre = config['fluid_settings']['vol_imager_pre']
-        imager_vol_post = config['fluid_settings']['vol_imager_post']
-        wash_vol = config['fluid_settings']['vol_wash']
+        experiment = config['fluid']['settings']['experiment']
+        reservoirs = config['fluid']['settings']['reservoir_names']
+        imager_vol_pre = config['fluid']['settings']['vol_imager_pre']
+        imager_vol_post = config['fluid']['settings']['vol_imager_post']
+        wash_vol = config['fluid']['settings']['vol_wash']
 
-        imgsttg = config['imaging_settings']
+        imgsttg = config['img']['settings']
 
         # check that all mentioned sources acqually exist
         assert experiment['wash_buffer'] in reservoirs.values()
@@ -244,8 +256,8 @@ class ProtocolBuilder:
             reservoir_vols : dict
                 keys: reservoir names, values: volumes
         """
-        experiment = config['fluid_settings']['experiment']
-        reservoirs = config['fluid_settings']['reservoir_names']
+        experiment = config['fluid']['settings']['experiment']
+        reservoirs = config['fluid']['settings']['reservoir_names']
         # check that all mentioned sources acqually exist
         assert experiment['wash_buffer'] in reservoirs.values()
         assert experiment['hybridization_buffer'] in reservoirs.values()
@@ -277,7 +289,7 @@ class ProtocolBuilder:
             check_dark_frames = False
             darkframes = 0
 
-        imgsttg = config['imaging_settings']
+        imgsttg = config['img']['settings']
 
         res_idcs = {name: nr for nr, name in reservoirs.items()}
 

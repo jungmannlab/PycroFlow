@@ -12,7 +12,7 @@ protocol_illumination = [
     {'$type': 'wait for signal', 'target': 'imaging', 'value': 'round 1 done'},
 ]
 """
-from orchestration import AbstractSystem
+from PycroFlow.orchestration import AbstractSystem
 
 
 class IlluminationSystem(AbstractSystem):
