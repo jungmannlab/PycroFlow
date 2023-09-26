@@ -184,6 +184,7 @@ class ProtocolBuilder:
 
         washbuf = experiment['wash_buffer']
         res_idcs = {name: nr - 1 for nr, name in reservoirs.items()}
+        res_idcs = {name: nr for nr, name in reservoirs.items()}
 
         self.create_step_inject(volume=10, reservoir_id=res_idcs[washbuf])
         for round, imager in enumerate(experiment['imagers']):

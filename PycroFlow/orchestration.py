@@ -167,9 +167,10 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
 
     def run_protocol(self):
         logger.debug('start running protocol: {:s}'.format(str(self.protocol['protocol_entries'])))
+        nsteps = len(self.protocol['protocol_entries'])
         for i, step in enumerate(self.protocol['protocol_entries']):
-            logger.debug('System {:s} performing step {:d}: {:s}'.format(self.target, i, str(step)))
-            print('System performing step', i, ':', step)
+            logger.debug('System {:s} performing step {:d}/{:d}: {:s}'.format(self.target, i, nsteps, str(step)))
+            print('System ', self.target, ' performing step', i, '/', nsteps, ':', step)
             if step['$type'].lower() == 'signal':
                 self.send_message(step['value'])
             elif step['$type'].lower() == 'wait for signal':

@@ -49,7 +49,7 @@ class PycroFlowInteractive(cmd.Cmd):
         and illumination.
 
         Typical workflow:
-        * load protocol
+        * (load protocol)
         * (calibrate tubings)
         * fill tubings
         * start orchestration
@@ -184,7 +184,7 @@ class PycroFlowInteractive(cmd.Cmd):
         if not self.orchestrator:
             print('Start orchestration first.')
             return
-        self.orchestrator.run_protocol()
+        self.orchestrator.start_protocol()
 
     def do_pause_protocol(self, line):
         """Start the protocol

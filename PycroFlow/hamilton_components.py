@@ -17,6 +17,9 @@ import sys
 import time
 
 
+logger = logging.getLogger(__name__)
+
+
 def map_valve_type(valve):
     vmap = {
         '1': '1', 'Y': '1',
@@ -151,12 +154,27 @@ class TubingConfig():
                 res = res_id
         else:
             res = 'R' + str(res_id)
-        return self.config[(res, 'pump_' + pump_name)]
+        path = (res, 'pump_' + pump_name)
+        if path in self.config.keys():
+            return self.config[path]
+        else:
+            # assemble the volume
+            vol = 0
+            searching = True
+            segstart = res
+            while searching:
+                segment = [k for k in self.config.keys() if k[0]==segstart][0]
+                vol += self.config[segment]
+                if segment[1] == path[1]:
+                    return vol
+                else:
+                    segstart = segment[1]
 
     def get_reservoir_to_closest_valve(self, res_id):
         """Scan the configuration for an entry from reservoir to
         a valve, which must then be the closest one.
         """
+        logger.debug('getting closest valve to reservoir {:s}'.format(str(res_id)))
         if isinstance(res_id, str):
             if res_id in self.special_names.keys():
                 res = 'R' + str(self.special_names[res_id])
@@ -167,9 +185,10 @@ class TubingConfig():
         entries = [
             ent for ent in self.config.keys()
             if ent[0] == res and 'V' in ent[1]]
+        logger.debug('found entries{:s}'.format(str(entries)))
         if len(entries) == 1:
             return self.config[entries[0]]
-        elif len(entries) < 0:
+        elif len(entries) < 1:
             raise KeyError(
                 'Cannot find any tubing configuation entry '
                 + 'leading from {:s} to a valve'.format(res))

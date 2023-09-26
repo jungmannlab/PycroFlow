@@ -939,6 +939,8 @@ class LegacyArchitecture(AbstractSystem):
                 vol_rest -= vol_step
             column[step] = injection_tuples
         self.tubing_stack = column
+        logger.debug('generated tubing stack')
+        logger.debug(str(self.tubing_stack))
 
     def _calc_vol_to_inlet(self, reservoir_id):
         """Calculates the tubing volume between reservoir and inlet needle
@@ -1071,12 +1073,13 @@ class LegacyArchitecture(AbstractSystem):
 
         self._set_flush_valve(to_flush=False)
         curr_pumpa_vol = self.pump_a.get_current_volume()
+        curr_pumpout_vol = curr_pumpa_vol * extractionfactor
         if curr_pumpa_vol > 0:
             self.pump_a.set_valve('out')
             self.pump_out.set_valve('in')
             self.pump_a.dispense(curr_pumpa_vol, velocity)
             self.pump_out.pickup(
-                curr_pumpa_vol * extractionfactor,
+                curr_pumpout_vol,
                 velocity_out)
             self.pump_a.wait_until_done()
             self.pump_out.wait_until_done()
@@ -1092,9 +1095,8 @@ class LegacyArchitecture(AbstractSystem):
             self.pump_a.set_valve('in')
             self.pump_out.set_valve('out')
             self.pump_a.pickup(pump_volume, velocity, waitForPump=False)
-            curr_pumpout_vol = self.pump_a.get_current_volume()
             self.pump_out.dispense(
-                curr_pumpout_vol * extractionfactor,
+                curr_pumpout_vol,
                 velocity_out, waitForPump=False)
             self.pump_a.wait_until_done()
             self.pump_out.wait_until_done()
@@ -1102,8 +1104,9 @@ class LegacyArchitecture(AbstractSystem):
             self.pump_a.set_valve('out')
             self.pump_out.set_valve('in')
             self.pump_a.dispense(pump_volume, velocity, waitForPump=False)
+            curr_pumpout_vol = pump_volume * extractionfactor
             self.pump_out.pickup(
-                pump_volume * extractionfactor,
+                 curr_pumpout_vol,
                 velocity_out, waitForPump=False)
             self.pump_a.wait_until_done()
             self.pump_out.wait_until_done()
