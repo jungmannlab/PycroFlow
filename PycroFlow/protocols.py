@@ -174,6 +174,7 @@ class ProtocolBuilder:
         imager_vol_pre = config['fluid']['settings']['vol_imager_pre']
         imager_vol_post = config['fluid']['settings']['vol_imager_post']
         wash_vol = config['fluid']['settings']['vol_wash']
+        wash_vol_pre = config['fluid']['settings']['vol_wash_pre']
 
         imgsttg = config['img']['settings']
 
@@ -186,7 +187,7 @@ class ProtocolBuilder:
         res_idcs = {name: nr - 1 for nr, name in reservoirs.items()}
         res_idcs = {name: nr for nr, name in reservoirs.items()}
 
-        self.create_step_inject(volume=10, reservoir_id=res_idcs[washbuf])
+        self.create_step_inject(volume=wash_vol_pre, reservoir_id=res_idcs[washbuf])
         for round, imager in enumerate(experiment['imagers']):
             self.create_step_inject(
                 volume=int(imager_vol_pre), reservoir_id=res_idcs[imager])

@@ -95,7 +95,7 @@ class ImagingSystem(AbstractSystem):
             acq_name = (
                 acquisition_config['base_name']
                 + self.starttime_str
-                + '_round{:d}_{:s}'.format(
+                + '_prtclstep{:d}_{:s}'.format(
                     i, pentry['message']))
             self.record_movie(acq_name, acquisition_config)
             logger.debug('done executing protocol entry {:d}'.format(i))
@@ -161,6 +161,7 @@ class ImagingSystem(AbstractSystem):
                 order='tcpz',
             )
             acq.acquire(events)
+        logger.debug('acquired all images of {:s}'.format(acq_name))
 
     def record_movie_in_thread(self, acq_name, acquisition_config):
         """Records a movie via pycromanager

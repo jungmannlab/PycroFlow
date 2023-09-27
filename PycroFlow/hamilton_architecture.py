@@ -743,7 +743,7 @@ class LegacyArchitecture(AbstractSystem):
         elif self.parameters['mode'] == 'tubing_flush':
             # this way, we flush (1+flushfactor)
             # and also through sample. But that shouldn't matter for now.
-            self._flush()
+            # self._flush()
             self.execute_single_protocol_entry(i)
         else:
             raise NotImplmentedError('Mode ' + self.parameters['mode'])
@@ -754,16 +754,20 @@ class LegacyArchitecture(AbstractSystem):
         but with buffer.
         """
         pentry = self.protocol[i]
+        if pentry.get('velocity'):
+            velocity = pentry['velocity']
+        else:
+            velocity = self.parameters['max_velocity']
         if pentry['$type'] == 'inject':
-            flush_volume = self._calc_vol_to_inlet(pentry['reservoir_id'])
+            # flush_volume = self._calc_vol_to_inlet(pentry['reservoir_id'])
             injection_volume = pentry['volume']
             # first, set up the volume required
             self._set_valves(pentry['reservoir_id'])
-            self._inject(injection_volume, pentry['speed'])
+            self._inject(injection_volume, velocity)
             # afterwards, flush in buffer to get the pentry
             # volume to the sample
-            self._set_valves(self.special_names['flushbuffer_a'])
-            self._inject(flush_volume, pentry['speed'])
+            # self._set_valves(self.special_names['flushbuffer_a'])
+            # self._inject(flush_volume, velocity)
 
         # tubing full of buffer, cannot simply proceed
         self.last_protocol_entry = -1
@@ -1063,6 +1067,7 @@ class LegacyArchitecture(AbstractSystem):
                 this, the extraction needle could be positioned higher, and
                 extraction performed faster than injection
         """
+        logger.debug('injecting {:.1f}'.format(vol))
         if velocity is None:
             velocity = self.parameters['max_velocity']
         if extractionfactor is None:
@@ -1070,6 +1075,7 @@ class LegacyArchitecture(AbstractSystem):
         velocity_out = int(
             extractionfactor * velocity
             * self.pump_a.syringe_volume / self.pump_out.syringe_volume)
+        pumpout_dispense_velocity = self.parameters['pumpout_dispense_velocity']
 
         self._set_flush_valve(to_flush=False)
         curr_pumpa_vol = self.pump_a.get_current_volume()
@@ -1084,12 +1090,16 @@ class LegacyArchitecture(AbstractSystem):
             self.pump_a.wait_until_done()
             self.pump_out.wait_until_done()
 
-        volume_quant = max([
+        volume_quant = min([
             self.pump_a.syringe_volume,
             self.pump_out.syringe_volume / extractionfactor])
         nr_pumpings = int(vol // volume_quant)
-        pump_volumes = volume_quant * np.ones(nr_pumpings + 1)
-        pump_volumes[-1] = vol % volume_quant
+        if vol % volume_quant > 0:
+            nr_pumpings += 1
+        pump_volumes = volume_quant * np.ones(nr_pumpings)
+        if vol % volume_quant > 0:
+            pump_volumes[-1] = vol % volume_quant
+        logger.debug('pump volumes: {:s}'.format(str(pump_volumes)))
 
         for pump_volume in pump_volumes:
             self.pump_a.set_valve('in')
@@ -1097,7 +1107,7 @@ class LegacyArchitecture(AbstractSystem):
             self.pump_a.pickup(pump_volume, velocity, waitForPump=False)
             self.pump_out.dispense(
                 curr_pumpout_vol,
-                velocity_out, waitForPump=False)
+                pumpout_dispense_velocity, waitForPump=False)
             self.pump_a.wait_until_done()
             self.pump_out.wait_until_done()
 
@@ -1114,7 +1124,7 @@ class LegacyArchitecture(AbstractSystem):
         self.pump_out.set_valve('out')
         self.pump_out.dispense(
             curr_pumpout_vol,
-            velocity_out, waitForPump=False)
+            pumpout_dispense_velocity, waitForPump=False)
         self.pump_out.wait_until_done()
 
     def fill_tubings(self):

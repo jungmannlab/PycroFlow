@@ -343,6 +343,7 @@ class Pump():
             self.syringe_volume *= 1000
 
     def dispense(self, vol, velocity=None, waitForPump=False):
+        logger.debug('pump ascii {:s} dispensing {:.1f} ul at {:.1f}'.format(self.psd.asciiAddress, vol, velocity))
         if velocity is not None:
             cmd = self.psd.command.setMaximumVelocity(velocity)
         else:
@@ -355,6 +356,7 @@ class Pump():
         self.target_volume -= vol
 
     def pickup(self, vol, velocity=None, waitForPump=False):
+        logger.debug('pump ascii {:s} picking up {:.1f} ul at {:.1f}'.format(self.psd.asciiAddress, vol, velocity))
         if velocity is not None:
             cmd = self.psd.command.setMaximumVelocity(velocity)
         else:
