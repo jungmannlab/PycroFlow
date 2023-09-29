@@ -35,6 +35,7 @@ from datetime import datetime
 from pycromanager import Acquisition, multi_d_acquisition_events, Core, Studio
 
 from PycroFlow.orchestration import AbstractSystem
+from PycroFlow.util import ProgressBar
 
 
 logger = logging.getLogger(__name__)
@@ -67,11 +68,18 @@ class ImagingSystem(AbstractSystem):
         logger.debug('Imaging system is set up and ready.')
 
     def create_savedir(self):
+        # sdir = os.path.join(
+        #     self.config['save_dir'],
+        #     datetime.now().strftime('%y%m%d') + '_' + self.config['base_name'])
         sdir = os.path.join(
-            self.config['save_dir'],
-            datetime.now().strftime('%y%m%d') + '_' + self.config['base_name'])
+            self.config['save_dir'], self.config['base_name'])
         if not os.path.exists(sdir):
             os.mkdir(sdir)
+        else:
+            ndirs = [it for it in os.listdir() if sdir in it]
+            sdir += '_{:d}'.format(ndirs + 1)
+            os.mkdir(sdir)
+
         self.config['save_dir'] = sdir
 
     def create_starttime(self):
@@ -151,8 +159,10 @@ class ImagingSystem(AbstractSystem):
         # filter = self.protocol['parameters']['filter']
         # roi = self.protocol['parameters']['ROI']
 
+        if self.protocol['parameters'].get('show_progress'):
+            self.probar = ProgressBar('Acquisition', n_frames)
         with Acquisition(directory=acq_dir, name=acq_name, show_display=False,
-                         ) as acq:
+                         image_process_fn=self.image_process_fn) as acq:
             events = multi_d_acquisition_events(
                 num_time_points=n_frames,
                 time_interval_s=0,  # t_exp/1000,
@@ -161,7 +171,17 @@ class ImagingSystem(AbstractSystem):
                 order='tcpz',
             )
             acq.acquire(events)
+        if self.protocol['parameters'].get('show_progress'):
+            self.probar.end_progress()
         logger.debug('acquired all images of {:s}'.format(acq_name))
+
+    def image_process_fn(self, img, meta):
+        if self.protocol['parameters'].get('show_progress'):
+            try:
+                self.probar.progress_increment()
+            except Exception as e:
+                print(e)
+        return (img, meta)
 
     def record_movie_in_thread(self, acq_name, acquisition_config):
         """Records a movie via pycromanager

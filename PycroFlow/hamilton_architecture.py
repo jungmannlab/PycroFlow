@@ -741,9 +741,13 @@ class LegacyArchitecture(AbstractSystem):
                 self._inject(vol)
             self.last_protocol_entry = i
         elif self.parameters['mode'] == 'tubing_flush':
-            # this way, we flush (1+flushfactor)
-            # and also through sample. But that shouldn't matter for now.
+            # # this way, we flush (1+flushfactor)
+            # # and also through sample. But that shouldn't matter for now.
             # self._flush()
+            # self.execute_single_protocol_entry(i)
+            pass
+        elif self.parameters['mode'] == 'tubing_ignore':
+            # this way, exactly the volumes given in the protocol are used
             self.execute_single_protocol_entry(i)
         else:
             raise NotImplmentedError('Mode ' + self.parameters['mode'])
@@ -818,6 +822,9 @@ class LegacyArchitecture(AbstractSystem):
             input_res=self.special_names['flushbuffer_a'], do_shake=False)
 
     def fill_and_shake_tubings(self, input_res, do_shake=True):
+        velocity = self.parameters.get('clean_velocity')
+        if not velocity:
+            velocity = self.parameters['max_velocity']
         for ires, (resid, res) in enumerate(self.reservoir_a.items()):
             # fill reservoir tubings
             if ires == 0:
@@ -851,7 +858,7 @@ class LegacyArchitecture(AbstractSystem):
                 for i in range(2):
                     self._pump(
                         self.pump_a, self.pump_a.syringe_volume,
-                        pickup_dir='in', dispense_dir='in',
+                        pickup_dir='out', dispense_dir='out',
                         pickup_flushvalve=do_flushvalve,
                         dispense_flushvalve=do_flushvalve)
 

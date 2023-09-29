@@ -49,11 +49,12 @@ class PycroFlowInteractive(cmd.Cmd):
         and illumination.
 
         Typical workflow:
-        * (load protocol)
-        * (calibrate tubings)
-        * fill tubings
-        * start orchestration
-        * start protocol
+        * (calibrate_tubings)
+        * fill_tubings
+        * start_orchestration
+        * start_protocol
+        * clean
+        * exit
         '''
     prompt = '(PycroFlow)'
     fluid_system = None
@@ -225,7 +226,7 @@ class PycroFlowInteractive(cmd.Cmd):
             print('Start orchestration first.')
             return
         self.orchestrator.execute_system_function(
-            self.fluid_system._pump,
+            'fluid', self.fluid_system._pump,
             args)
 
     def do_deliver(self, reservoir_id, volume):
@@ -233,8 +234,15 @@ class PycroFlowInteractive(cmd.Cmd):
             print('Start orchestration first.')
             return
         self.orchestrator.execute_system_function(
-            self.fluid_system.deliver_fluid,
+            'fluid', self.fluid_system.deliver_fluid,
             kwargs={'reservoir_id': reservoir_id, 'volume': volume})
+
+    def do_clean(self, line=''):
+        if not self.orchestrator:
+            print('Start orchestration first.')
+            return
+        self.orchestrator.execute_system_function(
+            'fluid', self.fluid_system.clean_tubings)
 
     # ######################### Shut down
 
