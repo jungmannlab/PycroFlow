@@ -9,6 +9,7 @@ import unittest
 import logging
 import sys
 import yaml
+import time
 
 
 logger = logging.getLogger(__name__)
@@ -328,6 +329,10 @@ class LegacyArchitecture(AbstractSystem):
             max_vol : float
                 all releveant tubing volumes are definitely below this.
         """
+        logger.debug('calibrating tubings')
+        velocity = self.parameters.get('clean_velocity')
+        if not velocity:
+            velocity = self.parameters['max_velocity']
         # print(self.reservoir_a.reservoirs)
         measured_volumes = {}
         # find reservoirs for each valve to measure the inter-valve volumes
@@ -345,7 +350,8 @@ class LegacyArchitecture(AbstractSystem):
         valve_order = [0] * nvalves
         for resid, res in self.reservoir_a.items():
             nvalves = len(res.valve_positions.keys())
-            nvalves_res[nvalves - 1] = resid
+            if resid not in self.special_names.values():
+                nvalves_res[nvalves - 1] = resid
             nvalves_valves[nvalves - 1] = list(res.valve_positions.keys())
         for nv in range(nvalves):
             if nv == 0:
@@ -354,9 +360,9 @@ class LegacyArchitecture(AbstractSystem):
             # find the additional valve
             valve_order[nv] = (
                 list(set(nvalves_valves[nv]) - set(nvalves_valves[nv - 1])))[0]
-        # print('nvalves-res', nvalves_res)
-        # print('nvalves_valves', nvalves_valves)
-        # print('valve_order', valve_order)
+        logger.debug('nvalves_res: {:s}'.format(str(nvalves_res)))
+        logger.debug('nvalves_valves: {:s}'.format(str(nvalves_valves)))
+        logger.debug('valve_order: {:s}'.format(str(valve_order)))
 
         # 1. fill tubings
         totalvol = (self.reservoir_a.len * max_vol
@@ -368,23 +374,23 @@ class LegacyArchitecture(AbstractSystem):
         # pre-fill tubing from Flushbuffer to syringe, including the syringe
         for i in range(3):
             self._pump(
-                self.pump_a, self.pump_a.syringe_volume,
+                self.pump_a, self.pump_a.syringe_volume, velocity=velocity,
                 pickup_dir='in', dispense_dir='out',
                 pickup_res=self.special_names['flushbuffer_a'])
         for resid, res in self.reservoir_a.items():
             # fill reservoir tubings
             self._pump(
-                self.pump_a, max_vol, pickup_dir='in', dispense_dir='in',
+                self.pump_a, max_vol, velocity=velocity, pickup_dir='in', dispense_dir='in',
                 pickup_res=self.special_names['flushbuffer_a'],
                 dispense_res=resid)
         # fill outlet tubings
         self._set_flush_valve(to_flush=False)
         self._pump(
-            self.pump_a, max_vol, pickup_dir='in', dispense_dir='out',
+            self.pump_a, max_vol, velocity=velocity, pickup_dir='in', dispense_dir='out',
             pickup_res=self.special_names['flushbuffer_a'])
         self._set_flush_valve(to_flush=True)
         self._pump(
-            self.pump_a, max_vol, pickup_dir='in', dispense_dir='out',
+            self.pump_a, max_vol, velocity=velocity, pickup_dir='in', dispense_dir='out',
             pickup_res=self.special_names['flushbuffer_a'])
         # empty syringe through the flush valve outlet
         input('Please replace all tubes with empty and weighed tubes.'
@@ -394,19 +400,19 @@ class LegacyArchitecture(AbstractSystem):
 
         # empty flush and sample tubing
         dispensevol_per_stroke = self.pump_a.syringe_volume - max_vol
-        if dispensevol_per_stroke < 0:
+        if dispensevol_per_stroke <= 0:
             raise ValueError('Cannot continue this calibration procedure.')
-        # add 2 to n_strokes for safety
-        n_strokes = int(np.ceil(max_vol / dispensevol_per_stroke)) + 2
+        # add 4 to n_strokes for safety
+        n_strokes = int(np.ceil(max_vol / dispensevol_per_stroke)) + 4
         for i in range(n_strokes):
             self._pump(
-                self.pump_a, self.pump_a.syringe_volume,
+                self.pump_a, self.pump_a.syringe_volume, velocity=velocity,
                 pickup_dir='out', dispense_dir='out',
                 pickup_flushvalve=True, dispense_flushvalve=True)
         # self._set_flush_valve(to_flush=False)
         for i in range(2):
             self._pump(
-                self.pump_a, self.pump_a.syringe_volume,
+                self.pump_a, self.pump_a.syringe_volume, velocity=velocity,
                 pickup_dir='out', dispense_dir='out',
                 pickup_flushvalve=True, dispense_flushvalve=False)
         result = input(
@@ -433,13 +439,13 @@ class LegacyArchitecture(AbstractSystem):
         self._set_valves(self.special_names['flushbuffer_a'])
         for i in range(2):  # 2 to make sure
             self._pump(
-                self.pump_a, self.pump_a.syringe_volume,
+                self.pump_a, self.pump_a.syringe_volume, velocity=velocity,
                 pickup_dir='out', dispense_dir='in')
         for resid, res in self.reservoir_a.items():
             # fill reservoir tubings
             for i in range(2):
                 self._pump(
-                    self.pump_a, self.pump_a.syringe_volume,
+                    self.pump_a, self.pump_a.syringe_volume, velocity=velocity,
                     pickup_dir='out', dispense_dir='in',
                     dispense_res=resid)
         vol_used = (2 * self.pump_a.syringe_volume
@@ -472,7 +478,7 @@ class LegacyArchitecture(AbstractSystem):
         # fill flushbuffer and thus main path
         for i in range(3):
             self._pump(
-                self.pump_a, self.pump_a.syringe_volume,
+                self.pump_a, self.pump_a.syringe_volume, velocity=velocity,
                 pickup_dir='in', dispense_dir='out',
                 pickup_res=self.special_names['flushbuffer_a'],
                 dispense_flushvalve=True)
@@ -483,20 +489,20 @@ class LegacyArchitecture(AbstractSystem):
         # empty the outlet tube
         for i in range(n_strokes):
             self._pump(
-                self.pump_a, self.pump_a.syringe_volume,
+                self.pump_a, self.pump_a.syringe_volume, velocity=velocity,
                 pickup_dir='out', dispense_dir='out',
-                pickup_flushvalve=False, dispense_flushvalve=False)
+                pickup_flushvalve=False, dispense_flushvalve=False, delay=1)
         # empty into the reservoirs
         for resid in nvalves_res:
             for i in range(1):
                 self._pump(
-                    self.pump_a, max_vol,
+                    self.pump_a, max_vol, velocity=velocity,
                     pickup_dir='out', dispense_dir='in',
                     dispense_res=resid)
         for i in range(1):
             self._pump(
                 self.pump_a, max_vol,
-                pickup_dir='out', dispense_dir='in',
+                pickup_dir='out', dispense_dir='in', velocity=velocity,
                 dispense_res=self.special_names['flushbuffer_a'])
         result = input(
             'Please weigh the flushbuffer and sample tube and reservoirs '
@@ -524,6 +530,7 @@ class LegacyArchitecture(AbstractSystem):
                     key = ('V' + str(valve_order[nv - 1]),
                            'V' + str(valve_order[nv - 2]))
             measured_volumes[key] = tubvol
+        logger.debug('measured volumes: {:s}'.format(str(measured_volumes)))
 
         # Now, concatenate resID-pump volumes, instead of using
         # only the single steps via the valves
@@ -541,7 +548,7 @@ class LegacyArchitecture(AbstractSystem):
             measured_volumes[('pump_a', 'flush_waste')]
             - measured_volumes[('pump_a', 'valve_flush')])
 
-        print(measured_volumes)
+        logger.debug('measured volumes: {:s}'.format(str(measured_volumes)))
 
         self._assign_tubing_config(measured_volumes)
 
@@ -791,35 +798,63 @@ class LegacyArchitecture(AbstractSystem):
         """Clean the tubings by flushing through detergent and ethanol.
         This is analog to the Fluigent Aria cleaning procedure (but faster)
         """
+        velocity = self.parameters.get('clean_velocity')
+        if not velocity:
+            velocity = self.parameters['max_velocity']
+        # Empty all tubings
         input(
-            'Please fill the flushbuffer reservoir with 10% Detergent '
+            'Please empty all reservoirs. Put the sample tubing'
+            + ' into a reservoir. put output tubings into an empty reservoir.'
+            + 'Press Enter to continue.')
+        print('emptying all tubings into flushbuffer.')
+        # self.empty_tubings_to_flushbuffer(extra_vol=200)
+        self.flush_pump_out()
+        # self.fill_and_shake_tubings(
+        #     input_res=self.special_names['flushbuffer_a'], do_shake=False)
+
+        # Fill with detergent
+        input(
+            'Please fill the flushbuffer reservoir and sample out with 10% Detergent '
+            + '(Fluigent) and empty all reservoirs. Put the sample tubing'
+            + ' into a reservoir. Put output tubings into 10% Detergent too.'
+            + 'Press Enter to continue.')
+        print('Filling all tubings with detergent and putting it back.')
+        # Go through all tubings and wash/shake
+        # self.fill_tubings_w_flushbuffer(extra_vol=500)
+        # self.empty_tubings_to_flushbuffer(extra_vol=600)
+        self.flush_pump_out()
+        # self.fill_and_shake_tubings(
+        #     input_res=self.special_names['flushbuffer_a'])
+
+        # fill with Ethanol
+        input(
+            'Please fill the flushbuffer reservoir and sample out with Ethanol '
             + '(Fluigent) and empty all reservoirs. Put the sample tubing'
             + ' into a reservoir. Press Enter to continue.')
+        print('Filling all tubings with ethanol and putting it back.')
         # Go through all tubings and wash/shake
-        self.fill_and_shake_tubings(
-            input_res=self.special_names['flushbuffer_a'])
-        input(
-            'Please empty the flushbuffer reservoir '
-            + 'and empty all reservoirs. Put the sample tubing'
-            + ' into a reservoir. Press Enter to continue.')
-        # Empty all tubings
-        self.fill_and_shake_tubings(
-            input_res=self.special_names['flushbuffer_a'], do_shake=False)
-        # will with Ethanol
-        input(
-            'Please fill the flushbuffer reservoir with Ethanol '
-            + '(Fluigent) and empty all reservoirs. Put the sample tubing'
-            + ' into a reservoir. Press Enter to continue.')
-        # Go through all tubings and wash/shake
-        self.fill_and_shake_tubings(
-            input_res=self.special_names['flushbuffer_a'])
-        input(
-            'Please empty the flushbuffer reservoir '
-            + 'and empty all reservoirs. Put the sample tubing'
-            + ' into a reservoir. Press Enter to continue.')
-        # Empty all tubings
-        self.fill_and_shake_tubings(
-            input_res=self.special_names['flushbuffer_a'], do_shake=False)
+        # self.fill_tubings_w_flushbuffer(extra_vol=500)
+        # self.empty_tubings_to_flushbuffer(extra_vol=600)
+        self.flush_pump_out()
+        # self.fill_and_shake_tubings(
+        #     input_res=self.special_names['flushbuffer_a'])
+
+    def flush_pump_out(self):
+        velocity = self.parameters.get('clean_velocity')
+        if not velocity:
+            velocity = self.parameters['max_velocity']
+        vol = int(self.pump_out.syringe_volume/2)
+
+        for i in range(2):
+            self._pump(
+                self.pump_out, vol,
+                velocity=int(velocity/10),
+                pickup_dir='in', dispense_dir='out')
+        for i in range(2):
+            self._pump(
+                self.pump_out, vol,
+                velocity=int(velocity/10),
+                pickup_dir='out', dispense_dir='in')
 
     def fill_and_shake_tubings(self, input_res, do_shake=True):
         velocity = self.parameters.get('clean_velocity')
@@ -827,13 +862,19 @@ class LegacyArchitecture(AbstractSystem):
             velocity = self.parameters['max_velocity']
         for ires, (resid, res) in enumerate(self.reservoir_a.items()):
             # fill reservoir tubings
+            nstrokes = 2
             if ires == 0:
-                nstrokes = 5
+                nstrokes_fill = 3
             else:
-                nstrokes = 2
-            for i in range(nstrokes):
+                nstrokes_fill = 0
+            if ires == len(self.reservoir_a.items()) - 1:
+                nstrokes_empty = 4
+            else:
+                nstrokes_empty = 0
+            for i in range(nstrokes + nstrokes_fill):
                 self._pump(
                     self.pump_a, self.pump_a.syringe_volume,
+                    velocity=velocity,
                     pickup_dir='in', dispense_dir='in',
                     pickup_res=input_res,
                     dispense_res=resid)
@@ -842,14 +883,25 @@ class LegacyArchitecture(AbstractSystem):
                 for i in range(2):
                     self._pump(
                         self.pump_a, self.pump_a.syringe_volume,
+                        velocity=velocity,
                         pickup_dir='in', dispense_dir='in',
                         pickup_res=resid,
                         dispense_res=resid)
+            # put liquid back
+            for i in range(nstrokes + nstrokes_empty):
+                self._pump(
+                    self.pump_a, self.pump_a.syringe_volume,
+                    velocity=velocity,
+                    pickup_dir='in', dispense_dir='in',
+                    pickup_res=resid,
+                    dispense_res=input_res)
         # flush and sample tubing
         for do_flushvalve in [True, False]:
+            # fill
             for i in range(2):
                 self._pump(
                     self.pump_a, self.pump_a.syringe_volume,
+                    velocity=velocity,
                     pickup_dir='in', dispense_dir='out',
                     pickup_res=input_res,
                     dispense_flushvalve=do_flushvalve)
@@ -858,9 +910,28 @@ class LegacyArchitecture(AbstractSystem):
                 for i in range(2):
                     self._pump(
                         self.pump_a, self.pump_a.syringe_volume,
+                        velocity=velocity,
                         pickup_dir='out', dispense_dir='out',
                         pickup_flushvalve=do_flushvalve,
                         dispense_flushvalve=do_flushvalve)
+            # put back
+            for i in range(2):
+                self._pump(
+                    self.pump_a, self.pump_a.syringe_volume,
+                    velocity=velocity,
+                    pickup_dir='out', dispense_dir='in',
+                    dispense_res=input_res,
+                    pickup_flushvalve=do_flushvalve)
+        # sample_out
+        for i in range(2):
+            self._pump(
+                self.pump_out, self.pump_out.syringe_volume,
+                velocity=velocity/10,
+                pickup_dir='in', dispense_dir='out')
+            self._pump(
+                self.pump_out, self.pump_out.syringe_volume,
+                velocity=velocity/10,
+                pickup_dir='out', dispense_dir='in')
 
     def pause_execution(self):
         """Pause the execution of a protocol step. Specifically,
@@ -1004,7 +1075,7 @@ class LegacyArchitecture(AbstractSystem):
     def _pump(self, pump, vol, velocity=None,
               pickup_dir='in', dispense_dir='out',
               pickup_res=None, dispense_res=None,
-              pickup_flushvalve=None, dispense_flushvalve=None):
+              pickup_flushvalve=None, dispense_flushvalve=None, delay=0):
         """Pump fluid with a given pump. By default, pump from the currently
         set reservoir valve position to the pump outlet. Arguments can be
         set to pump e.g. from one reservoir to another.
@@ -1025,9 +1096,17 @@ class LegacyArchitecture(AbstractSystem):
                 the reservoir to pickup from / dispense to
             pickup_flushvalve, dispense_flushvalve : int or None
                 the flush valve position during pickup / dispense
+            delay : float
+                the number of seconds to wait between pickup and dispense
         """
         if velocity is None:
             velocity = self.parameters['max_velocity']
+        logger.debug(
+            'Pump {:s} pumps {:f} ul at velocity {:s} from {:s}({:s}) to {:s}({:s})'.format(
+                pump.psd.asciiAddress, vol, str(velocity), str(pickup_res), str(pickup_dir),
+                str(dispense_res), str(dispense_dir))
+            + '. Flushvalve settings pickup: {:s}, dispense: {:s}'.format(
+                str(pickup_flushvalve), str(dispense_flushvalve)))
         curr_pump_vol = pump.get_current_volume()
         if curr_pump_vol > 0:
             pump.set_valve(dispense_dir)
@@ -1040,8 +1119,12 @@ class LegacyArchitecture(AbstractSystem):
 
         volume_quant = pump.syringe_volume
         nr_pumpings = int(vol // volume_quant)
-        pump_volumes = volume_quant * np.ones(nr_pumpings + 1)
-        pump_volumes[-1] = vol % volume_quant
+        if vol % volume_quant > 0:
+            nr_pumpings += 1
+        pump_volumes = volume_quant * np.ones(nr_pumpings)
+        if vol % volume_quant > 0:
+            pump_volumes[-1] = vol % volume_quant
+        logger.debug('pump volumes: {:s}'.format(str(pump_volumes)))
 
         for pump_volume in pump_volumes:
             pump.set_valve(pickup_dir)
@@ -1050,6 +1133,7 @@ class LegacyArchitecture(AbstractSystem):
             if pickup_flushvalve is not None:
                 self._set_flush_valve(pickup_flushvalve)
             pump.pickup(pump_volume, velocity, waitForPump=True)
+            time.sleep(delay)
             pump.set_valve(dispense_dir)
             if dispense_res is not None:
                 self._set_valves(dispense_res)
@@ -1090,12 +1174,10 @@ class LegacyArchitecture(AbstractSystem):
         if curr_pumpa_vol > 0:
             self.pump_a.set_valve('out')
             self.pump_out.set_valve('in')
+            self.pump_out.pickup(curr_pumpout_vol, velocity_out)
             self.pump_a.dispense(curr_pumpa_vol, velocity)
-            self.pump_out.pickup(
-                curr_pumpout_vol,
-                velocity_out)
-            self.pump_a.wait_until_done()
             self.pump_out.wait_until_done()
+            self.pump_a.wait_until_done()
 
         volume_quant = min([
             self.pump_a.syringe_volume,
@@ -1113,20 +1195,18 @@ class LegacyArchitecture(AbstractSystem):
             self.pump_out.set_valve('out')
             self.pump_a.pickup(pump_volume, velocity, waitForPump=False)
             self.pump_out.dispense(
-                curr_pumpout_vol,
-                pumpout_dispense_velocity, waitForPump=False)
-            self.pump_a.wait_until_done()
+                curr_pumpout_vol, pumpout_dispense_velocity, waitForPump=False)
             self.pump_out.wait_until_done()
+            self.pump_a.wait_until_done()
 
             self.pump_a.set_valve('out')
             self.pump_out.set_valve('in')
-            self.pump_a.dispense(pump_volume, velocity, waitForPump=False)
             curr_pumpout_vol = pump_volume * extractionfactor
             self.pump_out.pickup(
-                 curr_pumpout_vol,
-                velocity_out, waitForPump=False)
-            self.pump_a.wait_until_done()
+                curr_pumpout_vol, velocity_out, waitForPump=False)
+            self.pump_a.dispense(pump_volume, velocity, waitForPump=False)
             self.pump_out.wait_until_done()
+            self.pump_a.wait_until_done()
 
         self.pump_out.set_valve('out')
         self.pump_out.dispense(
@@ -1156,6 +1236,88 @@ class LegacyArchitecture(AbstractSystem):
             pickup_res=self.special_names['flushbuffer_a'],
             dispense_flushvalve=False)
 
+
+    def fill_tubings_w_flushbuffer(self, extra_vol):
+        """Fill the tubings with the liquid of flushbuffer.
+        Args:
+            extra_vol : int
+                the extra volume to add to each tubing
+        """
+        velocity = self.parameters.get('clean_velocity')
+        if not velocity:
+            velocity = self.parameters['max_velocity']
+        # fill flushbuffer-reservoir to flush outlet
+        vol = (
+            self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
+            + self.tubing_config.get('pump_a', 'valve_flush')
+            + self.tubing_config.get('valve_flush', 'flush_waste'))
+        vol += extra_vol
+        self._pump(
+            self.pump_a, vol, velocity=velocity,
+            pickup_res=self.special_names['flushbuffer_a'],
+            dispense_flushvalve=True)
+        # fill sample tubing
+        vol = self.tubing_config.get('valve_flush', 'sample')
+        vol += extra_vol
+        self._pump(
+            self.pump_a, vol, velocity=velocity,
+            pickup_res=self.special_names['flushbuffer_a'],
+            dispense_flushvalve=False)
+        # fill reservoirs
+        for res_id, res in self.reservoir_a.items():
+            # take care of the flushbuffer last
+            if res_id == self.special_names['flushbuffer_a']:
+                continue
+            # vol = self.tubing_config.get_reservoir_to_pump(res_id, 'a')
+            vol = self.tubing_config.get_reservoir_to_closest_valve(res_id)
+            vol += extra_vol
+            self._pump(
+                self.pump_a, vol, velocity=velocity,
+                pickup_res=self.special_names['flushbuffer_a'],
+                pickup_dir='in', dispense_dir='in',
+                dispense_res=res_id)
+
+    def empty_tubings_to_flushbuffer(self, extra_vol):
+        """Fill the tubings with the liquid of flushbuffer.
+        Args:
+            extra_vol : int
+                the extra volume to add to each tubing
+        """
+        velocity = self.parameters.get('clean_velocity')
+        if not velocity:
+            velocity = self.parameters['max_velocity']
+        # empty reservoirs
+        for res_id, res in self.reservoir_a.items():
+            # take care of the flushbuffer last
+            if res_id == self.special_names['flushbuffer_a']:
+                continue
+            # vol = self.tubing_config.get_reservoir_to_pump(res_id, 'a')
+            vol = self.tubing_config.get_reservoir_to_closest_valve(res_id)
+            vol += extra_vol
+            self._pump(
+                self.pump_a, vol, velocity=velocity,
+                pickup_dir='in', dispense_dir='in',
+                dispense_res=self.special_names['flushbuffer_a'],
+                pickup_res=res_id)
+        # empty sample tubing
+        vol = self.tubing_config.get('valve_flush', 'sample')
+        vol += extra_vol
+        self._pump(
+            self.pump_a, vol, velocity=velocity,
+            pickup_dir='out', dispense_dir='in',
+            dispense_res=self.special_names['flushbuffer_a'],
+            pickup_flushvalve=False)
+        # fill flushbuffer-reservoir to flush outlet
+        vol = (
+            self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
+            + self.tubing_config.get('pump_a', 'valve_flush')
+            + self.tubing_config.get('valve_flush', 'flush_waste'))
+        vol += extra_vol
+        self._pump(
+            self.pump_a, vol, velocity=velocity,
+            pickup_dir='out', dispense_dir='in',
+            dispense_res=self.special_names['flushbuffer_a'],
+            pickup_flushvalve=True)
 
 """
 Diluter system architecture:

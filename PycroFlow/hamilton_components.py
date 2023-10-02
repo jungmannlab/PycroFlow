@@ -114,6 +114,7 @@ class TubingConfig():
             config : dict
                 the tubing configuration
         """
+        logger.debug('initalized TubingConfig with config {:s}'.format(str(config)))
         self.config = config
 
     def set_special_names(self, special_names):
@@ -159,11 +160,14 @@ class TubingConfig():
             return self.config[path]
         else:
             # assemble the volume
+            logger.debug('assembling volumes along {:s}'.format(str(path)))
             vol = 0
             searching = True
             segstart = res
             while searching:
-                segment = [k for k in self.config.keys() if k[0]==segstart][0]
+                segment = [k for k in self.config.keys() if k[0]==segstart]
+                logger.debug('found segment {:s}'.format(str(segment)))
+                segment = segment[0]
                 vol += self.config[segment]
                 if segment[1] == path[1]:
                     return vol

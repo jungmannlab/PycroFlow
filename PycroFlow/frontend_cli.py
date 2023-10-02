@@ -139,7 +139,7 @@ class PycroFlowInteractive(cmd.Cmd):
         """Calibrate the tubings of the fluid system
         """
         if self.fluid_system:
-            self.fluid_system._calibrate_tubing(500)
+            self.fluid_system._calibrate_tubing(400)
         else:
             print('Fluid system needs to be initialized first.')
 
