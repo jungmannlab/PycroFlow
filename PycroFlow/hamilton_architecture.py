@@ -779,6 +779,8 @@ class LegacyArchitecture(AbstractSystem):
             # volume to the sample
             # self._set_valves(self.special_names['flushbuffer_a'])
             # self._inject(flush_volume, velocity)
+        if pentry['$type'] == 'pump_out':
+            self._pump_out(pentry['volume'])
 
         # tubing full of buffer, cannot simply proceed
         self.last_protocol_entry = -1
@@ -1212,6 +1214,31 @@ class LegacyArchitecture(AbstractSystem):
         self.pump_out.dispense(
             curr_pumpout_vol,
             pumpout_dispense_velocity, waitForPump=False)
+        self.pump_out.wait_until_done()
+
+    def _pump_out(self, vol, velocity=None, extractionfactor=None):
+        """Make a pump out extraction stroke.
+        This has been introduced to introduce suction before adding liquid
+        from the sample tube. With small-diameter tubing, it may tke too
+        long until suction occurs without this.
+        """
+        logger.debug('pumping out {:.1f}'.format(vol))
+        if velocity is None:
+            velocity = self.parameters['max_velocity']
+        if extractionfactor is None:
+            extractionfactor = self.parameters['extractionfactor']
+        velocity_out = int(
+            extractionfactor * velocity
+            * self.pump_a.syringe_volume / self.pump_out.syringe_volume)
+        pumpout_dispense_velocity = self.parameters['pumpout_dispense_velocity']
+
+        curr_pumpout_vol = min([vol * extractionfactor, self.pump_out.syringe_volume])
+        self.pump_out.pickup(
+            curr_pumpout_vol, velocity_out, waitForPump=True)
+        self.pump_out.wait_until_done()
+        self.pump_out.dispense(
+            curr_pumpout_vol,
+            pumpout_dispense_velocity, waitForPump=True)
         self.pump_out.wait_until_done()
 
     def fill_tubings(self):

@@ -187,6 +187,7 @@ class ProtocolBuilder:
         res_idcs = {name: nr - 1 for nr, name in reservoirs.items()}
         res_idcs = {name: nr for nr, name in reservoirs.items()}
 
+        self.create_step_pumpout(volume=wash_vol_pre)
         self.create_step_inject(volume=wash_vol_pre, reservoir_id=res_idcs[washbuf])
         for round, imager in enumerate(experiment['imagers']):
             self.create_step_inject(
@@ -198,7 +199,7 @@ class ProtocolBuilder:
                 message='done round {:d}'.format(round))
             self.create_step_acquire(
                 imgsttg['frames'], imgsttg['t_exp'],
-                message='round_{:d}'.format(round))
+                message='round_{:d}-{:s}'.format(round, imager))
             self.create_step_signal(
                 system='img', message='done imaging round {:d}'.format(round))
             self.create_step_waitfor_signal(
@@ -434,6 +435,20 @@ class ProtocolBuilder:
         timeoutstr = str(t_incu)
         self.steps['fluid'].append(
             {'$type': 'incubate', 'duration': timeoutstr})
+
+    def create_step_pumpout(
+            self, volume):
+        """Creates a step to pump out only.
+        Args:
+            volume : int
+                volume to pump out in integer µl
+        Returns:
+            step : dict
+                the step configuration
+        """
+        self.steps['fluid'].append(
+            {'$type': 'pump_out',
+             'volume': volume})
 
     def create_step_inject(
             self, volume, reservoir_id):
