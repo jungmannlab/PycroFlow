@@ -221,13 +221,94 @@ class PycroFlowInteractive(cmd.Cmd):
 
     # ######################### Direct Fluid Manipulation
 
-    def do_pump(self, args):
+    def do_pump(self, arg):
+        """Uses a syringe pump to pump from A to B
+        Args:
+            pump_name, vol, velocity=None,
+              pickup_dir='in', dispense_dir='out',
+              pickup_res=None, dispense_res=None,
+              pickup_flushvalve=None, dispense_flushvalve=None
+        """
+        args = arg.split()
+        pump_name = args.pop(0)
+        if 'pump_name=' in pump_name:
+            pump_name = pump_name[len('pump_name='):]
+        kwargs = {ar.split('=')[0]: ar.split('=')[1] for ar in args}
+        if 'vol' in kwargs.keys():
+            kwargs['vol'] = int(kwargs['vol'])
+        if 'velocity' in kwargs.keys():
+            kwargs['velocity'] = int(kwargs['velocity'])
+        if 'pickup_res' in kwargs.keys():
+            kwargs['pickup_res'] = int(kwargs['pickup_res'])
+        if 'dispense_res' in kwargs.keys():
+            kwargs['dispense_res'] = int(kwargs['dispense_res'])
+        if 'pickup_flushvalve' in kwargs.keys():
+            kwargs['pickup_flushvalve'] = bool(kwargs['pickup_flushvalve'])
+        if 'dispense_flushvalve' in kwargs.keys():
+            kwargs['dispense_flushvalve'] = bool(kwargs['dispense_flushvalve'])
+
+        if hasattr(self.orchestrator.fluid_system, pump_name):
+            pump = getattr(self.orchestrator.fluid_system, pump_name)
+        elif hasattr(self.orchestrator.fluid_system, 'pump_' + pump_name):
+            pump = getattr(self.orchestrator.fluid_system, 'pump_' + pump_name)
+        else:
+            print('Cannot find pump ' + pump_name)
+            return
+        kwargs['pump'] = pump
+
         if not self.orchestrator:
             print('Start orchestration first.')
             return
         self.orchestrator.execute_system_function(
             'fluid', self.fluid_system._pump,
-            args)
+            kwargs=kwargs)
+
+    def do_inject(self, arg):
+        """Do an injection, pumping in and out
+        Args:
+            vol : float
+                the volume to inject in µl
+            velocity : float
+                the flow velocity of the injection in µl/min
+            extractionfactor : float
+                the factor of flow speeds of extraction vs injection.
+                a non-perfectly calibrated system may result in less volume
+                being extracted than injected, leading to spillage. To prevent
+                this, the extraction needle could be positioned higher, and
+                extraction performed faster than injection
+        """
+        args = arg.split()
+        pump_name = args.pop(0)
+        if 'pump_name=' in pump_name:
+            pump_name = pump_name[len('pump_name='):]
+        kwargs = {ar.split('=')[0]: ar.split('=')[1] for ar in args}
+        if 'vol' in kwargs.keys():
+            kwargs['vol'] = int(kwargs['vol'])
+        if 'velocity' in kwargs.keys():
+            kwargs['velocity'] = int(kwargs['velocity'])
+        if 'extractionfactor' in kwargs.keys():
+            kwargs['extractionfactor'] = int(kwargs['extractionfactor'])
+
+        if not self.orchestrator:
+            print('Start orchestration first.')
+            return
+        self.orchestrator.execute_system_function(
+            'fluid', self.fluid_system._inject,
+            kwargs=kwargs)
+
+    def do_set_valves(self, arg):
+        """Set the valves to access the reservoir specified
+        Args:
+            reservoir_id : int
+                the reservoir to set to
+        """
+        reservoir_id = int(arg)
+        if not self.orchestrator:
+            print('Start orchestration first.')
+            return
+        self.orchestrator.execute_system_function(
+            'fluid', self.fluid_system._set_valves,
+            kwargs={'reservoir_id': reservoir_id})
 
     def do_deliver(self, reservoir_id, volume):
         if not self.orchestrator:
