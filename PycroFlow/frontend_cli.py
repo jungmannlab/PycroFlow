@@ -222,7 +222,9 @@ class PycroFlowInteractive(cmd.Cmd):
     # ######################### Direct Fluid Manipulation
 
     def do_pump(self, arg):
-        """Uses a syringe pump to pump from A to B
+        """Uses a syringe pump to pump from A to B.
+        Do not specify arguments with None. No comma.
+        pickup/dispense_flushvalve: 0 or 1
         Args:
             pump_name, vol, velocity=None,
               pickup_dir='in', dispense_dir='out',
@@ -233,19 +235,37 @@ class PycroFlowInteractive(cmd.Cmd):
         pump_name = args.pop(0)
         if 'pump_name=' in pump_name:
             pump_name = pump_name[len('pump_name='):]
+        if ',' in pump_name:
+            pump_name = pump_name[:pump_name.index(',')]
+
+        vol = args.pop(0)
+        if 'vol=' in vol:
+            vol = vol[len('vol='):]
+        if ',' in vol:
+            vol = vol[:vol.index(',')]
+        vol = float(vol)
+
         kwargs = {ar.split('=')[0]: ar.split('=')[1] for ar in args}
-        if 'vol' in kwargs.keys():
-            kwargs['vol'] = int(kwargs['vol'])
         if 'velocity' in kwargs.keys():
+            if ',' in kwargs['velocity']:
+                kwargs['velocity'] = kwargs['velocity'].index(',')
             kwargs['velocity'] = int(kwargs['velocity'])
         if 'pickup_res' in kwargs.keys():
+            if ',' in kwargs['pickup_res']:
+                kwargs['pickup_res'] = kwargs['pickup_res'].index(',')
             kwargs['pickup_res'] = int(kwargs['pickup_res'])
         if 'dispense_res' in kwargs.keys():
+            if ',' in kwargs['dispense_res']:
+                kwargs['dispense_res'] = kwargs['dispense_res'].index(',')
             kwargs['dispense_res'] = int(kwargs['dispense_res'])
         if 'pickup_flushvalve' in kwargs.keys():
-            kwargs['pickup_flushvalve'] = bool(kwargs['pickup_flushvalve'])
+            if ',' in kwargs['pickup_flushvalve']:
+                kwargs['pickup_flushvalve'] = kwargs['pickup_flushvalve'].index(',')
+            kwargs['pickup_flushvalve'] = bool(int(kwargs['pickup_flushvalve']))
         if 'dispense_flushvalve' in kwargs.keys():
-            kwargs['dispense_flushvalve'] = bool(kwargs['dispense_flushvalve'])
+            if ',' in kwargs['dispense_flushvalve']:
+                kwargs['dispense_flushvalve'] = kwargs['dispense_flushvalve'].index(',')
+            kwargs['dispense_flushvalve'] = bool(int(kwargs['dispense_flushvalve']))
 
         if hasattr(self.orchestrator.fluid_system, pump_name):
             pump = getattr(self.orchestrator.fluid_system, pump_name)
@@ -255,6 +275,7 @@ class PycroFlowInteractive(cmd.Cmd):
             print('Cannot find pump ' + pump_name)
             return
         kwargs['pump'] = pump
+        kwargs['vol'] = vol
 
         if not self.orchestrator:
             print('Start orchestration first.')
@@ -278,15 +299,19 @@ class PycroFlowInteractive(cmd.Cmd):
                 extraction performed faster than injection
         """
         args = arg.split()
-        pump_name = args.pop(0)
-        if 'pump_name=' in pump_name:
-            pump_name = pump_name[len('pump_name='):]
+        vol = args.pop(0)
+        if 'vol=' in vol:
+            vol = vol[len('vol='):]
+        vol = float(vol)
         kwargs = {ar.split('=')[0]: ar.split('=')[1] for ar in args}
-        if 'vol' in kwargs.keys():
-            kwargs['vol'] = int(kwargs['vol'])
+        kwargs['vol'] = vol
         if 'velocity' in kwargs.keys():
+            if ',' in kwargs['velocity']:
+                kwargs['velocity'] = kwargs['velocity'].index(',')
             kwargs['velocity'] = int(kwargs['velocity'])
         if 'extractionfactor' in kwargs.keys():
+            if ',' in kwargs['extractionfactor']:
+                kwargs['extractionfactor'] = kwargs['extractionfactor'].index(',')
             kwargs['extractionfactor'] = int(kwargs['extractionfactor'])
 
         if not self.orchestrator:
