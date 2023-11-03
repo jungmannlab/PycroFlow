@@ -800,6 +800,28 @@ class LegacyArchitecture(AbstractSystem):
         """Clean the tubings by flushing through detergent and ethanol.
         This is analog to the Fluigent Aria cleaning procedure (but faster)
         """
+
+        clean_liquids = ['rbs', 'ipa', 'h2o', 'empty']
+        specnames = [sn.lower() for sn in self.special_names.keys()]
+        print(specnames)
+        print([cl.lower() in specnames for cl in clean_liquids])
+        if all([cl.lower() in specnames
+                for cl in clean_liquids]):
+            print('strating short')
+            cl_ids = {cl: self.special_names[cl] for cl in clean_liquids}
+            input(
+                'Please empty all reservoirs. Put the sample tubing'
+                + ' into the same reservoir as the waste tubing. '
+                + 'Make sure it is large enough to hold all internal volume'
+                + 'Press Enter to continue.')
+            print('Performing cleaning procedure.')
+            extra_vol = 100
+            self.clean_tubings_seperate_res(
+                extra_vol, res_detergent=cl_ids['rbs'], res_ipa=cl_ids['ipa'],
+                res_h2o=cl_ids['h2o'], res_empty=cl_ids['empty'])
+            return
+        print('not on short track')
+
         velocity = self.parameters.get('clean_velocity')
         if not velocity:
             velocity = self.parameters['max_velocity']
@@ -809,7 +831,7 @@ class LegacyArchitecture(AbstractSystem):
             + ' into a reservoir. put output tubings into an empty reservoir.'
             + 'Press Enter to continue.')
         print('emptying all tubings into flushbuffer.')
-        # self.empty_tubings_to_flushbuffer(extra_vol=200)
+        self.empty_tubings_to_flushbuffer(extra_vol=200)
         self.flush_pump_out()
         # self.fill_and_shake_tubings(
         #     input_res=self.special_names['flushbuffer_a'], do_shake=False)
@@ -822,8 +844,8 @@ class LegacyArchitecture(AbstractSystem):
             + 'Press Enter to continue.')
         print('Filling all tubings with detergent and putting it back.')
         # Go through all tubings and wash/shake
-        # self.fill_tubings_w_flushbuffer(extra_vol=500)
-        # self.empty_tubings_to_flushbuffer(extra_vol=600)
+        self.fill_tubings_w_flushbuffer(extra_vol=500)
+        self.empty_tubings_to_flushbuffer(extra_vol=600)
         self.flush_pump_out()
         # self.fill_and_shake_tubings(
         #     input_res=self.special_names['flushbuffer_a'])
@@ -835,28 +857,68 @@ class LegacyArchitecture(AbstractSystem):
             + ' into a reservoir. Press Enter to continue.')
         print('Filling all tubings with ethanol and putting it back.')
         # Go through all tubings and wash/shake
-        # self.fill_tubings_w_flushbuffer(extra_vol=500)
-        # self.empty_tubings_to_flushbuffer(extra_vol=600)
+        self.fill_tubings_w_flushbuffer(extra_vol=500)
+        self.empty_tubings_to_flushbuffer(extra_vol=600)
         self.flush_pump_out()
         # self.fill_and_shake_tubings(
         #     input_res=self.special_names['flushbuffer_a'])
 
-    def flush_pump_out(self):
+    def clean_tubings_seperate_res(self, extra_vol, res_detergent, res_ipa, res_h2o, res_empty):
+        """Clean tubings, with separate reservoirs already connected
+        to all cleaning solutions.
+
+        All reservoirs are filled with the cleaning liquid, which is then pumped into the sample,
+        and extracted with the waste pump; for each cleaning liquid in turn.
+        The waste tubing is assumed to be fluidly connected withe sample tubing, and
+        to hold the whole volume.
+        """
+        res_exceptions = [res_detergent, res_ipa, res_h2o, res_empty]
+        # empty tubings and reservoirs
+        print('emptying tubings and reservoirs')
+        total_vol = self.fill_tubings(extra_vol, 'sample', res_exceptions, post_fill_flushbuffer=False)
+        self.flush_pump_out(total_vol, only_forward=True)
+
+        # clean with detergent and empty
+        print('cleaning with detergent and emptying tubings')
+        self.fill_tubings_reverse(extra_vol, res_detergent, res_exceptions)
+        self.fill_tubings(extra_vol, 'sample', res_exceptions, post_fill_flushbuffer=False)
+        self.flush_pump_out(total_vol, only_forward=True)
+
+        # clean with IPA and empty
+        print('cleaning with alcohol and emptying tubings')
+        self.fill_tubings_reverse(extra_vol, res_ipa, res_exceptions)
+        self.fill_tubings(extra_vol, 'sample', res_exceptions, post_fill_flushbuffer=False)
+        self.flush_pump_out(total_vol, only_forward=True)
+
+        # clean with H2O and empty
+        print('cleaning with H2O and emptying tubings')
+        self.fill_tubings_reverse(extra_vol, res_h2o, res_exceptions)
+        self.fill_tubings(extra_vol, 'sample', res_exceptions, post_fill_flushbuffer=False)
+        self.flush_pump_out(total_vol, only_forward=True)
+
+        # empty tubings
+        print('emptying tubings')
+        self.fill_tubings_reverse(extra_vol, res_empty, res_exceptions)
+        self.flush_pump_out(total_vol, only_forward=True)
+
+    def flush_pump_out(self, vol=None, only_forward=False):
         velocity = self.parameters.get('clean_velocity')
         if not velocity:
             velocity = self.parameters['max_velocity']
-        vol = int(self.pump_out.syringe_volume/2)
+        if not vol:
+            vol = int(self.pump_out.syringe_volume/2)
 
-        for i in range(2):
+        for i in range(1):
             self._pump(
                 self.pump_out, vol,
                 velocity=int(velocity/10),
                 pickup_dir='in', dispense_dir='out')
-        for i in range(2):
-            self._pump(
-                self.pump_out, vol,
-                velocity=int(velocity/10),
-                pickup_dir='out', dispense_dir='in')
+        if not only_forward:
+            for i in range(1):
+                self._pump(
+                    self.pump_out, vol,
+                    velocity=int(velocity/10),
+                    pickup_dir='out', dispense_dir='in')
 
     def fill_and_shake_tubings(self, input_res, do_shake=True):
         velocity = self.parameters.get('clean_velocity')
@@ -1241,68 +1303,113 @@ class LegacyArchitecture(AbstractSystem):
             pumpout_dispense_velocity, waitForPump=True)
         self.pump_out.wait_until_done()
 
-    def fill_tubings(self):
+    def fill_tubings(
+        self, extra_vol=0, dest='flushwaste', res_exceptions=[],
+        post_fill_flushbuffer=True, velocity=None):
         """Fill the tubings with the liquids of their reservoirs.
+
+        Args:
+            extra_vol : int
+                the extra volume to pull from each tubing
+            dest : 'flushwaste', 'sample'
+                where to pump to
+            res_exceptions : list of int
+                reservoirs not to flush
+            post_fill_flushbuffer : bool
+                whether to fill the central tubing with flushbuffer
+
+        Returns:
+            total_vol : float
+                the total volume moved
         """
+        total_vol = 0
+        clean_liquids = ['rbs', 'ipa', 'h2o', 'empty']
+        clid = [self.special_names[cl] for cl in clean_liquids
+                if cl.lower() in self.special_names.keys()]
+        res_exceptions = res_exceptions + clid
+
+        dispense_flushvalve = (dest!='sample')
         for res_id, res in self.reservoir_a.items():
             # take care of the flushbuffer last
-            if res_id == self.special_names['flushbuffer_a']:
+            if res_id in res_exceptions:
                 continue
             # vol = self.tubing_config.get_reservoir_to_pump(res_id, 'a')
             vol = self.tubing_config.get_reservoir_to_closest_valve(res_id)
+            total_vol += vol
             self._pump(
-                self.pump_a, vol, pickup_res=res_id, dispense_flushvalve=True)
+                self.pump_a, vol, velocity=velocity, pickup_res=res_id,
+                dispense_flushvalve=dispense_flushvalve)
 
-        # now, flush everything with the flushbuffer
-        vol = (
-            self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
-            + self.tubing_config.get('pump_a', 'valve_flush')
-            + self.tubing_config.get('valve_flush', 'sample'))
-        self._pump(
-            self.pump_a, vol,
-            pickup_res=self.special_names['flushbuffer_a'],
-            dispense_flushvalve=False)
+        if post_fill_flushbuffer:
+            # now, flush everything with the flushbuffer
+            vol = (
+                self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
+                + self.tubing_config.get('pump_a', 'valve_flush')
+                + self.tubing_config.get('valve_flush', 'sample'))
+            total_vol += vol
+            self._pump(
+                self.pump_a, vol, velocity=velocity,
+                pickup_res=self.special_names['flushbuffer_a'],
+                dispense_flushvalve=False)
+        return total_vol
 
 
-    def fill_tubings_w_flushbuffer(self, extra_vol):
-        """Fill the tubings with the liquid of flushbuffer.
+    def fill_tubings_reverse(self, extra_vol, src_res_id=None, res_exceptions=[]):
+        """Fill the tubings of all reservoirs in the config, as well as
+        the sample tubing with the liquid of the given reservoir.
+        This is meant for cleaning typically.
         Args:
             extra_vol : int
                 the extra volume to add to each tubing
+            src_res_id : int
+                the reservoir id to get stuff from
+            res_exceptions : list of int
+                reservoirs not to flush
+
+        Returns:
+            total_vol : float
+                the total volume moved
         """
+        total_vol = 0
         velocity = self.parameters.get('clean_velocity')
+        if src_res_id is None:
+            src_res_id = self.special_names['flushbuffer_a']
         if not velocity:
             velocity = self.parameters['max_velocity']
         # fill flushbuffer-reservoir to flush outlet
         vol = (
-            self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
+            self.tubing_config.get_reservoir_to_pump(src_res_id, 'a')
             + self.tubing_config.get('pump_a', 'valve_flush')
             + self.tubing_config.get('valve_flush', 'flush_waste'))
         vol += extra_vol
+        total_vol += vol
         self._pump(
             self.pump_a, vol, velocity=velocity,
-            pickup_res=self.special_names['flushbuffer_a'],
+            pickup_res=src_res_id,
             dispense_flushvalve=True)
         # fill sample tubing
         vol = self.tubing_config.get('valve_flush', 'sample')
         vol += extra_vol
+        total_vol += vol
         self._pump(
             self.pump_a, vol, velocity=velocity,
-            pickup_res=self.special_names['flushbuffer_a'],
+            pickup_res=src_res_id,
             dispense_flushvalve=False)
         # fill reservoirs
         for res_id, res in self.reservoir_a.items():
             # take care of the flushbuffer last
-            if res_id == self.special_names['flushbuffer_a']:
+            if res_id in res_exceptions:
                 continue
             # vol = self.tubing_config.get_reservoir_to_pump(res_id, 'a')
             vol = self.tubing_config.get_reservoir_to_closest_valve(res_id)
             vol += extra_vol
+            total_vol += vol
             self._pump(
                 self.pump_a, vol, velocity=velocity,
-                pickup_res=self.special_names['flushbuffer_a'],
+                pickup_res=src_res_id,
                 pickup_dir='in', dispense_dir='in',
                 dispense_res=res_id)
+        return total_vol
 
     def empty_tubings_to_flushbuffer(self, extra_vol):
         """Fill the tubings with the liquid of flushbuffer.
