@@ -873,36 +873,43 @@ class LegacyArchitecture(AbstractSystem):
         to hold the whole volume.
         """
         res_exceptions = [res_detergent, res_ipa, res_h2o, res_empty]
+
+        velocity = self.parameters.get('clean_velocity')
+        if not velocity:
+            velocity = self.parameters['max_velocity']
+
         # empty tubings and reservoirs
         print('emptying tubings and reservoirs')
-        total_vol = self.fill_tubings(extra_vol, 'sample', res_exceptions, post_fill_flushbuffer=False)
-        self.flush_pump_out(total_vol, only_forward=True)
+        total_vol = self.fill_tubings(extra_vol * 3, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity)
+        self.flush_pump_out(total_vol * 2, only_forward=True, velocity=velocity/15)
 
         # clean with detergent and empty
         print('cleaning with detergent and emptying tubings')
-        self.fill_tubings_reverse(extra_vol, res_detergent, res_exceptions)
-        self.fill_tubings(extra_vol, 'sample', res_exceptions, post_fill_flushbuffer=False)
-        self.flush_pump_out(total_vol, only_forward=True)
+        self.fill_tubings_reverse(extra_vol, res_detergent, res_exceptions, velocity=velocity)
+        self.fill_tubings(extra_vol * 2, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity)
+        self.flush_pump_out(total_vol * 2, only_forward=True, velocity=velocity/15)
 
         # clean with IPA and empty
         print('cleaning with alcohol and emptying tubings')
-        self.fill_tubings_reverse(extra_vol, res_ipa, res_exceptions)
-        self.fill_tubings(extra_vol, 'sample', res_exceptions, post_fill_flushbuffer=False)
-        self.flush_pump_out(total_vol, only_forward=True)
+        self.fill_tubings_reverse(extra_vol, res_ipa, res_exceptions, velocity=velocity)
+        self.fill_tubings(extra_vol * 2, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity)
+        self.flush_pump_out(total_vol * 2, only_forward=True, velocity=velocity/15)
 
         # clean with H2O and empty
         print('cleaning with H2O and emptying tubings')
-        self.fill_tubings_reverse(extra_vol, res_h2o, res_exceptions)
-        self.fill_tubings(extra_vol, 'sample', res_exceptions, post_fill_flushbuffer=False)
-        self.flush_pump_out(total_vol, only_forward=True)
+        self.fill_tubings_reverse(extra_vol, res_h2o, res_exceptions, velocity=velocity)
+        self.fill_tubings(extra_vol * 2, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity)
+        self.flush_pump_out(total_vol * 2, only_forward=True, velocity=velocity/15)
 
         # empty tubings
         print('emptying tubings')
-        self.fill_tubings_reverse(extra_vol, res_empty, res_exceptions)
-        self.flush_pump_out(total_vol, only_forward=True)
+        self.fill_tubings_reverse(extra_vol, res_empty, res_exceptions, velocity=velocity)
+        self.fill_tubings(extra_vol * 2, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity)
+        self.flush_pump_out(total_vol, only_forward=True, velocity=velocity/15)
 
-    def flush_pump_out(self, vol=None, only_forward=False):
-        velocity = self.parameters.get('clean_velocity')
+    def flush_pump_out(self, vol=None, only_forward=False, velocity=None):
+        if not velocity:
+            velocity = self.parameters.get('clean_velocity')/10
         if not velocity:
             velocity = self.parameters['max_velocity']
         if not vol:
@@ -911,13 +918,13 @@ class LegacyArchitecture(AbstractSystem):
         for i in range(1):
             self._pump(
                 self.pump_out, vol,
-                velocity=int(velocity/10),
+                velocity=int(velocity),
                 pickup_dir='in', dispense_dir='out')
         if not only_forward:
             for i in range(1):
                 self._pump(
                     self.pump_out, vol,
-                    velocity=int(velocity/10),
+                    velocity=int(velocity),
                     pickup_dir='out', dispense_dir='in')
 
     def fill_and_shake_tubings(self, input_res, do_shake=True):
@@ -1305,7 +1312,7 @@ class LegacyArchitecture(AbstractSystem):
 
     def fill_tubings(
         self, extra_vol=0, dest='flushwaste', res_exceptions=[],
-        post_fill_flushbuffer=True, velocity=None):
+        post_fill_flushbuffer=True, velocity=None, include_flushwaste=False):
         """Fill the tubings with the liquids of their reservoirs.
 
         Args:
@@ -1317,6 +1324,9 @@ class LegacyArchitecture(AbstractSystem):
                 reservoirs not to flush
             post_fill_flushbuffer : bool
                 whether to fill the central tubing with flushbuffer
+            include_flushwaste : bool
+                whether to also fill tubings of the flush waste (makes
+                sense for cleaning, to empty the reservoir)
 
         Returns:
             total_vol : float
@@ -1327,6 +1337,9 @@ class LegacyArchitecture(AbstractSystem):
         clid = [self.special_names[cl] for cl in clean_liquids
                 if cl.lower() in self.special_names.keys()]
         res_exceptions = res_exceptions + clid
+        logger.debug('Filling tubings from respective reservoirs to ' + str(dest))
+        logger.debug('Except reservoirs: ' + str(res_exceptions))
+        logger.debug('Filling everything with flushbuffer in the end? ' + str(post_fill_flushbuffer))
 
         dispense_flushvalve = (dest!='sample')
         for res_id, res in self.reservoir_a.items():
@@ -1335,10 +1348,21 @@ class LegacyArchitecture(AbstractSystem):
                 continue
             # vol = self.tubing_config.get_reservoir_to_pump(res_id, 'a')
             vol = self.tubing_config.get_reservoir_to_closest_valve(res_id)
+            vol += extra_vol
             total_vol += vol
             self._pump(
                 self.pump_a, vol, velocity=velocity, pickup_res=res_id,
                 dispense_flushvalve=dispense_flushvalve)
+        if include_flushwaste:
+            vol = self.tubing_config.get('pump_a', 'valve_flush')
+            vol += self.tubing_config.get('valve_flush', 'flush_waste')
+            vol += extra_vol
+            total_vol += vol
+            self._pump(
+                self.pump_a, vol, velocity=velocity, pickup_dir='out',
+                pickup_flushvalve=True,
+                dispense_flushvalve=dispense_flushvalve)
+
 
         if post_fill_flushbuffer:
             # now, flush everything with the flushbuffer
@@ -1346,6 +1370,7 @@ class LegacyArchitecture(AbstractSystem):
                 self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
                 + self.tubing_config.get('pump_a', 'valve_flush')
                 + self.tubing_config.get('valve_flush', 'sample'))
+            vol += extra_vol
             total_vol += vol
             self._pump(
                 self.pump_a, vol, velocity=velocity,
@@ -1354,7 +1379,7 @@ class LegacyArchitecture(AbstractSystem):
         return total_vol
 
 
-    def fill_tubings_reverse(self, extra_vol, src_res_id=None, res_exceptions=[]):
+    def fill_tubings_reverse(self, extra_vol, src_res_id=None, res_exceptions=[], velocity=None):
         """Fill the tubings of all reservoirs in the config, as well as
         the sample tubing with the liquid of the given reservoir.
         This is meant for cleaning typically.
@@ -1371,11 +1396,16 @@ class LegacyArchitecture(AbstractSystem):
                 the total volume moved
         """
         total_vol = 0
-        velocity = self.parameters.get('clean_velocity')
+        if not velocity:
+            velocity = self.parameters.get('clean_velocity')
         if src_res_id is None:
             src_res_id = self.special_names['flushbuffer_a']
         if not velocity:
             velocity = self.parameters['max_velocity']
+
+        logger.debug('Filling tubings backwards, from reservoir ' + str(src_res_id))
+        logger.debug('Except reservoirs: ' + str(res_exceptions))
+
         # fill flushbuffer-reservoir to flush outlet
         vol = (
             self.tubing_config.get_reservoir_to_pump(src_res_id, 'a')

@@ -6,6 +6,7 @@ Provides a command line interface frontend.
 import os
 import cmd
 import yaml
+import logging
 # import NotImplmentedError
 
 import PycroFlow.hamilton_architecture as ha
@@ -13,6 +14,9 @@ from PycroFlow.protocols import ProtocolBuilder
 import PycroFlow.imaging as im
 import PycroFlow.illumination as il
 from PycroFlow.orchestration import ProtocolOrchestrator
+
+
+logger = logging.getLogger(__name__)
 
 
 def start():
@@ -246,26 +250,31 @@ class PycroFlowInteractive(cmd.Cmd):
         vol = float(vol)
 
         kwargs = {ar.split('=')[0]: ar.split('=')[1] for ar in args}
+        logger.debug(str(kwargs))
         if 'velocity' in kwargs.keys():
             if ',' in kwargs['velocity']:
-                kwargs['velocity'] = kwargs['velocity'].index(',')
+                kwargs['velocity'] = kwargs['velocity'][:kwargs['velocity'].index(',')]
             kwargs['velocity'] = int(kwargs['velocity'])
         if 'pickup_res' in kwargs.keys():
             if ',' in kwargs['pickup_res']:
-                kwargs['pickup_res'] = kwargs['pickup_res'].index(',')
+                kwargs['pickup_res'] = kwargs['pickup_res'][:kwargs['pickup_res'].index(',')]
             kwargs['pickup_res'] = int(kwargs['pickup_res'])
         if 'dispense_res' in kwargs.keys():
             if ',' in kwargs['dispense_res']:
-                kwargs['dispense_res'] = kwargs['dispense_res'].index(',')
+                kwargs['dispense_res'] = kwargs['dispense_res'][:kwargs['dispense_res'].index(',')]
             kwargs['dispense_res'] = int(kwargs['dispense_res'])
         if 'pickup_flushvalve' in kwargs.keys():
             if ',' in kwargs['pickup_flushvalve']:
-                kwargs['pickup_flushvalve'] = kwargs['pickup_flushvalve'].index(',')
+                kwargs['pickup_flushvalve'] = kwargs['pickup_flushvalve'][:kwargs['pickup_flushvalve'].index(',')]
             kwargs['pickup_flushvalve'] = bool(int(kwargs['pickup_flushvalve']))
         if 'dispense_flushvalve' in kwargs.keys():
             if ',' in kwargs['dispense_flushvalve']:
-                kwargs['dispense_flushvalve'] = kwargs['dispense_flushvalve'].index(',')
+                kwargs['dispense_flushvalve'] = kwargs['dispense_flushvalve'][:kwargs['dispense_flushvalve'].index(',')]
             kwargs['dispense_flushvalve'] = bool(int(kwargs['dispense_flushvalve']))
+
+        if not self.orchestrator:
+            print('Start orchestration first.')
+            return
 
         if hasattr(self.orchestrator.fluid_system, pump_name):
             pump = getattr(self.orchestrator.fluid_system, pump_name)
@@ -277,9 +286,6 @@ class PycroFlowInteractive(cmd.Cmd):
         kwargs['pump'] = pump
         kwargs['vol'] = vol
 
-        if not self.orchestrator:
-            print('Start orchestration first.')
-            return
         self.orchestrator.execute_system_function(
             'fluid', self.fluid_system._pump,
             kwargs=kwargs)
