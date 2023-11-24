@@ -33,6 +33,7 @@ import threading
 # import ic
 from datetime import datetime
 from pycromanager import Acquisition, multi_d_acquisition_events, Core, Studio
+import pandas as pd
 
 from PycroFlow.orchestration import AbstractSystem
 from PycroFlow.util import ProgressBar
@@ -54,6 +55,22 @@ class ImagingSystem(AbstractSystem):
             self.studio = studio
         else:
             self.studio = Studio(convert_camel_case=True)
+
+        # PFS logging
+        self.pfs_pars = {  # for Mercury
+            'tag_pfs': 'TIPFSOffset',
+            'tag_zdrive': 'TIZDrive',
+            'tag_status': 'TIPFSStatus',
+            'prop_status': 'State',
+            'deltat': 10}
+        self.pfs_log = pd.DataFrame({
+            'datetime': [datetime.now()],
+            'pfs': [self.core.get_position(self.pfs_pars['tag_pfs'])],
+            'zdrive': [self.core.get_position(self.pfs_pars['tag_zdrive'])],
+            'status': [self.core.get_property(
+                self.pfs_pars['tag_status'],
+                self.pfs_pars['prop_status'])]
+        })
 
         self.create_savedir()
         self.create_starttime()
@@ -161,7 +178,7 @@ class ImagingSystem(AbstractSystem):
 
         if self.protocol['parameters'].get('show_progress'):
             self.probar = ProgressBar('Acquisition', n_frames)
-        with Acquisition(directory=acq_dir, name=acq_name, show_display=False,
+        with Acquisition(directory=acq_dir, name=acq_name, show_display=self.protocol['parameters'].get('show_display', True),
                          image_process_fn=self.image_process_fn) as acq:
             events = multi_d_acquisition_events(
                 num_time_points=n_frames,
@@ -171,6 +188,12 @@ class ImagingSystem(AbstractSystem):
                 order='tcpz',
             )
             acq.acquire(events)
+            if self.protocol['parameters'].get('show_display', True):
+                viewer = acq.get_viewer()
+        time.sleep(.2)
+        if viewer is not None and self.protocol['parameters'].get('close_display_after_acquisition', True):
+            viewer.close()
+        self.pfs_log.to_excel(os.path.join(acq_dir, acq_name, '_pfs.xlsx'))
         if self.protocol['parameters'].get('show_progress'):
             self.probar.end_progress()
         logger.debug('acquired all images of {:s}'.format(acq_name))
@@ -181,6 +204,20 @@ class ImagingSystem(AbstractSystem):
                 self.probar.progress_increment()
             except Exception as e:
                 print(e)
+        # log PFS position
+        now = datetime.now()
+        if self.pfs_log.loc[self.pfs_log.index.max(), 'datetime'] < now + self.pars['deltat']:
+            i = (0
+                 if self.pfs_log.index.max().isnull()
+                 else self.pfs_log.index.max() + 1)
+            self.pfs_log.loc[i] = {
+                'datetime': datetime.now(),
+                'pfs': self.core.get_position(self.pfs_pars['tag_pfs']),
+                'zdrive': self.core.get_position(self.pfs_pars['tag_zdrive']),
+                'status': self.core.get_property(
+                    self.pfs_pars['tag_status'], self.pfs_pars['prop_status']),
+            }
+
         return (img, meta)
 
     def record_movie_in_thread(self, acq_name, acquisition_config):
