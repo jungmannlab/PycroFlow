@@ -31,7 +31,7 @@ import time
 import logging
 import threading
 # import ic
-from datetime import datetime
+from datetime import datetime, timedelta
 from pycromanager import Acquisition, multi_d_acquisition_events, Core, Studio
 import pandas as pd
 
@@ -193,7 +193,7 @@ class ImagingSystem(AbstractSystem):
         time.sleep(.2)
         if viewer is not None and self.protocol['parameters'].get('close_display_after_acquisition', True):
             viewer.close()
-        self.pfs_log.to_excel(os.path.join(acq_dir, acq_name, '_pfs.xlsx'))
+        self.pfs_log.to_excel(os.path.join(acq_dir, acq_name + '_pfs.xlsx'))
         if self.protocol['parameters'].get('show_progress'):
             self.probar.end_progress()
         logger.debug('acquired all images of {:s}'.format(acq_name))
@@ -206,10 +206,9 @@ class ImagingSystem(AbstractSystem):
                 print(e)
         # log PFS position
         now = datetime.now()
-        if self.pfs_log.loc[self.pfs_log.index.max(), 'datetime'] < now + self.pars['deltat']:
-            i = (0
-                 if self.pfs_log.index.max().isnull()
-                 else self.pfs_log.index.max() + 1)
+        next_timepoint = self.pfs_log.loc[self.pfs_log.index.max(), 'datetime'] + timedelta(seconds=self.pfs_pars['deltat'])
+        if next_timepoint < now:
+            i = self.pfs_log.index.max() + 1
             self.pfs_log.loc[i] = {
                 'datetime': datetime.now(),
                 'pfs': self.core.get_position(self.pfs_pars['tag_pfs']),
