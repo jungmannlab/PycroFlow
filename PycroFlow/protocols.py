@@ -210,6 +210,20 @@ class ProtocolBuilder:
             if round < len(experiment['imagers']) - 1:
                 self.create_step_inject(
                     volume=wash_vol, reservoir_id=res_idcs[washbuf])
+                # check dark frames
+                self.create_step_signal(
+                    system='fluid', message='done dark-round {:d}'.format(round))
+                self.create_step_waitfor_signal(
+                    system='img', target='fluid',
+                    message='done dark-round {:d}'.format(round))
+                self.create_step_acquire(
+                    imgsttg['darkframes'], imgsttg['t_exp'],
+                    message='dark-round_{:d}-{:s}'.format(round, imager))
+                self.create_step_signal(
+                    system='img', message='done imaging dark-round {:d}'.format(round))
+                self.create_step_waitfor_signal(
+                    system='fluid', target='img',
+                    message='done imaging dark-round {:d}'.format(round))
 
         return self.steps, self.reservoir_vols
 
