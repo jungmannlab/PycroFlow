@@ -65,6 +65,7 @@ class ImagingSystem(AbstractSystem):
             'deltat': 10}
         self.pfs_log = pd.DataFrame({
             'datetime': [datetime.now()],
+            'frame': [0],
             'pfs': [self.core.get_position(self.pfs_pars['tag_pfs'])],
             'zdrive': [self.core.get_position(self.pfs_pars['tag_zdrive'])],
             'status': [self.core.get_property(
@@ -176,6 +177,12 @@ class ImagingSystem(AbstractSystem):
         # filter = self.protocol['parameters']['filter']
         # roi = self.protocol['parameters']['ROI']
 
+        # record PFS locations
+        self.pfs_log = pd.DataFrame(
+            columns=['datetime', 'frame', 'pfs', 'status'],
+            index=range(int(acquisition_config['frames']/100)))
+        self.curr_frame = 0
+
         if self.protocol['parameters'].get('show_progress'):
             self.probar = ProgressBar('Acquisition', n_frames)
         with Acquisition(directory=acq_dir, name=acq_name, show_display=self.protocol['parameters'].get('show_display', True),
@@ -205,17 +212,16 @@ class ImagingSystem(AbstractSystem):
             except Exception as e:
                 print(e)
         # log PFS position
-        now = datetime.now()
-        next_timepoint = self.pfs_log.loc[self.pfs_log.index.max(), 'datetime'] + timedelta(seconds=self.pfs_pars['deltat'])
-        if next_timepoint < now:
-            i = self.pfs_log.index.max() + 1
-            self.pfs_log.loc[i] = {
+        if self.curr_frame % 100 == 0:
+            self.pfs_log.loc[int(self.curr_frame/100)] = {
                 'datetime': datetime.now(),
+                'frame': self.curr_frame,
                 'pfs': self.core.get_position(self.pfs_pars['tag_pfs']),
                 'zdrive': self.core.get_position(self.pfs_pars['tag_zdrive']),
                 'status': self.core.get_property(
                     self.pfs_pars['tag_status'], self.pfs_pars['prop_status']),
             }
+        self.curr_frame += 1
 
         return (img, meta)
 
