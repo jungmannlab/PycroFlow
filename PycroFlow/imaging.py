@@ -61,7 +61,8 @@ class ImagingSystem(AbstractSystem):
             'tag_pfs': 'TIPFSOffset',
             'tag_zdrive': 'TIZDrive',
             'tag_status': 'TIPFSStatus',
-            'prop_status': 'State',
+            'prop_state': 'State',
+            'prop_status': 'Status',
             'deltat': 10}
         self.pfs_log = pd.DataFrame({
             'datetime': [datetime.now()],
@@ -70,7 +71,10 @@ class ImagingSystem(AbstractSystem):
             'zdrive': [self.core.get_position(self.pfs_pars['tag_zdrive'])],
             'status': [self.core.get_property(
                 self.pfs_pars['tag_status'],
-                self.pfs_pars['prop_status'])]
+                self.pfs_pars['prop_status'])],
+            'state': [self.core.get_property(
+                self.pfs_pars['tag_status'],
+                self.pfs_pars['prop_state'])]
         })
 
         self.create_savedir()
@@ -179,7 +183,7 @@ class ImagingSystem(AbstractSystem):
 
         # record PFS locations
         self.pfs_log = pd.DataFrame(
-            columns=['datetime', 'frame', 'pfs', 'status'],
+            columns=['datetime', 'frame', 'pfs', 'state', 'status', 'zdrive'],
             index=range(int(acquisition_config['frames']/100)))
         self.curr_frame = 0
 
@@ -196,7 +200,11 @@ class ImagingSystem(AbstractSystem):
             )
             acq.acquire(events)
             if self.protocol['parameters'].get('show_display', True):
-                viewer = acq.get_viewer()
+                try:
+                    viewer = acq.get_viewer()
+                except:
+                    viewer = None
+                    pass
         time.sleep(.2)
         if viewer is not None and self.protocol['parameters'].get('close_display_after_acquisition', True):
             viewer.close()
@@ -218,6 +226,8 @@ class ImagingSystem(AbstractSystem):
                 'frame': self.curr_frame,
                 'pfs': self.core.get_position(self.pfs_pars['tag_pfs']),
                 'zdrive': self.core.get_position(self.pfs_pars['tag_zdrive']),
+                'state': self.core.get_property(
+                    self.pfs_pars['tag_status'], self.pfs_pars['prop_state']),
                 'status': self.core.get_property(
                     self.pfs_pars['tag_status'], self.pfs_pars['prop_status']),
             }
