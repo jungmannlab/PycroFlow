@@ -310,7 +310,8 @@ class Pump():
     target_volume = 0
 
     def __init__(self, address, syringe,
-                 instrument_type='4', valve_type='1', resolution_mode=1):
+                 instrument_type='4', valve_type='1', resolution_mode=1,
+                 output_pos=None, input_pos=None):
         """
         Args:
             addresss : char
@@ -339,6 +340,13 @@ class Pump():
                 Not sure this can be freely chosen or depends on hardware
                 (but it is not the distinction between PSD4 and PSD4 smooth
                 flow!)
+            output_pos : int or str
+                the position for the syringe output. value also depends
+                on the valve type
+            input_pos : int or str
+                the position for the syringe input. if multiple inputs are
+                used, these need to be specified in the 'valve_pos' of
+                the respective reservoirs in the config.
         """
         assert instrument_type in [member.value for member in PSDTypes]
         assert syringe in [member.value for member in SyrTypes]
@@ -361,11 +369,18 @@ class Pump():
         self.psd.calculateSteps()
         self.psd.calculateSyringeStroke()
         self.psd.setVolume(syringe)
+         result = ham.communication.sendCommand(
+            self.psd.asciiAddress,
+            self.psd.command.syringeModeQuery(),
+            waitForPump=True)
 
         # syringe volume in µl
         self.syringe_volume = float(syringe[:-1])
         if syringe[-1] == 'm':
             self.syringe_volume *= 1000
+
+        self.input_pos = input_pos
+        self.output_pos = output_pos
 
     def dispense(self, vol, velocity=None, waitForPump=False):
         logger.debug('pump ascii {:s} dispensing {:.1f} ul at {:.1f}'.format(self.psd.asciiAddress, vol, velocity))
@@ -415,18 +430,27 @@ class Pump():
         """Sets the valve position of the PSD.
         Args:
             pos : str
-                one of 'in' or 'out'
+                one of 'in' or 'out', or other valve positions
             move_now : bool
                 whether to execute the command now or later
         Returns:
             cmd_ex_later : str
                 the command to execute later, only if move_now is True
         """
-        assert pos in ['in', 'out']
+        assert pos in ['in', 'out', *list(range(1, 9)), None]
         if pos == 'in':
-            cmd = self.psd.command.moveValveToInputPosition()
+            pos = self.input_pos  # may be 'in', 'out', None, or a number
+        elif pos == 'out':
+            pos = self.output_pos
+        if pos is None:
+            return
+
+        if pos == 'in':
+            cmd = self.mvp.command.moveValveToInputPosition()
+        elif pos == 'out':
+            cmd = self.mvp.command.moveValveToOutputPosition()
         else:
-            cmd = self.psd.command.moveValveToOutputPosition()
+            cmd = self.mvp.command.moveValveInShortestDirection(pos)
 
         if move_now:
             ham.communication.sendCommand(
