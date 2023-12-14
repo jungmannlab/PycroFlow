@@ -259,11 +259,16 @@ class Valve():
             + self.mvp.command.executeCommandBuffer())
         valve_type = map_valve_type(valve_type)
 
-    def set_valve(self, pos):
+    def set_valve(self, pos, move_now=True):
         """Sets the valve position of the PSD.
         Args:
             pos : str
                 one of 'in' or 'out', or a position between 1 and 8
+            move_now : bool
+                whether to execute the command now or later
+        Returns:
+            cmd_ex_later : str
+                the command to execute later, only if move_now is True
         """
         assert pos in ['in', 'out', *list(range(1, 9))]
         if pos == 'in':
@@ -272,10 +277,26 @@ class Valve():
             cmd = self.mvp.command.moveValveToOutputPosition()
         else:
             cmd = self.mvp.command.moveValveInShortestDirection(pos)
+
+        if move_now:
+            ham.communication.sendCommand(
+                self.mvp.asciiAddress,
+                cmd + self.mvp.command.executeCommandBuffer(),
+                waitForPump=False)
+        else:
+            ham.communication.sendCommand(
+                self.mvp.asciiAddress, cmd, waitForPump=False)
+            return self.mvp.command.executeCommandBuffer()
+
+    def wait_until_done(self):
+        """Waits until the valve is done moving.
+        Using pyHam functionality for now, therefore no timeout
+        Args:
+            timeout : float
+                timeout in s
+        """
         ham.communication.sendCommand(
-            self.mvp.asciiAddress,
-            cmd + self.mvp.command.executeCommandBuffer(),
-            waitForPump=False)
+            self.mvp.asciiAddress, 'Q', waitForPump=True)
 
     def get_status(self):
         """polls and returns the status
@@ -390,21 +411,32 @@ class Pump():
             + self.psd.command.executeCommandBuffer(),
             waitForPump=False)
 
-    def set_valve(self, pos):
+    def set_valve(self, pos, move_now=True):
         """Sets the valve position of the PSD.
         Args:
             pos : str
                 one of 'in' or 'out'
+            move_now : bool
+                whether to execute the command now or later
+        Returns:
+            cmd_ex_later : str
+                the command to execute later, only if move_now is True
         """
         assert pos in ['in', 'out']
         if pos == 'in':
             cmd = self.psd.command.moveValveToInputPosition()
         else:
             cmd = self.psd.command.moveValveToOutputPosition()
-        ham.communication.sendCommand(
-            self.psd.asciiAddress,
-            cmd + self.psd.command.executeCommandBuffer(),
-            waitForPump=True)
+
+        if move_now:
+            ham.communication.sendCommand(
+                self.psd.asciiAddress,
+                cmd + self.psd.command.executeCommandBuffer(),
+                waitForPump=True)
+        else:
+            ham.communication.sendCommand(
+                self.psd.asciiAddress, cmd, waitForPump=False)
+            return self.psd.command.executeCommandBuffer()
 
     def wait_until_done(self):
         """Waits until the pump is done moving.
