@@ -256,6 +256,7 @@ class LegacyArchitecture(AbstractSystem):
             self.reservoir_paths[rconfig['id']] = 'a'
         self.valve_flush = Valve(**config['valve_flush'])
         self.pump_a = Pump(**config['pump_a'])
+        self.valve_a[config['pump_a']['address']] = self.pump_a  # for setting valve positions
         self.pump_out = Pump(**config['pump_out'])
 
         self.special_names = config['special_names']

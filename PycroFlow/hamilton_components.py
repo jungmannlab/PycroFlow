@@ -369,7 +369,7 @@ class Pump():
         self.psd.calculateSteps()
         self.psd.calculateSyringeStroke()
         self.psd.setVolume(syringe)
-         result = ham.communication.sendCommand(
+        result = ham.communication.sendCommand(
             self.psd.asciiAddress,
             self.psd.command.syringeModeQuery(),
             waitForPump=True)
@@ -446,11 +446,11 @@ class Pump():
             return
 
         if pos == 'in':
-            cmd = self.mvp.command.moveValveToInputPosition()
+            cmd = self.psd.command.moveValveToInputPosition()
         elif pos == 'out':
-            cmd = self.mvp.command.moveValveToOutputPosition()
+            cmd = self.psd.command.moveValveToOutputPosition()
         else:
-            cmd = self.mvp.command.moveValveInShortestDirection(pos)
+            cmd = self.psd.command.moveValveInShortestDirection(pos)
 
         if move_now:
             ham.communication.sendCommand(
