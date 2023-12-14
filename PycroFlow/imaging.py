@@ -122,13 +122,41 @@ class ImagingSystem(AbstractSystem):
                 acquisition_config['frames'] = pentry['frames']
             if pentry.get('t_exp'):
                 acquisition_config['t_exp'] = pentry['t_exp']
+            # acq_name = (
+            #     acquisition_config['base_name']
+            #     + self.starttime_str
+            #     + '_prtclstep{:d}_{:s}'.format(
+            #         i, pentry['message']))
             acq_name = (
-                acquisition_config['base_name']
-                + self.starttime_str
-                + '_prtclstep{:d}_{:s}'.format(
-                    i, pentry['message']))
-            self.record_movie(acq_name, acquisition_config)
+                'prtclstep{:d}_{:s}'.format(i, pentry['message']))
+
+            # self.record_movie(acq_name, acquisition_config)
+            self.do_all_recodrings(acq_name, acquisition_config)
+
             logger.debug('done executing protocol entry {:d}'.format(i))
+
+    def do_all_recodrings(self, acq_name, acquisition_config):
+        """Do all the recordings between liquid exchanges. For now, this is
+        may be moving between different positions, if the flag in acquisition
+        config 'use_positions' is set. A DNA-PAINT movie is recorded in each
+        iteration.
+
+        Args:
+            acq_name : str
+                the name of the acquisition
+            acquisition_config : dict
+                the parameters for the acquisition
+        """
+        if not self.config.get('use_positions', False):
+            self.record_movie(acq_name, acquisition_config)
+        else:
+            pos_list = self.studio.get_position_list_manager().get_position_list()
+            for i in range(pos_list.get_number_of_positions()):
+                logger.debug('moving to position {:d}: {:s}'.format(i, str(pos)))
+                pos = pos_list.get_position(i)
+                pos.go_to_position(pos, self.core)
+                acq_name = acq_name + '_pos{:d}'.format(i)  # + str(pos)
+                self.record_movie(acq_name, acquisition_config)
 
     def pause_execution(self):
         """Pause protocol execution
