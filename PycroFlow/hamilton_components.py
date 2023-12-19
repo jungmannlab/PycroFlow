@@ -176,7 +176,8 @@ class TubingConfig():
 
     def get_reservoir_to_closest_valve(self, res_id):
         """Scan the configuration for an entry from reservoir to
-        a valve, which must then be the closest one.
+        a valve, which must then be the closest one. Also check whether
+        the reservoir is directly connected to pump_a
         """
         logger.debug('getting closest valve to reservoir {:s}'.format(str(res_id)))
         if isinstance(res_id, str):
@@ -189,6 +190,9 @@ class TubingConfig():
         entries = [
             ent for ent in self.config.keys()
             if ent[0] == res and 'V' in ent[1]]
+        entries += [
+            ent for ent in self.config.keys()
+            if ent[0] == res and 'pump_a' in ent[1]]
         logger.debug('found entries{:s}'.format(str(entries)))
         if len(entries) == 1:
             return self.config[entries[0]]
@@ -311,7 +315,7 @@ class Pump():
 
     def __init__(self, address, syringe,
                  instrument_type='4', valve_type='1', resolution_mode=1,
-                 output_pos=None, input_pos=None):
+                 output_pos=None, input_pos=None, motorsteps_per_step=1):
         """
         Args:
             addresss : char
@@ -347,6 +351,10 @@ class Pump():
                 the position for the syringe input. if multiple inputs are
                 used, these need to be specified in the 'valve_pos' of
                 the respective reservoirs in the config.
+            motorsteps_per_step : int, 1 or 2
+                The OEM / high force PSD4 version internally counts in half steps
+                (command P6000 for full stroke pickup), while the CE version counts
+                in full steps (command D3000 for full stroke dispense)
         """
         assert instrument_type in [member.value for member in PSDTypes]
         assert syringe in [member.value for member in SyrTypes]
@@ -373,6 +381,8 @@ class Pump():
             self.psd.asciiAddress,
             self.psd.command.syringeModeQuery(),
             waitForPump=True)
+            
+        self.psd.command.motorsteps_per_step = motorsteps_per_step
 
         # syringe volume in µl
         self.syringe_volume = float(syringe[:-1])
@@ -444,6 +454,8 @@ class Pump():
             pos = self.output_pos
         if pos is None:
             return
+            
+        logger.debug('setting valve to position' + str(pos))
 
         if pos == 'in':
             cmd = self.psd.command.moveValveToInputPosition()

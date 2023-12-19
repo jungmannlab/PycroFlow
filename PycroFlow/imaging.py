@@ -64,10 +64,17 @@ class ImagingSystem(AbstractSystem):
             'prop_state': 'State',
             'prop_status': 'Status',
             'deltat': 10}
+        self.pfs_pars = {  # for Crick
+            'tag_pfs': 'PFS',
+            'tag_zdrive': 'ZDrive',
+            'tag_status': 'PFS',
+            'prop_state': 'PFS in Range',
+            'prop_status': 'PFS Status',
+            'deltat': 10}
         self.pfs_log = pd.DataFrame({
             'datetime': [datetime.now()],
             'frame': [0],
-            'pfs': [self.core.get_position(self.pfs_pars['tag_pfs'])],
+            #'pfs': [self.core.get_position(self.pfs_pars['tag_pfs'])],
             'zdrive': [self.core.get_position(self.pfs_pars['tag_zdrive'])],
             'status': [self.core.get_property(
                 self.pfs_pars['tag_status'],
@@ -252,7 +259,7 @@ class ImagingSystem(AbstractSystem):
             self.pfs_log.loc[int(self.curr_frame/100)] = {
                 'datetime': datetime.now(),
                 'frame': self.curr_frame,
-                'pfs': self.core.get_position(self.pfs_pars['tag_pfs']),
+                #'pfs': self.core.get_position(self.pfs_pars['tag_pfs']),
                 'zdrive': self.core.get_position(self.pfs_pars['tag_zdrive']),
                 'state': self.core.get_property(
                     self.pfs_pars['tag_status'], self.pfs_pars['prop_state']),

@@ -259,10 +259,24 @@ class PycroFlowInteractive(cmd.Cmd):
             if ',' in kwargs['pickup_res']:
                 kwargs['pickup_res'] = kwargs['pickup_res'][:kwargs['pickup_res'].index(',')]
             kwargs['pickup_res'] = int(kwargs['pickup_res'])
+        if 'pickup_dir' in kwargs.keys():
+            if ',' in kwargs['pickup_dir']:
+                kwargs['pickup_dir'] = kwargs['pickup_dir'][:kwargs['pickup_dir'].index(',')]
+            try:
+                kwargs['pickup_dir'] = int(kwargs['pickup_dir'])
+            except:
+                pass
         if 'dispense_res' in kwargs.keys():
             if ',' in kwargs['dispense_res']:
                 kwargs['dispense_res'] = kwargs['dispense_res'][:kwargs['dispense_res'].index(',')]
             kwargs['dispense_res'] = int(kwargs['dispense_res'])
+        if 'dispense_dir' in kwargs.keys():
+            if ',' in kwargs['dispense_dir']:
+                kwargs['dispense_dir'] = kwargs['dispense_dir'][:kwargs['dispense_dir'].index(',')]
+            try:
+                kwargs['dispense_dir'] = int(kwargs['dispense_dir'])
+            except:
+                pass
         if 'pickup_flushvalve' in kwargs.keys():
             if ',' in kwargs['pickup_flushvalve']:
                 kwargs['pickup_flushvalve'] = kwargs['pickup_flushvalve'][:kwargs['pickup_flushvalve'].index(',')]
