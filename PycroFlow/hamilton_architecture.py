@@ -45,9 +45,9 @@ legacy_system_config = {
         {'address': 2, 'instrument_type': 'MVP', 'valve_type': '8-5'},
         {'address': 3, 'instrument_type': 'MVP', 'valve_type': '8-5'},
         {'address': 4, 'instrument_type': 'MVP', 'valve_type': '8-5'}],
-    'valve_flush':
+    'valve_flush':  # optional
         {'address': 5, 'instrument_type': 'MVP', 'valve_type': '4-2'},
-    'flush_pos': {'inject': 4, 'flush': 1}, # 1: flush/waste/pumptoblue; 2: pump sealed; 3: pump sealed; 4: inject/sample/pumptored
+    'flush_pos': {'inject': 4, 'flush': 1},  # if there is no flush valve: the position of pump_a outlet, otherwise: 1: flush/waste/pumptoblue; 2: pump sealed; 3: pump sealed; 4: inject/sample/pumptored
     'pump_a':
         {'address': 1, 'instrument_type': '4', 'valve_type': 'Y',
          'syringe': '500u'},
@@ -254,7 +254,10 @@ class LegacyArchitecture(AbstractSystem):
         for rconfig in config['reservoir_a']:
             self.reservoir_a.add(Reservoir(**rconfig))
             self.reservoir_paths[rconfig['id']] = 'a'
-        self.valve_flush = Valve(**config['valve_flush'])
+        if config.get('valve_flush'):
+            self.valve_flush = Valve(**config['valve_flush'])
+        else:
+            self.valve_flush = None
         self.pump_a = Pump(**config['pump_a'])
         self.valve_a[config['pump_a']['address']] = self.pump_a  # for setting valve positions
         self.pump_out = Pump(**config['pump_out'])
@@ -385,14 +388,22 @@ class LegacyArchitecture(AbstractSystem):
                 pickup_res=self.special_names['flushbuffer_a'],
                 dispense_res=resid)
         # fill outlet tubings
-        self._set_flush_valve(to_flush=False)
-        self._pump(
-            self.pump_a, max_vol, velocity=velocity, pickup_dir='in', dispense_dir='out',
-            pickup_res=self.special_names['flushbuffer_a'])
-        self._set_flush_valve(to_flush=True)
-        self._pump(
-            self.pump_a, max_vol, velocity=velocity, pickup_dir='in', dispense_dir='out',
-            pickup_res=self.special_names['flushbuffer_a'])
+        if isinstance(self.valve_flush, Valve):
+            self._set_flush_valve(to_flush=False)
+            self._pump(
+                self.pump_a, max_vol, velocity=velocity, pickup_dir='in', dispense_dir='out',
+                pickup_res=self.special_names['flushbuffer_a'])
+            self._set_flush_valve(to_flush=True)
+            self._pump(
+                self.pump_a, max_vol, velocity=velocity, pickup_dir='in', dispense_dir='out',
+                pickup_res=self.special_names['flushbuffer_a'])
+        elif isinstance(self.valve_flush, int:
+            self._pump(
+                self.pump_a, max_vol, velocity=velocity, pickup_dir='in', dispense_dir='out',
+                pickup_res=self.special_names['flushbuffer_a'])
+            self._pump(
+                self.pump_a, max_vol, velocity=velocity, pickup_dir='in', dispense_dir=self.valve_flush,
+                pickup_res=self.special_names['flushbuffer_a'])
         # empty syringe through the flush valve outlet
         input('Please replace all tubes with empty and weighed tubes.'
               + ' Make sure dispensed fluids are not picked up in'
@@ -1057,9 +1068,13 @@ class LegacyArchitecture(AbstractSystem):
                 # through the flush valve, though.
                 reservoirs[idx] = self.special_names['flushbuffer_a']
                 flushfactor = pentry.get('flushfactor', 1)
-                tubing_vol = (
-                    self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
-                    + self.tubing_config.get('pump_a', 'valve_flush'))
+                if self.valve_flush:
+                    tubing_vol = (
+                        self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
+                        + self.tubing_config.get('pump_a', 'valve_flush'))
+                else:
+                    tubing_vol = (
+                        self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a'))
                 volumes[idx] = flushfactor * tubing_vol
         reservoirs[-1] = self.special_names['flushbuffer_a']
         volumes[-1] = self._calc_vol_to_inlet(reservoirs[-1])
@@ -1101,9 +1116,13 @@ class LegacyArchitecture(AbstractSystem):
         from the tubing configuration. This is legacy system specific
         """
         vol_res_pump_a = self.tubing_config.get_reservoir_to_pump(reservoir_id, 'a')
-        vol_pump_a_valveflush = self.tubing_config.get('pump_a', 'valve_flush')
-        vol_valveflush_inlet = self.tubing_config.get('valve_flush', 'sample')
-        return vol_res_pump_a + vol_pump_a_valveflush + vol_valveflush_inlet
+        if self.valve_flush:
+            vol_pump_a_valveflush = self.tubing_config.get('pump_a', 'valve_flush')
+            vol_valveflush_inlet = self.tubing_config.get('valve_flush', 'sample')
+            vol_pump_a_inlet = vol_pump_a_valveflush + vol_valveflush_inlet
+        else:
+            vol_pump_a_inlet = self.tubing_config.get('pump_a', 'sample')
+        return vol_res_pump_a + vol_pump_a_inlet
 
     def _set_valves(self, reservoir_id):
         """Set the valves to access the reservoir specified
@@ -1124,12 +1143,18 @@ class LegacyArchitecture(AbstractSystem):
             flushfactor : float
                 fold of tubing volume to flush
         """
-        self._set_flush_valve(to_flush=True)
-        self._set_valves(self.special_names['flushbuffer_a'])
-        tubing_vol = (
-            self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
-            + self.tubing_config.get('pump_a', 'valve_flush'))
-        self._pump(tubing_vol * flushfactor)
+        if isinstance(self.valve_flush, Valve):
+            self._set_flush_valve(to_flush=True)
+            self._set_valves(self.special_names['flushbuffer_a'])
+            tubing_vol = (
+                self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
+                + self.tubing_config.get('pump_a', 'valve_flush'))
+            self._pump(tubing_vol * flushfactor)
+        else:
+            tubing_vol = (
+                self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
+                + self.tubing_config.get('pump_a', 'valve_flush'))
+            self._pump(tubing_vol * flushfactor, dispense_dir=self.flush_pos['flush'])
 
     def _set_flush_valve(self, to_flush=True):
         """Set the flush valve position
@@ -1163,7 +1188,7 @@ class LegacyArchitecture(AbstractSystem):
             pickup_dir : str
                 one of ['in', 'out']. where to pump from. Default: 'in'
             dispense_dir : str
-                one of ['in', 'out']. where to pump from. Default: 'out'
+                one of ['in', 'out', range(nvalves)]. where to pump from. Default: 'out'
             pickup_res, dispense_res : int or None
                 the reservoir to pickup from / dispense to
             pickup_flushvalve, dispense_flushvalve : int or None
@@ -1240,7 +1265,8 @@ class LegacyArchitecture(AbstractSystem):
             * self.pump_a.syringe_volume / self.pump_out.syringe_volume)
         pumpout_dispense_velocity = self.parameters['pumpout_dispense_velocity']
 
-        self._set_flush_valve(to_flush=False)
+        if isinstance(self.valve_flush, Valve):
+            self._set_flush_valve(to_flush=False)
         curr_pumpa_vol = self.pump_a.get_current_volume()
         curr_pumpout_vol = curr_pumpa_vol * extractionfactor
         if curr_pumpa_vol > 0:
