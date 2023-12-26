@@ -397,7 +397,7 @@ class LegacyArchitecture(AbstractSystem):
             self._pump(
                 self.pump_a, max_vol, velocity=velocity, pickup_dir='in', dispense_dir='out',
                 pickup_res=self.special_names['flushbuffer_a'])
-        elif isinstance(self.valve_flush, int:
+        elif isinstance(self.valve_flush, int):
             self._pump(
                 self.pump_a, max_vol, velocity=velocity, pickup_dir='in', dispense_dir='out',
                 pickup_res=self.special_names['flushbuffer_a'])
@@ -1167,7 +1167,10 @@ class LegacyArchitecture(AbstractSystem):
             pos = self.flush_pos['flush']
         else:
             pos = self.flush_pos['inject']
-        self.valve_flush.set_valve(pos)
+        if isinstance(self.valve_flush, Valve):
+            self.valve_flush.set_valve(pos)
+        else:
+            self.pump_a.set_valve(pos)
 
     def _pump(self, pump, vol, velocity=None,
               pickup_dir='in', dispense_dir='out',
@@ -1393,10 +1396,13 @@ class LegacyArchitecture(AbstractSystem):
 
         if post_fill_flushbuffer:
             # now, flush everything with the flushbuffer
-            vol = (
-                self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
-                + self.tubing_config.get('pump_a', 'valve_flush')
-                + self.tubing_config.get('valve_flush', 'sample'))
+            vol = self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
+            if isinstance(self.valve_flush, Valve):
+                vol += (
+                    self.tubing_config.get('pump_a', 'valve_flush')
+                    + self.tubing_config.get('valve_flush', 'sample'))
+            else:
+                vol += self.tubing_config.get('pump_a', 'sample')
             vol += extra_vol
             total_vol += vol
             self._pump(

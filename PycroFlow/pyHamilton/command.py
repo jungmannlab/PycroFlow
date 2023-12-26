@@ -74,6 +74,7 @@ class Command:
 
         value: int = self.volumeToSteps(volume)
         if self.checkIntervalCorrectness(value, typeOf) == True:
+            value = int(value * self.motorsteps_per_step)  # apparently needed as the OEM/high force PSD4 needs D6000 for a full stroke
             cmd += str(value)
         else:
             print("Invalid value \"" + str(volume) + "\" for volume!")
@@ -115,6 +116,7 @@ class Command:
     def checkValueInInterval(self, value: int, valueST: int, valueHG: int):
         bVal: bool = False
         # if standard mode
+        value = value / self.motorsteps_per_step
         if self.resolution_mode == 0 and 0 <= value <= valueST:
             bVal = True
         elif self.resolution_mode == 1 and 0 <= value <= valueHG:

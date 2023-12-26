@@ -5,6 +5,7 @@ class CommandPSD4(Command):
     def __init__(self, type):
         super().__init__(type)
         self.resolution_mode = 0
+        self.motorsteps_per_step = 1
 
     def setSyringeMode(self, mode: int):
         cmd = super().setSyringeMode(mode)
@@ -24,6 +25,7 @@ class CommandPSD4(Command):
         bResult = False
         cmd: str = 'A'
 
+        value = int(value * self.motorsteps_per_step)
         if self.checkValueInInterval(value, 3000, 24000):
             cmd += str(value)
         else:
@@ -34,6 +36,7 @@ class CommandPSD4(Command):
     def absolutePositionWithReadyStatus(self, value: int):
         # absolute position x where 0 ≤ x ≤ 3,000 in standard mode or 0 ≤ x ≤ 24,000 in high resolution mode
         cmd: str = 'a'
+        value = int(value * self.motorsteps_per_step)
         if self.checkValueInInterval(value, 3000, 24000):
             cmd += str(value)
         else:
@@ -44,6 +47,7 @@ class CommandPSD4(Command):
     def relativePickup(self, value: int):
         # number of steps x where 0 ≤ x ≤ 3,000 in standard mode or 0 ≤ x ≤ 24,000 in high resolution mode
         cmd: str = 'P'
+        value = int(value * self.motorsteps_per_step)
         if self.checkValueInInterval(value, 3000, 24000):
             cmd += str(value)
         else:
@@ -54,6 +58,7 @@ class CommandPSD4(Command):
     def relativePickupWithReadyStatus(self, value: int):
         # number of steps x where 0 ≤ x ≤ 3,000 in standard mode or 0 ≤ x ≤ 24,000 in high resolution mode
         cmd: str = 'p'
+        value = int(value * self.motorsteps_per_step)
         if self.checkValueInInterval(value, 3000, 24000):
             cmd += str(value)
         else:
@@ -64,6 +69,7 @@ class CommandPSD4(Command):
     def relativeDispense(self, value: int):
         # number of steps x where 0 ≤ x ≤ 3,000 in standard mode or 0 ≤ x ≤ 24,000 in high resolution mode
         cmd: str = 'D'
+        value = int(value * self.motorsteps_per_step)
         if self.checkValueInInterval(value, 3000, 24000):
             cmd += str(value)
         else:
@@ -74,6 +80,7 @@ class CommandPSD4(Command):
     def relativeDispenseWithReadyStatus(self, value: int):
         # number of steps x where 0 ≤ x ≤ 3,000 in standard mode or 0 ≤ x ≤ 24,000 in high resolution mode
         cmd: str = 'd'
+        value = int(value * self.motorsteps_per_step)
         if self.checkValueInInterval(value, 3000, 24000):
             cmd += str(value)
         else:
@@ -84,6 +91,7 @@ class CommandPSD4(Command):
     def returnSteps(self, value: int):
         # Return Steps x where 0 ≤ x ≤ 3,000 in standard mode or 0 ≤ x ≤ 24,000 in high resolution mode
         cmd: str = 'K'
+        value = int(value * self.motorsteps_per_step)
         if self.checkValueInInterval(value, 100, 800):
             cmd += str(value)
         else:
@@ -94,6 +102,7 @@ class CommandPSD4(Command):
     def backoffSteps(self, value: int):
         # Back-off Steps x where 0 ≤ x ≤ 3,000 in standard mode or 0 ≤ x ≤ 24,000
         cmd: str = 'k'
+        value = int(value * self.motorsteps_per_step)
         if self.checkValueInInterval(value, 200, 1600):
             cmd += str(value)
         else:
@@ -119,6 +128,7 @@ class CommandPSD4(Command):
 
     def setStartVelocity(self, value: int):
         cmd: str = 'v'
+        value = int(value * self.motorsteps_per_step)
         if 50 <= value <= 1000:
             cmd += str(value)
         else:
@@ -128,6 +138,7 @@ class CommandPSD4(Command):
 
     def setMaximumVelocity(self, value: int):
         cmd: str = 'V'
+        value = int(value * self.motorsteps_per_step)
         if 2 <= value <= 5800:
             cmd += str(value)
         else:
@@ -137,6 +148,7 @@ class CommandPSD4(Command):
 
     def stopVelocity(self, value: int):
         cmd: str = 'c'
+        value = int(value * self.motorsteps_per_step)
         if 50 <= value <= 2700:
             cmd += str(value)
         else:
