@@ -65,13 +65,13 @@ logger = logging.getLogger(__name__)
 
 
 protocol_fluid = [
-    {'$type': 'inject', 'reservoir_id': 0, 'volume': 500},
+    {'$type': 'inject', 'reservoir_id': 0, 'volume': 500, 'wait_time': 1},
     {'$type': 'incubate', 'duration': 120},
-    {'$type': 'inject', 'reservoir_id': 1, 'volume': 500, 'velocity': 600},
+    {'$type': 'inject', 'reservoir_id': 1, 'volume': 500, 'velocity': 600, 'wait_time': 1},
     {'target': 'fluid', '$type': 'signal', 'value': 'fluid round 1 done'},
     {'$type': 'flush', 'flushfactor': 1},
     {'$type': 'wait for signal', 'target': 'img', 'value': 'round 1 done'},
-    {'$type': 'inject', 'reservoir_id': 14, 'volume': 500},
+    {'$type': 'inject', 'reservoir_id': 14, 'volume': 500, 'wait_time': 1},
 ]
 
 protocol_imaging = [

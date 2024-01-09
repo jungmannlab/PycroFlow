@@ -752,12 +752,13 @@ class LegacyArchitecture(AbstractSystem):
             type='wait_image',
             type='wait_time', duration
         """
+        wait_time = self.protocol[i].get('wait_time', 0)
         if self.parameters['mode'] == 'tubing_stack':
             if (self.last_protocol_entry != i - 1) or (i == 0):
                 self._assemble_tubing_stack(i)
             for reservoir_id, vol in self.tubing_stack[i]:
                 self._set_valves(reservoir_id)
-                self._inject(vol)
+                self._inject(vol, wait_time=wait_time)
             self.last_protocol_entry = i
         elif self.parameters['mode'] == 'tubing_flush':
             # # this way, we flush (1+flushfactor)
@@ -784,9 +785,10 @@ class LegacyArchitecture(AbstractSystem):
         if pentry['$type'] == 'inject':
             # flush_volume = self._calc_vol_to_inlet(pentry['reservoir_id'])
             injection_volume = pentry['volume']
+            wait_time = pentry.get('wait_time', 0)
             # first, set up the volume required
             self._set_valves(pentry['reservoir_id'])
-            self._inject(injection_volume, velocity)
+            self._inject(injection_volume, velocity, wait_time=wait_time)
             # afterwards, flush in buffer to get the pentry
             # volume to the sample
             # self._set_valves(self.special_names['flushbuffer_a'])
@@ -1241,7 +1243,7 @@ class LegacyArchitecture(AbstractSystem):
                 self._set_flush_valve(dispense_flushvalve)
             pump.dispense(pump_volume, velocity, waitForPump=True)
 
-    def _inject(self, vol, velocity=None, extractionfactor=None):
+    def _inject(self, vol, velocity=None, extractionfactor=None, wait_time=0):
         """Inject volume from the currently selected reservoir into
         the sample with a given flow velocity. Simultaneously, the extraction
         pump extracts the same volume.
@@ -1257,6 +1259,8 @@ class LegacyArchitecture(AbstractSystem):
                 being extracted than injected, leading to spillage. To prevent
                 this, the extraction needle could be positioned higher, and
                 extraction performed faster than injection
+            wait_time : int
+                the time to wait between pickup and dispense
         """
         logger.debug('injecting {:.1f}'.format(vol))
         if velocity is None:
@@ -1299,6 +1303,8 @@ class LegacyArchitecture(AbstractSystem):
                 curr_pumpout_vol, pumpout_dispense_velocity, waitForPump=False)
             self.pump_out.wait_until_done()
             self.pump_a.wait_until_done()
+            # wait to let the pressure equilibrate and the fluid to settle
+            time.sleep(wait_time)
 
             self.pump_a.set_valve('out')
             self.pump_out.set_valve('in')

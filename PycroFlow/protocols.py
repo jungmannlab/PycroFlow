@@ -11,6 +11,8 @@ fluid_settings = {
     'vol_wash': 500,  # in ul
     'vol_imager_pre': 500,  # in ul
     'vol_imager_post': 100,  # in ul
+    'wait_after_pickup': 10,  # wait time to let fluid settle, in s
+    'vol_remove_before_wash': 500,  # volume to remove before washing, and add after washing, to improve efficiency
     'reservoir_names': {
         1: 'R1', 3: 'R3', 5: 'R5', 6: 'R6',
         7: 'R2', 8: 'R4', 9: 'Res9', 10: 'Buffer B+'},
@@ -19,6 +21,7 @@ fluid_settings = {
         'wash_buffer': 'Buffer B+',
         'imagers': [
             'R4', 'R2', 'R4', 'R2', 'R4', 'R2', 'R4', 'R2', 'R4', 'R2'],
+        'initial_imager': 'Rx',  # if string, do an acquisition before fluid 
 }
 imaging_settings ={
     'frames': 50000,
@@ -173,8 +176,12 @@ class ProtocolBuilder:
         reservoirs = config['fluid']['settings']['reservoir_names']
         imager_vol_pre = config['fluid']['settings']['vol_imager_pre']
         imager_vol_post = config['fluid']['settings']['vol_imager_post']
+        wait_after_pickup = config['fluid']['settings'].get('wait_after_pickup', 0)
         wash_vol = config['fluid']['settings']['vol_wash']
         wash_vol_pre = config['fluid']['settings']['vol_wash_pre']
+        vol_remove_before_wash = config['fluid']['settings'].get('vol_remove_before_wash', 0)
+
+        initial_imager = experiment.get('initial_imager')
 
         imgsttg = config['img']['settings']
 
@@ -187,11 +194,58 @@ class ProtocolBuilder:
         res_idcs = {name: nr - 1 for nr, name in reservoirs.items()}
         res_idcs = {name: nr for nr, name in reservoirs.items()}
 
-        self.create_step_pumpout(volume=wash_vol_pre)
-        self.create_step_inject(volume=wash_vol_pre, reservoir_id=res_idcs[washbuf])
-        for round, imager in enumerate(experiment['imagers']):
+        if isinstance(initial_imager, str):
+            round = 0
+            imager = initial_imager
+            self.create_step_acquire(
+                imgsttg['frames'], imgsttg['t_exp'],
+                message='round_{:d}-{:s}'.format(round, imager))
+            self.create_step_signal(
+                system='img', message='done imaging round {:d}'.format(round))
+            self.create_step_waitfor_signal(
+                system='fluid', target='img',
+                message='done imaging round {:d}'.format(round))
+            self.create_step_pumpout(volume=wash_vol_pre)
             self.create_step_inject(
-                volume=int(imager_vol_pre), reservoir_id=res_idcs[imager])
+                volume=wash_vol_pre, reservoir_id=res_idcs[washbuf])
+            self.create_step_inject(
+                volume=int(imager_vol_post), reservoir_id=res_idcs[imager])
+            self.create_step_pumpout(volume=vol_remove_before_wash)
+            self.create_step_inject(
+                volume=wash_vol - vol_remove_before_wash,
+                reservoir_id=res_idcs[washbuf])
+            self.create_step_inject(
+                volume=vol_remove_before_wash,
+                reservoir_id=res_idcs[washbuf],
+                extractionfactor=0)
+            # check dark frames
+            self.create_step_signal(
+                system='fluid', message='done dark-round {:d}'.format(round))
+            self.create_step_waitfor_signal(
+                system='img', target='fluid',
+                message='done dark-round {:d}'.format(round))
+            self.create_step_acquire(
+                imgsttg['darkframes'], imgsttg['t_exp'],
+                message='dark-round_{:d}-{:s}'.format(round, imager))
+            self.create_step_signal(
+                system='img', message='done imaging dark-round {:d}'.format(round))
+            self.create_step_waitfor_signal(
+                system='fluid', target='img',
+                message='done imaging dark-round {:d}'.format(round))
+        else:
+            self.create_step_pumpout(volume=wash_vol_pre)
+            self.create_step_inject(volume=wash_vol_pre, reservoir_id=res_idcs[washbuf])
+        for round, imager in enumerate(experiment['imagers']):
+            if isinstance(initial_imager, str):
+                round = round + 1
+            self.create_step_pumpout(volume=vol_remove_before_wash)  # reduce volume to wash
+            self.create_step_inject(  # wash at low volume
+                volume=int(imager_vol_pre - vol_remove_before_wash),
+                reservoir_id=res_idcs[imager])
+            self.create_step_inject(  # fill up the missing volume
+                volume=int(vol_remove_before_wash),
+                reservoir_id=res_idcs[imager],
+                extractionfactor=0)
             self.create_step_signal(
                 system='fluid', message='done round {:d}'.format(round))
             self.create_step_waitfor_signal(
@@ -208,8 +262,14 @@ class ProtocolBuilder:
             self.create_step_inject(
                 volume=int(imager_vol_post), reservoir_id=res_idcs[imager])
             if round < len(experiment['imagers']) - 1:
+                self.create_step_pumpout(volume=vol_remove_before_wash)
                 self.create_step_inject(
-                    volume=wash_vol, reservoir_id=res_idcs[washbuf])
+                    volume=wash_vol - vol_remove_before_wash,
+                    reservoir_id=res_idcs[washbuf])
+                self.create_step_inject(
+                    volume=vol_remove_before_wash,
+                    reservoir_id=res_idcs[washbuf],
+                    extractionfactor=0)
                 # check dark frames
                 self.create_step_signal(
                     system='fluid', message='done dark-round {:d}'.format(round))
@@ -465,13 +525,15 @@ class ProtocolBuilder:
              'volume': volume})
 
     def create_step_inject(
-            self, volume, reservoir_id):
+            self, volume, reservoir_id, wait_time=0):
         """Creates a step to wait for a TTL pulse.
         Args:
             volume : int
                 volume to inject in integer µl
             reservoir_id : int
                 the reservoir to use
+            wait_time : int
+                number of seconds to wait between pickup and dispense
         Returns:
             step : dict
                 the step configuration
@@ -479,7 +541,8 @@ class ProtocolBuilder:
         self.steps['fluid'].append(
             {'$type': 'inject',
              'volume': volume,
-             'reservoir_id': reservoir_id})
+             'reservoir_id': reservoir_id,
+             'wait_time': wait_time})
         self.reservoir_vols[reservoir_id] += volume
 
     def create_step_signal(self, system, message):
