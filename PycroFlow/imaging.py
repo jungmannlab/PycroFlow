@@ -191,7 +191,7 @@ class ImagingSystem(AbstractSystem):
         if self.studio.live().is_live_mode_on():
             self.studio.live().set_live_mode_on(False)
         events = multi_d_acquisition_events(
-            num_time_points=10, time_interval_s=.1)
+            num_time_points=10, time_interval_s=0, channel_exposures_ms=[100])
         with Acquisition(
                 directory=self.config['save_dir'], name='testacquisition',
                 show_display=False, debug=False) as acq:

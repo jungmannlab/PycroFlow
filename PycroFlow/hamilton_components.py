@@ -312,6 +312,7 @@ class Valve():
 class Pump():
     current_volume = 0
     target_volume = 0
+    valve_pos = 0
 
     def __init__(self, address, syringe,
                  instrument_type='4', valve_type='1', resolution_mode=1,
@@ -454,6 +455,7 @@ class Pump():
             pos = self.output_pos
         if pos is None:
             return
+        self.valve_pos = pos
             
         logger.debug('setting valve to position' + str(pos))
 

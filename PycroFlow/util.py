@@ -15,9 +15,9 @@ def fmt_time_delta(time_delta, width=20):
 		fmt_dt : str
 			the formatted time delta
 	"""
-	days = time_delta // (3600 * 24)
-	hrs = time_delta // 3600
-	mins = time_delta // 60
+	days = int(time_delta // (3600 * 24))
+	hrs = int(time_delta // 3600)
+	mins = int(time_delta // 60)
 	secs = int(time_delta % 60)
 	msecs = int(1000 * (time_delta % 1))
 	numbers = [days, hrs, mins, secs, msecs]
