@@ -312,7 +312,7 @@ class Valve():
 class Pump():
     current_volume = 0
     target_volume = 0
-    valve_pos = 0
+    valve_pos = None
 
     def __init__(self, address, syringe,
                  instrument_type='4', valve_type='1', resolution_mode=1,
