@@ -159,11 +159,11 @@ class ImagingSystem(AbstractSystem):
         else:
             pos_list = self.studio.get_position_list_manager().get_position_list()
             for i in range(pos_list.get_number_of_positions()):
-                logger.debug('moving to position {:d}: {:s}'.format(i, str(pos)))
                 pos = pos_list.get_position(i)
+                logger.debug('moving to position {:d}'.format(i))
                 pos.go_to_position(pos, self.core)
-                acq_name = acq_name + '_pos{:d}'.format(i)  # + str(pos)
-                self.record_movie(acq_name, acquisition_config)
+                acq_name_p = acq_name + '_pos{:d}'.format(i)  # + str(pos)
+                self.record_movie(acq_name_p, acquisition_config)
 
     def pause_execution(self):
         """Pause protocol execution
