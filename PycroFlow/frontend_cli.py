@@ -184,12 +184,22 @@ class PycroFlowInteractive(cmd.Cmd):
         self.orchestrator.abort_orchestration()
 
     def do_start_protocol(self, line):
-        """Start the protocol
+        """Start the protocol.
+        Args:
+            protocol start entries
+            e.g. "start_protocol fluid: 5, img: 2"
         """
         if not self.orchestrator:
             print('Start orchestration first.')
             return
-        self.orchestrator.start_protocol()
+
+        start_entries = {}
+        if line:
+            parts = line.split(',')
+            for part in parts:
+                syst, step = part.split(':')
+                start_entries[syst.strip()] = int(step.strip())
+        self.orchestrator.start_protocol(start_entries)
 
     def do_pause_protocol(self, line):
         """Start the protocol

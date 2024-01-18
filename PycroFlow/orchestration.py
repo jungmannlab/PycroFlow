@@ -168,7 +168,14 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
     def run_protocol(self):
         logger.debug('start running protocol: {:s}'.format(str(self.protocol['protocol_entries'])))
         nsteps = len(self.protocol['protocol_entries'])
-        for i, step in enumerate(self.protocol['protocol_entries']):
+        # potentially, a start protocol entry was given?
+        msg = self.search_message('start entry:')
+        if msg:
+            start_entry = int(msg[len('start entry:'):].strip())
+        else:
+            start_entry = 0
+
+        for i, step in enumerate(start_entry, self.protocol['protocol_entries']):
             logger.debug('System {:s} performing step {:d}/{:d}: {:s}'.format(self.target, i+1, nsteps, str(step)))
             print('System ', self.target, ' performing step', i+1, '/', nsteps, ':', step)
             if step['$type'].lower() == 'signal':
@@ -221,6 +228,15 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         with self.txchange[self.target + '_lock']:
             self.txchange[self.target].append(message)
 
+    def search_message(self, substring):
+        with self.txchange[self.target + '_lock']:
+            messages = self.txchange[self.target]
+        for msg in messages:
+            if substring in msg:
+                return msg
+        else:
+            return None
+
     def poll_protocol_finished(self):
         events = [
             v for k, v in self.txchange.items()
@@ -265,9 +281,9 @@ class FluidHandler(AbstractSystemHandler):
 
 
 class ImagingHandler(AbstractSystemHandler):
-    
+
     target = 'img'
-    
+
     def __init__(self, imaging_system, protocol, threadexchange):
         super().__init__(protocol, threadexchange)
         self.system = imaging_system
@@ -345,7 +361,19 @@ class ProtocolOrchestrator():
         self.imaging_handler.start()
         self.illumination_handler.start()
 
-    def start_protocol(self):
+    def start_protocol(self, system_steps={}):
+        """
+        Args:
+            system steps : dict
+                sets the start steps of various systems
+                keys: e.g. 'fluid', 'img', 'illu'
+                vals: int
+        """
+        if system_steps != {}:
+            for syst, step in system_steps.items():
+                with self.threadexchange[syst + '_lock']:
+                    self.threadexchange[syst].append(f'start entry: {step}')
+
         self.threadexchange['start_protocol_flag'].set()
 
     def abort_protocol(self):
