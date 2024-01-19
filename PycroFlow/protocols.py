@@ -528,6 +528,7 @@ class ProtocolBuilder:
             step : dict
                 the step configuration
         """
+        volume = volume if volume > 0 else 1
         pars = {
             '$type': 'pump_out',
             'volume': volume}
@@ -552,6 +553,7 @@ class ProtocolBuilder:
             step : dict
                 the step configuration
         """
+        volume = volume if volume > 0 else 1
         self.steps['fluid'].append(
             {'$type': 'inject',
              'volume': volume,
