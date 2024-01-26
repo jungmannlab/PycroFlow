@@ -902,6 +902,7 @@ class LegacyArchitecture(AbstractSystem):
             empty_finally :  bool
                 whether to empty the tubings in the end or keep the last liquid in
         """
+        print('Starting tubing cleaning procedure. Make sure the Sample Input and Output Needles are fluidly connected.')
         res_exceptions = cleaning_reservoirs
 
         velocity = self.parameters.get('clean_velocity')
