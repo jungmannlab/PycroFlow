@@ -175,7 +175,8 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         else:
             start_entry = 0
 
-        for i, step in enumerate(start_entry, self.protocol['protocol_entries']):
+        for i in range(start_entry, len(self.protocol['protocol_entries'])):
+            step = self.protocol['protocol_entries'][i]
             logger.debug('System {:s} performing step {:d}/{:d}: {:s}'.format(self.target, i+1, nsteps, str(step)))
             print('System ', self.target, ' performing step', i+1, '/', nsteps, ':', step)
             if step['$type'].lower() == 'signal':

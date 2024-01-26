@@ -753,12 +753,13 @@ class LegacyArchitecture(AbstractSystem):
             type='wait_time', duration
         """
         wait_time = self.protocol[i].get('wait_time', 0)
+        extractionfactor = self.protocol[i].get('extractionfactor')
         if self.parameters['mode'] == 'tubing_stack':
             if (self.last_protocol_entry != i - 1) or (i == 0):
                 self._assemble_tubing_stack(i)
             for reservoir_id, vol in self.tubing_stack[i]:
                 self._set_valves(reservoir_id)
-                self._inject(vol, wait_time=wait_time)
+                self._inject(vol, wait_time=wait_time, extractionfactor=extractionfactor)
             self.last_protocol_entry = i
         elif self.parameters['mode'] == 'tubing_flush':
             # # this way, we flush (1+flushfactor)
@@ -786,15 +787,18 @@ class LegacyArchitecture(AbstractSystem):
             # flush_volume = self._calc_vol_to_inlet(pentry['reservoir_id'])
             injection_volume = pentry['volume']
             wait_time = pentry.get('wait_time', 0)
+            extractionfactor = pentry.get('extractionfactor')
             # first, set up the volume required
             self._set_valves(pentry['reservoir_id'])
-            self._inject(injection_volume, velocity, wait_time=wait_time)
+            self._inject(
+                injection_volume, velocity, wait_time=wait_time,
+                extractionfactor=extractionfactor)
             # afterwards, flush in buffer to get the pentry
             # volume to the sample
             # self._set_valves(self.special_names['flushbuffer_a'])
             # self._inject(flush_volume, velocity)
         if pentry['$type'] == 'pump_out':
-            self._pump_out(pentry['volume'])
+            self._pump_out(pentry['volume'], extractionfactor=pentry.get('extractionfactor'))
 
         # tubing full of buffer, cannot simply proceed
         self.last_protocol_entry = -1
@@ -1271,6 +1275,11 @@ class LegacyArchitecture(AbstractSystem):
             extractionfactor * velocity
             * self.pump_a.syringe_volume / self.pump_out.syringe_volume)
         pumpout_dispense_velocity = self.parameters['pumpout_dispense_velocity']
+        
+        # assuming valve of pump a is set to pickup pos initially
+        pickup_pos = self.pump_a.valve_pos
+        if pickup_pos is None:
+            pickup_pos = self.pump_a.input_pos
 
         if isinstance(self.valve_flush, Valve):
             self._set_flush_valve(to_flush=False)
@@ -1279,14 +1288,22 @@ class LegacyArchitecture(AbstractSystem):
         if curr_pumpa_vol > 0:
             self.pump_a.set_valve('out')
             self.pump_out.set_valve('in')
-            self.pump_out.pickup(curr_pumpout_vol, velocity_out)
+            if curr_pumpout_vol > 0:
+                self.pump_out.pickup(curr_pumpout_vol, velocity_out)
             self.pump_a.dispense(curr_pumpa_vol, velocity)
             self.pump_out.wait_until_done()
             self.pump_a.wait_until_done()
 
+        if extractionfactor == 0:
+            out_vol = self.pump_out.syringe_volume
+        elif extractionfactor > 0:
+            out_vol = self.pump_out.syringe_volume / extractionfactor
+        else:
+            raise NotImplementedError(
+                'Here, extractionfactor should be positive numeric. ' +
+                f'Its value is {str(extractionfactor)}.')
         volume_quant = min([
-            self.pump_a.syringe_volume,
-            self.pump_out.syringe_volume / extractionfactor])
+            self.pump_a.syringe_volume, out_vol])
         nr_pumpings = int(vol // volume_quant)
         if vol % volume_quant > 0:
             nr_pumpings += 1
@@ -1296,11 +1313,12 @@ class LegacyArchitecture(AbstractSystem):
         logger.debug('pump volumes: {:s}'.format(str(pump_volumes)))
 
         for pump_volume in pump_volumes:
-            self.pump_a.set_valve('in')
+            self.pump_a.set_valve(pickup_pos)
             self.pump_out.set_valve('out')
             self.pump_a.pickup(pump_volume, velocity, waitForPump=False)
-            self.pump_out.dispense(
-                curr_pumpout_vol, pumpout_dispense_velocity, waitForPump=False)
+            if curr_pumpout_vol > 0:
+                self.pump_out.dispense(
+                    curr_pumpout_vol, pumpout_dispense_velocity, waitForPump=False)
             self.pump_out.wait_until_done()
             self.pump_a.wait_until_done()
             # wait to let the pressure equilibrate and the fluid to settle
@@ -1309,17 +1327,19 @@ class LegacyArchitecture(AbstractSystem):
             self.pump_a.set_valve('out')
             self.pump_out.set_valve('in')
             curr_pumpout_vol = pump_volume * extractionfactor
-            self.pump_out.pickup(
-                curr_pumpout_vol, velocity_out, waitForPump=False)
+            if curr_pumpout_vol > 0:
+                self.pump_out.pickup(
+                    curr_pumpout_vol, velocity_out, waitForPump=False)
             self.pump_a.dispense(pump_volume, velocity, waitForPump=False)
             self.pump_out.wait_until_done()
             self.pump_a.wait_until_done()
 
         self.pump_out.set_valve('out')
-        self.pump_out.dispense(
-            curr_pumpout_vol,
-            pumpout_dispense_velocity, waitForPump=False)
-        self.pump_out.wait_until_done()
+        if curr_pumpout_vol > 0:
+            self.pump_out.dispense(
+                curr_pumpout_vol,
+                pumpout_dispense_velocity, waitForPump=False)
+            self.pump_out.wait_until_done()
 
     def _pump_out(self, vol, velocity=None, extractionfactor=None):
         """Make a pump out extraction stroke.
@@ -1338,9 +1358,11 @@ class LegacyArchitecture(AbstractSystem):
         pumpout_dispense_velocity = self.parameters['pumpout_dispense_velocity']
 
         curr_pumpout_vol = min([vol * extractionfactor, self.pump_out.syringe_volume])
+        self.pump_out.set_valve('in')
         self.pump_out.pickup(
             curr_pumpout_vol, velocity_out, waitForPump=True)
         self.pump_out.wait_until_done()
+        self.pump_out.set_valve('out')
         self.pump_out.dispense(
             curr_pumpout_vol,
             pumpout_dispense_velocity, waitForPump=True)

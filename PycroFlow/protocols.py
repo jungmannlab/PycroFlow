@@ -205,19 +205,16 @@ class ProtocolBuilder:
             self.create_step_waitfor_signal(
                 system='fluid', target='img',
                 message='done imaging round {:d}'.format(round))
-            self.create_step_pumpout(volume=wash_vol_pre)
-            self.create_step_inject(
-                volume=wash_vol_pre, reservoir_id=res_idcs[washbuf])
-            self.create_step_inject(
-                volume=int(imager_vol_post), reservoir_id=res_idcs[imager])
-            self.create_step_pumpout(volume=vol_remove_before_wash)
+            self.create_step_pumpout(volume=vol_remove_before_wash, extractionfactor=1)
             self.create_step_inject(
                 volume=wash_vol - vol_remove_before_wash,
-                reservoir_id=res_idcs[washbuf])
+                reservoir_id=res_idcs[washbuf],
+                wait_time=wait_after_pickup)
             self.create_step_inject(
                 volume=vol_remove_before_wash,
                 reservoir_id=res_idcs[washbuf],
-                extractionfactor=0)
+                extractionfactor=0,
+                wait_time=wait_after_pickup)
             # check dark frames
             self.create_step_signal(
                 system='fluid', message='done dark-round {:d}'.format(round))
@@ -236,16 +233,22 @@ class ProtocolBuilder:
             self.create_step_pumpout(volume=wash_vol_pre)
             self.create_step_inject(volume=wash_vol_pre, reservoir_id=res_idcs[washbuf])
         for round, imager in enumerate(experiment['imagers']):
+            if round < len(experiment['imagers']) - 1:
+                last_round = False
+            else:
+                last_round = True
             if isinstance(initial_imager, str):
                 round = round + 1
-            self.create_step_pumpout(volume=vol_remove_before_wash)  # reduce volume to wash
+            self.create_step_pumpout(volume=vol_remove_before_wash, extractionfactor=1)  # reduce volume to wash
             self.create_step_inject(  # wash at low volume
                 volume=int(imager_vol_pre - vol_remove_before_wash),
-                reservoir_id=res_idcs[imager])
+                reservoir_id=res_idcs[imager],
+                wait_time=wait_after_pickup)
             self.create_step_inject(  # fill up the missing volume
                 volume=int(vol_remove_before_wash),
                 reservoir_id=res_idcs[imager],
-                extractionfactor=0)
+                extractionfactor=0,
+                wait_time=wait_after_pickup)
             self.create_step_signal(
                 system='fluid', message='done round {:d}'.format(round))
             self.create_step_waitfor_signal(
@@ -260,16 +263,19 @@ class ProtocolBuilder:
                 system='fluid', target='img',
                 message='done imaging round {:d}'.format(round))
             self.create_step_inject(
-                volume=int(imager_vol_post), reservoir_id=res_idcs[imager])
-            if round < len(experiment['imagers']) - 1:
-                self.create_step_pumpout(volume=vol_remove_before_wash)
+                volume=int(imager_vol_post), reservoir_id=res_idcs[imager],
+                wait_time=wait_after_pickup)
+            if not last_round:
+                self.create_step_pumpout(volume=vol_remove_before_wash, extractionfactor=1)
                 self.create_step_inject(
                     volume=wash_vol - vol_remove_before_wash,
-                    reservoir_id=res_idcs[washbuf])
+                    reservoir_id=res_idcs[washbuf],
+                    wait_time=wait_after_pickup)
                 self.create_step_inject(
                     volume=vol_remove_before_wash,
                     reservoir_id=res_idcs[washbuf],
-                    extractionfactor=0)
+                    extractionfactor=0,
+                    wait_time=wait_after_pickup)
                 # check dark frames
                 self.create_step_signal(
                     system='fluid', message='done dark-round {:d}'.format(round))
@@ -511,21 +517,27 @@ class ProtocolBuilder:
             {'$type': 'incubate', 'duration': timeoutstr})
 
     def create_step_pumpout(
-            self, volume):
+            self, volume, extractionfactor=None):
         """Creates a step to pump out only.
         Args:
             volume : int
                 volume to pump out in integer µl
+            extractionfactor : None or float
+                the extractionfactor to use, if different from default
         Returns:
             step : dict
                 the step configuration
         """
-        self.steps['fluid'].append(
-            {'$type': 'pump_out',
-             'volume': volume})
+        volume = volume if volume > 0 else 1
+        pars = {
+            '$type': 'pump_out',
+            'volume': volume}
+        if extractionfactor is not None:
+            pars['extractionfactor'] = extractionfactor
+        self.steps['fluid'].append(pars)
 
     def create_step_inject(
-            self, volume, reservoir_id, wait_time=0):
+            self, volume, reservoir_id, wait_time=0, extractionfactor=None):
         """Creates a step to wait for a TTL pulse.
         Args:
             volume : int
@@ -534,15 +546,21 @@ class ProtocolBuilder:
                 the reservoir to use
             wait_time : int
                 number of seconds to wait between pickup and dispense
+            extractionfactor : None or float
+                an extraction factor different to the default for this step.
+                if None: Default
         Returns:
             step : dict
                 the step configuration
         """
+        volume = volume if volume > 0 else 1
         self.steps['fluid'].append(
             {'$type': 'inject',
              'volume': volume,
              'reservoir_id': reservoir_id,
              'wait_time': wait_time})
+        if extractionfactor is not None:
+            self.steps['fluid'][-1]['extractionfactor'] = extractionfactor
         self.reservoir_vols[reservoir_id] += volume
 
     def create_step_signal(self, system, message):
