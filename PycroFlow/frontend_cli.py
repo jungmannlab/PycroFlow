@@ -54,10 +54,11 @@ class PycroFlowInteractive(cmd.Cmd):
 
         Typical workflow:
         * (calibrate_tubings)
+        * (load_protocol)
         * fill_tubings
         * start_orchestration
         * start_protocol
-        * clean
+        * clean_tubings
         * exit
         '''
     prompt = '(PycroFlow)'
@@ -374,11 +375,71 @@ class PycroFlowInteractive(cmd.Cmd):
             kwargs={'reservoir_id': reservoir_id, 'volume': volume})
 
     def do_clean(self, line=''):
+        """Perform the complete cleaning protocol. The configuration must
+        specify special reservoir names for 'h2o', 'ipa', 'rbs', 'empty'
+        """
         if not self.orchestrator:
             print('Start orchestration first.')
             return
         self.orchestrator.execute_system_function(
             'fluid', self.fluid_system.clean_tubings)
+
+    def do_clean_tubings(self, arg):
+        """Fill and empty all tubings with liquid from one or more
+        reservoirs.
+        Args:
+            extra_vol : int (default 0)
+                the volume to use on top of the tubing volume
+            cleaning_reservoirs : int or list of int (default [])
+                the reservoir IDs of the cleaning liquids to use.
+            reservoir_vol : int (optional)
+                the volume of the reservoirs. If given, this volue
+                is extracted initially to make sure the reservoirs
+                are empty
+            empty_finally : bool (default: True)
+                Whether to empty the tubings in the end or leave the
+                last liquid in
+
+        Do not specify arguments with None. No comma.
+        pickup/dispense_flushvalve: 0 or 1
+
+        Example Command:
+        $ clean_tubings 200 cleaning_reservoirs=12
+        or
+        $ clean_tubings extra_vol=200 cleaning_reservoirs=11,12 empty_finally=0
+        """
+        args = arg.split()
+        extra_vol = args.pop(0)
+        if 'extra_vol=' in extra_vol:
+            extra_vol = extra_vol[len('extra_vol='):]
+        extra_vol = float(extra_vol)
+        kwargs = {ar.split('=')[0].strip(): ar.split('=')[1].strip()
+                  for ar in args}
+        kwargs['extra_vol'] = extra_vol
+        if 'cleaning_reservoirs' in kwargs.keys():
+            clres = kwargs['cleaning_reservoirs']
+            if '[' in clres and ']' in clres:
+                clres = clres[clres.index('['):clres.index(']')]
+            if ',' in clres:
+                clres = clres.split(',')
+            else:
+                clres = [clres]
+            kwargs['cleaning_reservoirs'] = [int(r) for r in clres]
+        if 'reservoir_vol' in kwargs.keys():
+            if ',' in kwargs['reservoir_vol']:
+                kwargs['reservoir_vol'] = kwargs['reservoir_vol'].index(',')
+            kwargs['reservoir_vol'] = int(kwargs['reservoir_vol'])
+        if 'empty_finally' in kwargs.keys():
+            if ',' in kwargs['empty_finally']:
+                kwargs['empty_finally'] = kwargs['empty_finally'].index(',')
+            kwargs['empty_finally'] = bool(int(kwargs['empty_finally']))
+
+        if not self.orchestrator:
+            print('Start orchestration first.')
+            return
+        self.orchestrator.execute_system_function(
+            'fluid', self.fluid_system.clean_tubings_seperate_res,
+            kwargs=kwargs)
 
     # ######################### Shut down
 
