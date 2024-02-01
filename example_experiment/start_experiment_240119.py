@@ -113,7 +113,6 @@ imaging_config = {
     'use_positions': use_mm_positions,
 }
 
-
 fluid = {
     'parameters': {
         'start_velocity': 50,
@@ -126,7 +125,7 @@ fluid = {
     'settings': {
         'vol_wash_pre': int(0.1 * wash_volume),  # in ul
         'vol_wash': int(0.9 * wash_volume),  # in ul
-        'vol_imager_pre': int(0.1 * imager_volume),  # in ul
+        'vol_imager_pre': int(0.9 * imager_volume),  # in ul
         'vol_imager_post': int(0.1 * imager_volume),  # in ul
         'vol_remove_before_wash': volume_reduction_for_xchg,
         'wait_after_pickup': 5,
@@ -141,26 +140,28 @@ fluid = {
 
 
 imaging = {
-    'parameters': {
+    'parameters': {  # general parameters for the imaging system
         'show_progress': True,
         'show_display': True,
         'close_display_after_acquisition': True,
         },
-    'settings': {
+    'settings': { # settings for protocol generation
         'frames': n_frames,
         'darkframes': 50,
         't_exp': exposure_time,  # in ms
         }
 }
 illumination = {
-    'parameters': {
-        'channel_group': 'Filter turret',
-        'filter': '2-G561',
-        'ROI': [512, 512, 512, 512]},
-    'settings': {
+    'parameters': {  # general parameters for the illumination system
         'setup': 'Crick',
+        # 'channel_group': 'Filter turret',
+        # 'filter': '2-G561',
+        # 'ROI': [512, 512, 512, 512]
+        },
+    'settings': {  # settings for protocol generation
         'laser': 560,
-        'power': 30,  #mW
+        'power_acq': 30,  #mW
+        'power_nonacq': 1,
         }
 }
 
@@ -169,7 +170,7 @@ flow_acq_config = {
     'base_name': experiment_name,
     'fluid': fluid,
     'img': imaging,
-    # 'illu': illumination,
+    'illu': illumination,
 }
 
 

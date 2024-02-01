@@ -164,6 +164,22 @@ class PycroFlowInteractive(cmd.Cmd):
 
         self.imaging_system = im.ImagingSystem(imaging_config)
 
+    def do_load_illumination(self, fname_illumination):
+        """Load the illumination system
+
+        Args:
+            fname_illumination : str (or dict)
+                the filename to the imaging configuration file
+                alternatively, this can be the configuration dict itself
+        """
+        if isinstance(fname_illumination, str):
+            with open(fname_illumination, 'r') as f:
+                illumination_config = yaml.full_load(f)
+        else:
+            illumination_config = fname_illumination
+
+        self.illumination_system = il.IlluminationSystem(illumination_config)
+
     def do_start_orchestration(self, line):
         """Start the orchestration of the systems.
         """
