@@ -57,20 +57,21 @@ class ImagingSystem(AbstractSystem):
             self.studio = Studio(convert_camel_case=True)
 
         # PFS logging
-        self.pfs_pars = {  # for Mercury
-            'tag_pfs': 'TIPFSOffset',
-            'tag_zdrive': 'TIZDrive',
-            'tag_status': 'TIPFSStatus',
-            'prop_state': 'State',
-            'prop_status': 'Status',
-            'deltat': 10}
-        self.pfs_pars = {  # for Crick
-            'tag_pfs': 'PFS',
-            'tag_zdrive': 'ZDrive',
-            'tag_status': 'PFS',
-            'prop_state': 'PFS in Range',
-            'prop_status': 'PFS Status',
-            'deltat': 10}
+        # self.pfs_pars = {  # for Mercury
+        #     'tag_pfs': 'TIPFSOffset',
+        #     'tag_zdrive': 'TIZDrive',
+        #     'tag_status': 'TIPFSStatus',
+        #     'prop_state': 'State',
+        #     'prop_status': 'Status',
+        #     'deltat': 10}
+        # self.pfs_pars = {  # for Crick
+        #     'tag_pfs': 'PFS',
+        #     'tag_zdrive': 'ZDrive',
+        #     'tag_status': 'PFS',
+        #     'prop_state': 'PFS in Range',
+        #     'prop_status': 'PFS Status',
+        #     'deltat': 10}
+        self.pfs_pars = config['pfs_pars']
         self.pfs_log = pd.DataFrame({
             'datetime': [datetime.now()],
             'frame': [0],

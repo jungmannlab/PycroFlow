@@ -33,6 +33,11 @@ exposure_time = 75  # ms
 n_frames = 15000
 use_mm_positions = True
 
+# illumination settings
+laser = 560
+sample_power = 30  #mW
+
+
 ############# NO NEED TO CHANGE ANYTHING BELOW HERE ##############
 
 reservoir_a_connections = [
@@ -111,6 +116,13 @@ tubing_config = {
 imaging_config = {
     'save_dir': r'.',
     'use_positions': use_mm_positions,
+    'psf_pars': {  # for Crick
+        'tag_pfs': 'PFS',
+        'tag_zdrive': 'ZDrive',
+        'tag_status': 'PFS',
+        'prop_state': 'PFS in Range',
+        'prop_status': 'PFS Status',
+        'deltat': 10}
 }
 
 fluid = {
@@ -159,8 +171,8 @@ illumination = {
         # 'ROI': [512, 512, 512, 512]
         },
     'settings': {  # settings for protocol generation
-        'laser': 560,
-        'power_acq': 30,  #mW
+        'laser': laser,
+        'power_acq': sample_power,  #mW
         'power_nonacq': 1,
         }
 }
@@ -170,7 +182,7 @@ flow_acq_config = {
     'base_name': experiment_name,
     'fluid': fluid,
     'img': imaging,
-    'illu': illumination,
+    'illu': illumination,  # comment out for non-automated illumination
 }
 
 
