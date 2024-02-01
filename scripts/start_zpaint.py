@@ -409,7 +409,7 @@ if __name__ == '__main__':
 
     acq_settings = {
         'ztags': {
-            'zdrive': 'ZDrive',
+            'zdrive': 'ZDrive',  # set to 'ZPiezo' for piezo-controlled acquisition
             'pfsoffset': 'PFSOffset',
             'pfson': ('PFS', 'FocusMaintenance')
         },
