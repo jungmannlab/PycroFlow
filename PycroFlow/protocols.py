@@ -198,7 +198,7 @@ class ProtocolBuilder:
         if isinstance(initial_imager, str):
             round = 0
             if illusttg:
-                self.create_step_setpower(illusttg['laser'], illusttg['power_acq'], illusttg['warmup_delay'])
+                self.create_step_setpower(illusttg['laser'], illusttg['power_acq'], illusttg['warmup_delay'], message=initial_imager)
                 if illusttg.get('shutter_off_nonacq'):
                     self.create_step_setshutter(state=True)
                 self.create_step_signal(
@@ -226,12 +226,12 @@ class ProtocolBuilder:
             self.create_step_inject(
                 volume=wash_vol - vol_remove_before_wash,
                 reservoir_id=res_idcs[washbuf],
-                wait_time=wait_after_pickup)
+                delay=wait_after_pickup)
             self.create_step_inject(
                 volume=vol_remove_before_wash,
                 reservoir_id=res_idcs[washbuf],
                 extractionfactor=0,
-                wait_time=wait_after_pickup)
+                delay=wait_after_pickup)
             # check dark frames
             self.create_step_signal(
                 system='fluid', message='done dark-round {:d}'.format(round))
@@ -279,12 +279,12 @@ class ProtocolBuilder:
             self.create_step_inject(  # wash at low volume
                 volume=int(imager_vol_pre - vol_remove_before_wash),
                 reservoir_id=res_idcs[imager],
-                wait_time=wait_after_pickup)
+                delay=wait_after_pickup)
             self.create_step_inject(  # fill up the missing volume
                 volume=int(vol_remove_before_wash),
                 reservoir_id=res_idcs[imager],
                 extractionfactor=0,
-                wait_time=wait_after_pickup)
+                delay=wait_after_pickup)
             self.create_step_signal(
                 system='fluid', message='done round {:d}'.format(round))
             self.create_step_waitfor_signal(
@@ -294,7 +294,7 @@ class ProtocolBuilder:
                 self.create_step_waitfor_signal(
                     system='illu', target='fluid',
                 message='done round {:d}'.format(round))
-                self.create_step_setpower(illusttg['laser'], illusttg['power_acq'], illusttg['warmup_delay'])
+                self.create_step_setpower(illusttg['laser'], illusttg['power_acq'], illusttg['warmup_delay'], message=f'for imaging {imager}')
                 if illusttg.get('shutter_off_nonacq'):
                     self.create_step_setshutter(state=True)
                 self.create_step_signal(
@@ -319,18 +319,18 @@ class ProtocolBuilder:
                     self.create_step_setshutter(state=False)
             self.create_step_inject(
                 volume=int(imager_vol_post), reservoir_id=res_idcs[imager],
-                wait_time=wait_after_pickup)
+                delay=wait_after_pickup)
             if not last_round:
                 self.create_step_pumpout(volume=vol_remove_before_wash, extractionfactor=1)
                 self.create_step_inject(
                     volume=wash_vol - vol_remove_before_wash,
                     reservoir_id=res_idcs[washbuf],
-                    wait_time=wait_after_pickup)
+                    delay=wait_after_pickup)
                 self.create_step_inject(
                     volume=vol_remove_before_wash,
                     reservoir_id=res_idcs[washbuf],
                     extractionfactor=0,
-                    wait_time=wait_after_pickup)
+                    delay=wait_after_pickup)
                 # check dark frames
                 self.create_step_signal(
                     system='fluid', message='done dark-round {:d}'.format(round))
@@ -357,6 +357,11 @@ class ProtocolBuilder:
                 self.create_step_waitfor_signal(
                     system='fluid', target='img',
                     message='done imaging dark-round {:d}'.format(round))
+            elif last_round:
+                if illusttg:
+                    if illusttg['lasers_off_finally']:
+                        self.create_step_laserenable('all', False)
+                        self.create_step_setshutter(state=False)
 
         return self.steps, self.reservoir_vols
 
@@ -604,14 +609,14 @@ class ProtocolBuilder:
         self.steps['fluid'].append(pars)
 
     def create_step_inject(
-            self, volume, reservoir_id, wait_time=0, extractionfactor=None):
+            self, volume, reservoir_id, delay=0, extractionfactor=None):
         """Creates a step to wait for a TTL pulse.
         Args:
             volume : int
                 volume to inject in integer µl
             reservoir_id : int
                 the reservoir to use
-            wait_time : int
+            delay : int
                 number of seconds to wait between pickup and dispense
             extractionfactor : None or float
                 an extraction factor different to the default for this step.
@@ -625,7 +630,7 @@ class ProtocolBuilder:
             {'$type': 'inject',
              'volume': volume,
              'reservoir_id': reservoir_id,
-             'wait_time': wait_time})
+             'delay': delay})
         if extractionfactor is not None:
             self.steps['fluid'][-1]['extractionfactor'] = extractionfactor
         self.reservoir_vols[reservoir_id] += volume
@@ -648,14 +653,28 @@ class ProtocolBuilder:
              't_exp': t_exp,
              'message': message})
 
-    def create_step_setpower(self, laser, power, warmup_delay=0):
+    def create_step_setpower(self, laser, power, warmup_delay=0, message=''):
         self.steps['illu'].append(
             {'$type': 'set power',
              'laser': laser,
              'power': power,
-             'warmup_delay': warmup_delay})
+             'warmup_delay': warmup_delay,
+             'message': message})  # message is not needed; only for finding entries to change power in the yaml protocol. can be removed when manipulating in GUI
 
     def create_step_setshutter(self, state):
         self.steps['illu'].append(
             {'$type': 'set shutter',
+             'state': state})
+
+    def create_step_laserenable(self, laser, state):
+        """switch laser(s) on or off
+        Ar gs:
+            laser : int or str\
+                int for one laser (wavelength), or str 'all'
+            state : bool
+                on or off
+        """
+        self.steps['illu'].append(
+            {'$type': 'laser enable',
+             'laser': laser,
              'state': state})

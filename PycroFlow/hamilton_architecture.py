@@ -752,14 +752,14 @@ class LegacyArchitecture(AbstractSystem):
             type='wait_image',
             type='wait_time', duration
         """
-        wait_time = self.protocol[i].get('wait_time', 0)
+        delay = self.protocol[i].get('delay', 0)
         extractionfactor = self.protocol[i].get('extractionfactor')
         if self.parameters['mode'] == 'tubing_stack':
             if (self.last_protocol_entry != i - 1) or (i == 0):
                 self._assemble_tubing_stack(i)
             for reservoir_id, vol in self.tubing_stack[i]:
                 self._set_valves(reservoir_id)
-                self._inject(vol, wait_time=wait_time, extractionfactor=extractionfactor)
+                self._inject(vol, delay=delay, extractionfactor=extractionfactor)
             self.last_protocol_entry = i
         elif self.parameters['mode'] == 'tubing_flush':
             # # this way, we flush (1+flushfactor)
@@ -786,12 +786,12 @@ class LegacyArchitecture(AbstractSystem):
         if pentry['$type'] == 'inject':
             # flush_volume = self._calc_vol_to_inlet(pentry['reservoir_id'])
             injection_volume = pentry['volume']
-            wait_time = pentry.get('wait_time', 0)
+            delay = pentry.get('delay', 0)
             extractionfactor = pentry.get('extractionfactor')
             # first, set up the volume required
             self._set_valves(pentry['reservoir_id'])
             self._inject(
-                injection_volume, velocity, wait_time=wait_time,
+                injection_volume, velocity, delay=delay,
                 extractionfactor=extractionfactor)
             # afterwards, flush in buffer to get the pentry
             # volume to the sample
@@ -908,6 +908,7 @@ class LegacyArchitecture(AbstractSystem):
         velocity = self.parameters.get('clean_velocity')
         if not velocity:
             velocity = self.parameters['max_velocity']
+        delay = self.parameters.get('clean_delay', 0)
 
         # empty tubings and reservoirs
         logger.debug('Emptying tubings and reservoirs')
@@ -915,29 +916,30 @@ class LegacyArchitecture(AbstractSystem):
         if reservoir_vol:
             empty_vol = reservoir_vol
         else:
-            emtpy_vol = 3 * extra_vol
-        total_vol = self.fill_tubings(empty_vol, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity)
-        self.flush_pump_out(total_vol * 2, only_forward=True, velocity=velocity/15)
+            empty_vol = 3 * extra_vol
+        total_vol = self.fill_tubings(empty_vol, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity, delay=delay)
+        self.flush_pump_out(total_vol * 2, only_forward=True, velocity=velocity/5, delay=delay)
 
         # sequentially use cleaning liquids
-        for clean_id in cleaning_reservoirs:
+        for i, clean_id in enumerate(cleaning_reservoirs):
             logger.debug(f'Cleaning with Liquid {clean_id}')
             print(f'Cleaning with Liquid {clean_id}')
             # fill with liquid
-            self.fill_tubings_reverse(extra_vol, res_detergent, res_exceptions, velocity=velocity)
+            self.fill_tubings_reverse(extra_vol, clean_id, res_exceptions, velocity=velocity, delay=delay)
             # empty
-            self.fill_tubings(extra_vol * 2, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity)
+            if empty_finally or i < len(cleaning_reservoirs) - 1:
+                self.fill_tubings(extra_vol * 2, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity, delay=delay)
             # move through output tubing
-            self.flush_pump_out(total_vol * 2, only_forward=True, velocity=velocity/15)
+            self.flush_pump_out(total_vol * 2, only_forward=True, velocity=velocity/5, delay=delay)
 
         # empty tubings
         if empty_finally:
             logger.debug('Emptying tubings and reservoirs')
             print('Emptying tubings and reservoirs')
-            total_vol = self.fill_tubings(empty_vol, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity)
-            self.flush_pump_out(total_vol * 2, only_forward=True, velocity=velocity/15)
+            total_vol = self.fill_tubings(empty_vol, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity, delay=delay)
+            self.flush_pump_out(total_vol * 2, only_forward=True, velocity=velocity/5, delay=delay)
 
-    def flush_pump_out(self, vol=None, only_forward=False, velocity=None):
+    def flush_pump_out(self, vol=None, only_forward=False, velocity=None, delay=0):
         if not velocity:
             velocity = self.parameters.get('clean_velocity')/10
         if not velocity:
@@ -949,13 +951,13 @@ class LegacyArchitecture(AbstractSystem):
             self._pump(
                 self.pump_out, vol,
                 velocity=int(velocity),
-                pickup_dir='in', dispense_dir='out')
+                pickup_dir='in', dispense_dir='out', delay=delay)
         if not only_forward:
             for i in range(1):
                 self._pump(
                     self.pump_out, vol,
                     velocity=int(velocity),
-                    pickup_dir='out', dispense_dir='in')
+                    pickup_dir='out', dispense_dir='in', delay=delay)
 
     def fill_and_shake_tubings(self, input_res, do_shake=True):
         velocity = self.parameters.get('clean_velocity')
@@ -1259,7 +1261,7 @@ class LegacyArchitecture(AbstractSystem):
                 self._set_flush_valve(dispense_flushvalve)
             pump.dispense(pump_volume, velocity, waitForPump=True)
 
-    def _inject(self, vol, velocity=None, extractionfactor=None, wait_time=0):
+    def _inject(self, vol, velocity=None, extractionfactor=None, delay=0):
         """Inject volume from the currently selected reservoir into
         the sample with a given flow velocity. Simultaneously, the extraction
         pump extracts the same volume.
@@ -1275,7 +1277,7 @@ class LegacyArchitecture(AbstractSystem):
                 being extracted than injected, leading to spillage. To prevent
                 this, the extraction needle could be positioned higher, and
                 extraction performed faster than injection
-            wait_time : int
+            delay : int
                 the time to wait between pickup and dispense
         """
         logger.debug('injecting {:.1f}'.format(vol))
@@ -1334,7 +1336,7 @@ class LegacyArchitecture(AbstractSystem):
             self.pump_out.wait_until_done()
             self.pump_a.wait_until_done()
             # wait to let the pressure equilibrate and the fluid to settle
-            time.sleep(wait_time)
+            time.sleep(delay)
 
             self.pump_a.set_valve('out')
             self.pump_out.set_valve('in')
@@ -1382,7 +1384,8 @@ class LegacyArchitecture(AbstractSystem):
 
     def fill_tubings(
         self, extra_vol=0, dest='flushwaste', res_exceptions=[],
-        post_fill_flushbuffer=True, velocity=None, include_flushwaste=False):
+        post_fill_flushbuffer=True, velocity=None, include_flushwaste=False,
+        delay=0):
         """Fill the tubings with the liquids of their reservoirs.
 
         Args:
@@ -1397,6 +1400,8 @@ class LegacyArchitecture(AbstractSystem):
             include_flushwaste : bool
                 whether to also fill tubings of the flush waste (makes
                 sense for cleaning, to empty the reservoir)
+            delay : int
+                seconds to wait between pickup and dispense
 
         Returns:
             total_vol : float
@@ -1422,7 +1427,7 @@ class LegacyArchitecture(AbstractSystem):
             total_vol += vol
             self._pump(
                 self.pump_a, vol, velocity=velocity, pickup_res=res_id,
-                dispense_flushvalve=dispense_flushvalve)
+                dispense_flushvalve=dispense_flushvalve, delay=delay)
         if include_flushwaste:
             vol = self.tubing_config.get('pump_a', 'valve_flush')
             vol += self.tubing_config.get('valve_flush', 'flush_waste')
@@ -1431,7 +1436,7 @@ class LegacyArchitecture(AbstractSystem):
             self._pump(
                 self.pump_a, vol, velocity=velocity, pickup_dir='out',
                 pickup_flushvalve=True,
-                dispense_flushvalve=dispense_flushvalve)
+                dispense_flushvalve=dispense_flushvalve, delay=delay)
 
 
         if post_fill_flushbuffer:
@@ -1448,11 +1453,11 @@ class LegacyArchitecture(AbstractSystem):
             self._pump(
                 self.pump_a, vol, velocity=velocity,
                 pickup_res=self.special_names['flushbuffer_a'],
-                dispense_flushvalve=False)
+                dispense_flushvalve=False, delay=delay)
         return total_vol
 
 
-    def fill_tubings_reverse(self, extra_vol, src_res_id=None, res_exceptions=[], velocity=None):
+    def fill_tubings_reverse(self, extra_vol, src_res_id=None, res_exceptions=[], velocity=None, delay=0):
         """Fill the tubings of all reservoirs in the config, as well as
         the sample tubing with the liquid of the given reservoir.
         This is meant for cleaning typically.
@@ -1463,6 +1468,8 @@ class LegacyArchitecture(AbstractSystem):
                 the reservoir id to get stuff from
             res_exceptions : list of int
                 reservoirs not to flush
+            delay : int
+                seconds to wait between pickup and dispense
 
         Returns:
             total_vol : float
@@ -1480,24 +1487,30 @@ class LegacyArchitecture(AbstractSystem):
         logger.debug('Except reservoirs: ' + str(res_exceptions))
 
         # fill flushbuffer-reservoir to flush outlet
-        vol = (
-            self.tubing_config.get_reservoir_to_pump(src_res_id, 'a')
-            + self.tubing_config.get('pump_a', 'valve_flush')
-            + self.tubing_config.get('valve_flush', 'flush_waste'))
+        vol = self.tubing_config.get_reservoir_to_pump(src_res_id, 'a')
+        if isinstance(self.valve_flush, Valve):
+            vol += (
+                self.tubing_config.get('pump_a', 'valve_flush')
+                + self.tubing_config.get('valve_flush', 'flush_waste'))
+        else:
+            vol += self.tubing_config.get('pump_a', 'flush_waste')
         vol += extra_vol
         total_vol += vol
         self._pump(
             self.pump_a, vol, velocity=velocity,
             pickup_res=src_res_id,
-            dispense_flushvalve=True)
+            dispense_flushvalve=True, delay=delay)
         # fill sample tubing
-        vol = self.tubing_config.get('valve_flush', 'sample')
+        if isinstance(self.valve_flush, Valve):
+            vol = self.tubing_config.get('valve_flush', 'sample')
+        else:
+            vol = self.tubing_config.get('pump_a', 'sample')
         vol += extra_vol
         total_vol += vol
         self._pump(
             self.pump_a, vol, velocity=velocity,
             pickup_res=src_res_id,
-            dispense_flushvalve=False)
+            dispense_flushvalve=False, delay=delay)
         # fill reservoirs
         for res_id, res in self.reservoir_a.items():
             # take care of the flushbuffer last
@@ -1511,7 +1524,7 @@ class LegacyArchitecture(AbstractSystem):
                 self.pump_a, vol, velocity=velocity,
                 pickup_res=src_res_id,
                 pickup_dir='in', dispense_dir='in',
-                dispense_res=res_id)
+                dispense_res=res_id, delay=delay)
         return total_vol
 
     def empty_tubings_to_flushbuffer(self, extra_vol):

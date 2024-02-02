@@ -158,8 +158,9 @@ class IlluminationSystem(AbstractSystem):
             mprotocol = None
         self.mprotocol = mprotocol
 
-        self.instrument = mco.IlluminationLaserControl(
-            mconfig, auto_enable_lasers=False)
+        if not hasattr(self, 'instrument'):
+            self.instrument = mco.IlluminationLaserControl(
+                mconfig, auto_enable_lasers=False)
         try:
             self.instrument.load_calibration_database()
         except Exception:
@@ -200,6 +201,12 @@ class IlluminationSystem(AbstractSystem):
                 self.beampath_open()
             else:
                 self.beampath_close
+        elif pentry['$type'] == 'laser enable':
+            if isinstance(pentry['laser'], int):
+                self.set_laser_enabled(pentry['laser'], pentry['state'])
+            elif isinstance(pentry['laser'], str) and pentry['laser'].lower() == 'all':
+                for laser in self.instrument.lasers:
+                    self.set_laser_enabled(laser, pentry['state'])
 
     def pause_execution(self):
         """Pause protocol execution

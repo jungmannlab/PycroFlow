@@ -93,7 +93,8 @@ class PycroFlowInteractive(cmd.Cmd):
             self.imaging_system._assign_protocol(self.protocol['img'])
 
         if self.protocol.get('illu'):
-            self.illumination_system = il.IlluminationSystem()
+            if self.illumination_system is None:
+                self.illumination_system = il.IlluminationSystem()
             self.illumination_system._assign_protocol(self.protocol['illu'])
         else:
             self.illumination_system = None
@@ -422,7 +423,7 @@ class PycroFlowInteractive(cmd.Cmd):
         Example Command:
         $ clean_tubings 200 cleaning_reservoirs=12
         or
-        $ clean_tubings extra_vol=200 cleaning_reservoirs=11,12 empty_finally=0
+        $ clean_tubings extra_vol=200 cleaning_reservoirs=11,12 reservoir_vol=1500 empty_finally=0
         """
         args = arg.split()
         extra_vol = args.pop(0)
