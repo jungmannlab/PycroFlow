@@ -4,6 +4,7 @@ uil.py
 Provides a uility functions.
 """
 import time
+from pycromanager import Core, Studio
 
 
 def fmt_time_delta(time_delta, width=20):
@@ -85,3 +86,35 @@ class ProgressBar:
 	    	+ " " * (4 +2 * len(str(self.nimgs_total)))
 	    	+ " " * self.timewidth,
 	    	end='\n')
+
+
+class PyMgrSingleton:
+	"""Class to provide access to Pycromanager Core and Studio
+	while making sure there is only one instance of them
+	across the whole package
+	"""
+
+	__instance = None
+	__core = None
+	__studio = None
+
+	@classmethod
+	def get_core(cls):
+		if not cls.__instance:
+			cls.__instance = PyMgrSingleton()
+		if not cls.__core:
+			cls.__core = Core()
+		return cls.__core
+
+	@classmethod
+	def get_studio(cls):
+		if not cls.__instance:
+			cls.__instance = PyMgrSingleton()
+		if not cls.__studio:
+			cls.__studio = Studio(convert_camel_case=True)
+		return cls.__studio
+
+
+	def __init__(self):
+		if PyMgrSingleton.__instance:
+			raise Exception('PyMgrSingleton already instantiated')

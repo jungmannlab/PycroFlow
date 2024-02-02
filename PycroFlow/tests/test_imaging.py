@@ -63,8 +63,10 @@ class TestImaging(unittest.TestCase):
         ]
 
         try:
+            del core
+            del studio
             pim.ImagingSystem(
-                flow_acq_config, protocol_imaging, core, studio)
+                flow_acq_config, protocol_imaging)
         except:
             print('skipping test as mm is not connected')
 
@@ -98,8 +100,10 @@ class TestImaging(unittest.TestCase):
         ]
 
         try:
+            del core
+            del studio
             isy = pim.ImagingSystem(
-                flow_acq_config, protocol_imaging, core, studio)
+                flow_acq_config, protocol_imaging)
             isy.execute_protocol_entry(0)
         except:
             print('skipping test as mm is not connected')

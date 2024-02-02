@@ -13,7 +13,7 @@ protocol_illumination = [
 ]
 """
 from PycroFlow.orchestration import AbstractSystem
-import monet
+import PyrcoFlow.monet as monet
 import logging
 import pprint
 

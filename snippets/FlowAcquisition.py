@@ -47,8 +47,8 @@ from time import sleep
 import yaml
 
 sys.path.insert(0, 'Z:\\users\\grabmayr\\power_calibration\\monet')
-from monet import CONFIGS
-from monet.control import IlluminationLaserControl as ILC
+from PycroFlow.monet import CONFIGS
+from PycroFlow.monet.control import IlluminationLaserControl as ILC
 
 
 

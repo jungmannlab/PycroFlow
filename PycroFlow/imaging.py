@@ -32,11 +32,11 @@ import logging
 import threading
 # import ic
 from datetime import datetime, timedelta
-from pycromanager import Acquisition, multi_d_acquisition_events, Core, Studio
+from pycromanager import Acquisition, multi_d_acquisition_events
 import pandas as pd
 
 from PycroFlow.orchestration import AbstractSystem
-from PycroFlow.util import ProgressBar
+from PycroFlow.util import ProgressBar, PyMgrSingleton
 
 
 logger = logging.getLogger(__name__)
@@ -44,17 +44,11 @@ logger = logging.getLogger(__name__)
 
 
 class ImagingSystem(AbstractSystem):
-    def __init__(self, config, core=None, studio=None):
+    def __init__(self, config):
         self.config = config
 
-        if core is not None:
-            self.core = core
-        else:
-            self.core = Core()
-        if studio is not None:
-            self.studio = studio
-        else:
-            self.studio = Studio(convert_camel_case=True)
+        self.core = PyMgrSingleton.get_core()
+        self.studio = PyMgrSingleton.get_studio()
 
         # PFS logging
         # self.pfs_pars = {  # for Mercury
