@@ -184,7 +184,7 @@ class ProtocolBuilder:
         initial_imager = experiment.get('initial_imager')
 
         imgsttg = config['img']['settings']
-        illusttg = config.get(['illu'], {}).get('settings')
+        illusttg = config.get('illu', {}).get('settings')
 
         # check that all mentioned sources acqually exist
         assert experiment['wash_buffer'] in reservoirs.values()

@@ -93,8 +93,8 @@ class PycroFlowInteractive(cmd.Cmd):
             self.imaging_system._assign_protocol(self.protocol['img'])
 
         if self.protocol.get('illu'):
-            self.illumination_system = il.IlluminationSystem(
-                self.protocol['illu'])
+            self.illumination_system = il.IlluminationSystem()
+            self.illumination_system._assign_protocol(self.protocol['illu'])
         else:
             self.illumination_system = None
 

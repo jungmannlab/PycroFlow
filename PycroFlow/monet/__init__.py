@@ -41,7 +41,9 @@ DATABASE_INDEXLEVELS = [
 ]
 
 try:
-    envpath = _ospath.abspath(pkg_resources.resource_filename('monet', '..\\env.yaml'))
+    logger.debug(pkg_resources.resource_filename('PycroFlow', '..\\env.yaml'))
+    envpath = _ospath.abspath(pkg_resources.resource_filename('PycroFlow', '..\\env.yaml'))
+    logger.debug(f'env path {envpath}')
     with open(envpath, 'r') as f:
         env = _yaml.full_load(f)
 except:

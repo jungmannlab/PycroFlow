@@ -13,7 +13,8 @@ protocol_illumination = [
 ]
 """
 from PycroFlow.orchestration import AbstractSystem
-import PyrcoFlow.monet as monet
+import PycroFlow.monet as monet
+import PycroFlow.monet.control as mco
 import logging
 import pprint
 
@@ -63,7 +64,7 @@ class IlluminationSystem(AbstractSystem):
 
     def set_sample_power(self, power):
         try:
-            logger.debug('Setting sample power to ', int(power))
+            logger.debug(f'Setting sample power to {int(power)}')
             self.instrument.power = int(power)
             self.power_setvalues[self.instrument.curr_laser] = int(power)
         except ValueError as e:
@@ -103,7 +104,7 @@ class IlluminationSystem(AbstractSystem):
             else:
                 enbl = 'off'
             pwr = self.power_setvalues[lsr]
-            logger.debug(f'Laser {lsr} is {enbl} and set to {pwr} mW.')
+            logger.debug(f"Laser {lsr} is {enbl} and set to {pwr} mW.")
         logger.debug(f'Currently active laser: {self.instrument.curr_laser}')
         try:
             logger.debug(
@@ -115,12 +116,12 @@ class IlluminationSystem(AbstractSystem):
         except Exception:
             pass
         try:
-            print(f'Autoshutter: {self.instrument.beampath.objects['shutter'].autoshutter}')
+            print(f"Autoshutter: {self.instrument.beampath.objects['shutter'].autoshutter}")
         except Exception:
             pass
 
     def _assign_protocol(self, protocol):
-        self.protocol_entries = protocol.get('protocol_entries')
+        self.protocol = protocol
         self.parameters = protocol.get('parameters')
 
         self._load_monet_control(self.parameters['setup'])
@@ -164,7 +165,7 @@ class IlluminationSystem(AbstractSystem):
         # set the power set values
         self.power_setvalues = {}
         for las in self.instrument.laser:
-            self.do_laser(las)
+            self.set_laser(las)
             self.power_setvalues[las] = round(self.instrument.power)
 
         # # switch on autoshutter (is switched on in initialization because

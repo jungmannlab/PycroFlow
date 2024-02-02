@@ -65,6 +65,7 @@ class ImagingSystem(AbstractSystem):
         #     'prop_state': 'PFS in Range',
         #     'prop_status': 'PFS Status',
         #     'deltat': 10}
+
         self.pfs_pars = config['pfs_pars']
         self.pfs_log = pd.DataFrame({
             'datetime': [datetime.now()],
@@ -100,7 +101,7 @@ class ImagingSystem(AbstractSystem):
         if not os.path.exists(sdir):
             os.mkdir(sdir)
         else:
-            ndirs = [it for it in os.listdir() if sdir in it]
+            ndirs = len([it for it in os.listdir() if sdir in it])
             sdir += '_{:d}'.format(ndirs + 1)
             os.mkdir(sdir)
 
