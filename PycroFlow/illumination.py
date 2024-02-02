@@ -17,6 +17,7 @@ import PycroFlow.monet as monet
 import PycroFlow.monet.control as mco
 import logging
 import pprint
+import time
 
 
 logger = logging.getLogger(__name__)
@@ -62,13 +63,17 @@ class IlluminationSystem(AbstractSystem):
         except ValueError as e:
             print(str(e))
 
-    def set_sample_power(self, power):
-        try:
-            logger.debug(f'Setting sample power to {int(power)}')
-            self.instrument.power = int(power)
-            self.power_setvalues[self.instrument.curr_laser] = int(power)
-        except ValueError as e:
-            print(str(e))
+    def set_sample_power(self, power, warmup_delay=0):
+        if int(power) != self.instrument.power:
+            logger.debug(f'Changing sample power from {self.instrument.power} to {int(power)}')
+            try:
+                self.instrument.power = int(power)
+                self.power_setvalues[self.instrument.curr_laser] = int(power)
+            except ValueError as e:
+                print(str(e))
+            time.sleep(warmup_delay)
+        else:
+            logger.debug(f'Sample power remains at {int(power)}')
 
     def set_attenuation(self, pos):
         """Set the attenuation device to a position (float)"""
@@ -188,6 +193,13 @@ class IlluminationSystem(AbstractSystem):
             self.beampath_open()
 
             logger.debug('done executing protocol entry {:d}'.format(i))
+        elif pentry['$type'] == 'set shutter':
+            logger.debug(
+                'executing protocol entry {:d}: {:s}'.format(i, str(pentry)))
+            if pentry['state']:
+                self.beampath_open()
+            else:
+                self.beampath_close
 
     def pause_execution(self):
         """Pause protocol execution

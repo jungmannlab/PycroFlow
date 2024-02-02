@@ -198,7 +198,8 @@ class ProtocolBuilder:
         if isinstance(initial_imager, str):
             round = 0
             if illusttg:
-                self.create_step_setpower(illusttg['laser'], illusttg['power_acq'])
+                self.create_step_setpower(illusttg['laser'], illusttg['power_acq'], illusttg['warmup_delay'])
+                self.create_step_setshutter(state=True)
             imager = initial_imager
             self.create_step_acquire(
                 imgsttg['frames'], imgsttg['t_exp'],
@@ -212,7 +213,8 @@ class ProtocolBuilder:
                 self.create_step_waitfor_signal(
                     system='illu', target='img',
                     message='done imaging round {:d}'.format(round))
-                self.create_step_setpower(illusttg['laser'], illusttg['power_nonacq'])
+                self.create_step_setpower(illusttg['laser'], illusttg['power_nonacq'], illusttg['warmup_delay'])
+                self.create_step_setshutter(state=False)
             self.create_step_pumpout(volume=vol_remove_before_wash, extractionfactor=1)
             self.create_step_inject(
                 volume=wash_vol - vol_remove_before_wash,
@@ -233,7 +235,8 @@ class ProtocolBuilder:
                 self.create_step_waitfor_signal(
                     system='illu', target='fluid',
                     message='done dark-round {:d}'.format(round))
-                self.create_step_setpower(illusttg['laser'], illusttg['power_acq'])
+                self.create_step_setpower(illusttg['laser'], illusttg['power_acq'], illusttg['warmup_delay'])
+                self.create_step_setshutter(state=True)
             self.create_step_acquire(
                 imgsttg['darkframes'], imgsttg['t_exp'],
                 message='dark-round_{:d}-{:s}'.format(round, imager))
@@ -246,7 +249,8 @@ class ProtocolBuilder:
                 self.create_step_waitfor_signal(
                     system='illu', target='img',
                 message='done imaging dark-round {:d}'.format(round))
-                self.create_step_setpower(illusttg['laser'], illusttg['power_nonacq'])
+                self.create_step_setpower(illusttg['laser'], illusttg['power_nonacq'], illusttg['warmup_delay'])
+                self.create_step_setshutter(state=False)
         else:
             self.create_step_pumpout(volume=wash_vol_pre)
             self.create_step_inject(volume=wash_vol_pre, reservoir_id=res_idcs[washbuf])
@@ -276,7 +280,8 @@ class ProtocolBuilder:
                 self.create_step_waitfor_signal(
                     system='illu', target='fluid',
                 message='done round {:d}'.format(round))
-                self.create_step_setpower(illusttg['laser'], illusttg['power_acq'])
+                self.create_step_setpower(illusttg['laser'], illusttg['power_acq'], illusttg['warmup_delay'])
+                self.create_step_setshutter(state=True)
             self.create_step_acquire(
                 imgsttg['frames'], imgsttg['t_exp'],
                 message='round_{:d}-{:s}'.format(round, imager))
@@ -289,7 +294,8 @@ class ProtocolBuilder:
                 self.create_step_waitfor_signal(
                     system='illu', target='img',
                     message='done imaging round {:d}'.format(round))
-                self.create_step_setpower(illusttg['laser'], illusttg['power_nonacq'])
+                self.create_step_setpower(illusttg['laser'], illusttg['power_nonacq'], illusttg['warmup_delay'])
+                self.create_step_setshutter(state=False)
             self.create_step_inject(
                 volume=int(imager_vol_post), reservoir_id=res_idcs[imager],
                 wait_time=wait_after_pickup)
@@ -314,7 +320,8 @@ class ProtocolBuilder:
                     self.create_step_waitfor_signal(
                         system='illu', target='fluid',
                     message='done dark-round {:d}'.format(round))
-                    self.create_step_setpower(illusttg['laser'], illusttg['power_acq'])
+                    self.create_step_setpower(illusttg['laser'], illusttg['power_acq'], illusttg['warmup_delay'])
+                    self.create_step_setshutter(state=True)
                 self.create_step_acquire(
                     imgsttg['darkframes'], imgsttg['t_exp'],
                     message='dark-round_{:d}-{:s}'.format(round, imager))
@@ -614,8 +621,14 @@ class ProtocolBuilder:
              't_exp': t_exp,
              'message': message})
 
-    def create_step_setpower(self, laser, power):
+    def create_step_setpower(self, laser, power, warmup_delay=0):
         self.steps['illu'].append(
             {'$type': 'set power',
              'laser': laser,
-             'power': power})
+             'power': power,
+             'warmup_delay': warmup_delay})
+
+    def create_step_setshutter(self, state):
+        self.steps['illu'].append(
+            {'$type': 'set shutter',
+             'state': state})

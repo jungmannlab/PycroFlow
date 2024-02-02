@@ -174,6 +174,8 @@ illumination = {
         'laser': laser,
         'power_acq': sample_power,  #mW
         'power_nonacq': 1,
+        'warmup_delay': 5,
+        'shutter_off_nonacq': True,
         }
 }
 
