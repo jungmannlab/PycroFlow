@@ -458,6 +458,37 @@ class PycroFlowInteractive(cmd.Cmd):
             'fluid', self.fluid_system.clean_tubings_seperate_res,
             kwargs=kwargs)
 
+    # ######################### Direct Laser
+
+    def do_laser(self, laser, state=1):
+        """select a laser, and enable it
+        Args:
+            laser : int
+                the laser (wavelength)
+            state : 0 or 1
+                0 for off, 1 for on
+        """
+        if not self.orchestrator:
+            print('Start orchestration first.')
+            return
+
+        self.orchestrator.execute_system_function(
+            'illu', self.illumination_system.set_laser(laser))
+        self.orchestrator.execute_system_function(
+            'illu', self.illumination_system.set_laser_enabled(laser, int(state)==1))
+
+    def do_power(self, power):
+        """set an illumination power in the sample
+        Args:
+            power : int
+                the power in the sample in mW
+        """
+        if not self.orchestrator:
+            print('Start orchestration first.')
+            return
+        self.orchestrator.execute_system_function(
+            'illu', self.illumination_system.set_sample_power(power))
+
     # ######################### Shut down
 
     def do_exit(self, line):

@@ -201,7 +201,7 @@ class IlluminationSystem(AbstractSystem):
             if pentry['state']:
                 self.beampath_open()
             else:
-                self.beampath_close
+                self.beampath_close()
         elif pentry['$type'] == 'laser enable':
             if isinstance(pentry['laser'], int):
                 self.set_laser_enabled(pentry['laser'], pentry['state'])
