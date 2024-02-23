@@ -161,6 +161,7 @@ class IlluminationSystem(AbstractSystem):
         if not hasattr(self, 'instrument'):
             self.instrument = mco.IlluminationLaserControl(
                 mconfig, auto_enable_lasers=False)
+            self.instrument.beampath.objects['shutter'].autoshutter = True
         try:
             self.instrument.load_calibration_database()
         except Exception:

@@ -368,6 +368,10 @@ class Pump():
             init_cmd = 'Z'  # 'Y' - we don't use internal 'in' and 'out' valve positions
         else:
             init_cmd = 'Z'
+
+        self.input_pos = input_pos
+        self.output_pos = output_pos
+
         if waste_pos is not None:
             self.set_valve(waste_pos)
         ham.communication.sendCommand(
@@ -399,9 +403,6 @@ class Pump():
         self.syringe_volume = float(syringe[:-1])
         if syringe[-1] == 'm':
             self.syringe_volume *= 1000
-
-        self.input_pos = input_pos
-        self.output_pos = output_pos
 
     def dispense(self, vol, velocity=None, waitForPump=False):
         """Initiate a dispense movement of the pump.
@@ -458,7 +459,7 @@ class Pump():
             velocity_upm : float
                 velocity in µl per minute
         """
-        steps_per_ul = self.psd.command.steps / self.psd.command.maxVolum
+        steps_per_ul = (self.psd.command.steps * self.psd.command.motorsteps_per_step) / self.psd.command.maxVolum
         seconds_per_minute = 60
         velocity_upm = velocity_sps / steps_per_ul * seconds_per_minute
         return velocity_upm
@@ -472,7 +473,7 @@ class Pump():
             velocity_sps : int
                 velocity in steps per second
         """
-        steps_per_ul = self.psd.command.steps / self.psd.command.maxVolum
+        steps_per_ul = (self.psd.command.steps * self.psd.command.motorsteps_per_step) / self.psd.command.maxVolum
         seconds_per_minute = 60
         velocity_sps = velocity_upm * steps_per_ul / seconds_per_minute
         return int(velocity_sps)

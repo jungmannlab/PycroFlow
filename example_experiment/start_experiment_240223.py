@@ -5,37 +5,37 @@ import os
 
 ################ CHANGE EXPERIMENT SETTINGS HERE ################
 '''Set the name of the experiment. This will be the base folder.'''
-experiment_name = 'CHO_test'
+experiment_name = 'StdSample'
 
 # volume settings
 wash_volume = 2000  # ul
-imager_volume = 800  # ul
-volume_reduction_for_xchg = 400  # ul
+imager_volume = 950  # ul
+volume_reduction_for_xchg = 50  # ul ATTENTION: The sample chamber must hold at least this volume above the output needle. 
 
 # fluidics settings
 wash_buffer = 'PBS'
 
 '''Set at which tubing number to find which solution.'''
 reservoir_names = {
-    1: 'EGFP', 2: 'ALFA', 6: wash_buffer}
+    1: 'Vim1', 2: 'Tubuli2',3: 'Vim2', 4: 'Tubuli3',5: 'Vim3', 6: wash_buffer,7: 'Tubuli4'}
 
 '''If an imager is already present in the sample and ready for imaging
 without prior fluid exchange, write its name here. Otherwise, set
 to None.'''
-initial_target = 'CD86'
+initial_target = 'Tubuli1'
 
 '''Set the sequence in which the targets should be imaged. Make sure
 that all these names match those in reservoir_names.'''
-target_sequence = ['EGFP', 'ALFA']
+target_sequence = ['Vim1', 'Tubuli2','Vim2', 'Tubuli3']
 
 # imaging settings
-exposure_time = 100  # ms
-n_frames = 30000
+exposure_time = 150  # ms
+n_frames = 100
 use_mm_positions = False
 
 # illumination settings
 laser = 560
-sample_power = 30  #mW
+sample_power = 20  #mW
 
 
 ############# NO NEED TO CHANGE ANYTHING BELOW HERE ##############
@@ -81,7 +81,7 @@ hamilton_config = {
     'flush_pos': {'flush': 3, 'inject': 4},
     'pump_out': {
         'address': 0, 'instrument_type': '4', 'valve_type': 'Y',
-        'syringe': '5.0m', 'input_pos': 'out', 'output_pos': 'in', 'waste_pos': 'in',
+        'syringe': '5.0m', 'input_pos':'out', 'output_pos': 'in', 'waste_pos': 'in',
         'motorsteps_per_step': 2},
     'reservoir_a': resa_conn_present,
     'special_names': {
@@ -131,18 +131,23 @@ fluid = {
         'start_velocity': 500,  # ul/min
         'max_velocity': 2000,
         'stop_velocity': 500,
-        'pumpout_dispense_velocity': 3000,
+        'pumpout_dispense_velocity': 10000,
         'clean_velocity': 3000,
         'clean_delay': 10,  # seconds of delay between pickup and dispense
         'mode': 'tubing_ignore',  # 'tubing_stack' or 'tubing_flush' or 'tubing_ignore'
-        'extractionfactor': 4},
+        'extractionfactor': 6,
+        'inject_pickup_extravol': 1500,  # extra volume to extract during injection
+        'inject_in_to_out_delay': 15,  # seconds to wait between start of pickup and dispense in injection
+        'inject_out_to_in_delay': 5,  # seconds pickup should continue after dispense is done in injection
+        'inject_precreate_underpressure': True,  # initially makes one full pumpout syringe volume extraction to create enough underpressure in the output tubing to robustly extract during injection.
+        },
     'settings': {
         'vol_wash_pre': int(0.1 * wash_volume),  # in ul
         'vol_wash': int(0.9 * wash_volume),  # in ul
         'vol_imager_pre': int(0.9 * imager_volume),  # in ul
         'vol_imager_post': int(0.1 * imager_volume),  # in ul
         'vol_remove_before_wash': volume_reduction_for_xchg,
-        'wait_after_pickup': 5,
+        'wait_after_pickup': 9,  # seconds between pickup and dispense during injection, to equilibrate pressure in pump
         'reservoir_names': reservoir_names,
         'experiment' : {
             'type': 'Exchange',  # options: ['Exchange', 'MERPAINT', 'FlushTest']
@@ -178,6 +183,7 @@ illumination = {
         'power_nonacq': 1,
         'warmup_delay': 5,
         'shutter_off_nonacq': True,
+        'lasers_off_finally': True,
         }
 }
 
