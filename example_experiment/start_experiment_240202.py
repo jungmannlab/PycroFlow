@@ -5,32 +5,32 @@ import os
 
 ################ CHANGE EXPERIMENT SETTINGS HERE ################
 '''Set the name of the experiment. This will be the base folder.'''
-experiment_name = 'SKBR3_6plex'
+experiment_name = 'CHO_test'
 
 # volume settings
-wash_volume = 2  # ul
-imager_volume = 8  # ul
-volume_reduction_for_xchg = 1  # ul
+wash_volume = 2000  # ul
+imager_volume = 800  # ul
+volume_reduction_for_xchg = 400  # ul
 
 # fluidics settings
 wash_buffer = 'PBS'
 
 '''Set at which tubing number to find which solution.'''
 reservoir_names = {
-    1: 'EGFR', 2: '5T4', 6: wash_buffer}
+    1: 'EGFP', 2: 'ALFA', 6: wash_buffer}
 
 '''If an imager is already present in the sample and ready for imaging
 without prior fluid exchange, write its name here. Otherwise, set
 to None.'''
-initial_target = 'HER3'
+initial_target = 'CD86'
 
 '''Set the sequence in which the targets should be imaged. Make sure
 that all these names match those in reservoir_names.'''
-target_sequence = ['EGFR', '5T4']
+target_sequence = ['EGFP', 'ALFA']
 
 # imaging settings
-exposure_time = 75  # ms
-n_frames = 15
+exposure_time = 100  # ms
+n_frames = 30000
 use_mm_positions = False
 
 # illumination settings
@@ -76,20 +76,20 @@ hamilton_config = {
         {'address': 2, 'instrument_type': 'MVP', 'valve_type': '8-5'}],
     'pump_a': {
         'address': 1, 'instrument_type': '4', 'valve_type': '8-5',
-        'syringe': '500u', 'input_pos': None, 'output_pos': 4,
+        'syringe': '500u', 'input_pos': None, 'output_pos': 4, 'waste_pos': 3,
         'motorsteps_per_step': 2},  # OEM/high force version internally counts in half-steps (total 6000 steps per stroke), lab version with full steps (3000 steps per stroke)
     'flush_pos': {'flush': 3, 'inject': 4},
     'pump_out': {
         'address': 0, 'instrument_type': '4', 'valve_type': 'Y',
-        'syringe': '5.0m', 'input_pos':'out', 'output_pos': 'in',
+        'syringe': '5.0m', 'input_pos': 'out', 'output_pos': 'in', 'waste_pos': 'in',
         'motorsteps_per_step': 2},
     'reservoir_a': resa_conn_present,
     'special_names': {
         'flushbuffer_a': 6,  # defines the reservoir id with the buffer that can be used for flushing should be at the end of multiple MVPs
-        'rbs': 11,
-        'ipa': 12,
-        'h2o': 13,
-        'empty': 14
+        # 'rbs': 11,
+        # 'ipa': 12,
+        # 'h2o': 13,
+        # 'empty': 14
         },
 }
 
@@ -128,12 +128,12 @@ imaging_config = {
 
 fluid = {
     'parameters': {
-        'start_velocity': 50,
-        'max_velocity': 200,
-        'stop_velocity': 50,
-        'pumpout_dispense_velocity': 300,
-        'clean_velocity': 300,
-        'clean_delay': 10,
+        'start_velocity': 500,  # ml/min
+        'max_velocity': 2000,
+        'stop_velocity': 500,
+        'pumpout_dispense_velocity': 3000,
+        'clean_velocity': 3000,
+        'clean_delay': 10,  # seconds of delay between pickup and dispense
         'mode': 'tubing_ignore',  # 'tubing_stack' or 'tubing_flush' or 'tubing_ignore'
         'extractionfactor': 4},
     'settings': {

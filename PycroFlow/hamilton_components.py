@@ -316,7 +316,8 @@ class Pump():
 
     def __init__(self, address, syringe,
                  instrument_type='4', valve_type='1', resolution_mode=1,
-                 output_pos=None, input_pos=None, motorsteps_per_step=1):
+                 output_pos=None, input_pos=None, waste_pos=None,
+                 motorsteps_per_step=1):
         """
         Args:
             addresss : char
@@ -352,6 +353,9 @@ class Pump():
                 the position for the syringe input. if multiple inputs are
                 used, these need to be specified in the 'valve_pos' of
                 the respective reservoirs in the config.
+            waste_pos : int or str; default None
+                the position where waste is connected. this is the best position
+                for initialization.
             motorsteps_per_step : int, 1 or 2
                 The OEM / high force PSD4 version internally counts in half steps
                 (command P6000 for full stroke pickup), while the CE version counts
@@ -360,9 +364,15 @@ class Pump():
         assert instrument_type in [member.value for member in PSDTypes]
         assert syringe in [member.value for member in SyrTypes]
         self.psd = ham.PSD(str(address), instrument_type)
+        if output_pos == 1 or output_pos == 'in':
+            init_cmd = 'Z'  # 'Y' - we don't use internal 'in' and 'out' valve positions
+        else:
+            init_cmd = 'Z'
+        if waste_pos is not None:
+            self.set_valve(waste_pos)
         ham.communication.sendCommand(
             self.psd.asciiAddress,
-            'Z' + self.psd.command.enableHFactorCommandsAndQueries()
+            init_cmd + self.psd.command.enableHFactorCommandsAndQueries()
             + self.psd.command.executeCommandBuffer(),
             waitForPump=True)
         # ham.communication.sendCommand(
@@ -394,8 +404,18 @@ class Pump():
         self.output_pos = output_pos
 
     def dispense(self, vol, velocity=None, waitForPump=False):
-        logger.debug('pump ascii {:s} dispensing {:.1f} ul at {:.1f}'.format(self.psd.asciiAddress, vol, velocity))
+        """Initiate a dispense movement of the pump.
+        Args:
+            vol : int
+                volume in µl
+            velocity : float
+                velocity in µl per minute
+            waitForPump : bool
+                if True, the function only returns when the movement is done.
+        """
+        logger.debug('pump ascii {:s} dispensing {:.1f} ul at {:.1f} µl/min'.format(self.psd.asciiAddress, vol, velocity))
         if velocity is not None:
+            velocity = self.velocity_upm2sps(velocity)
             cmd = self.psd.command.setMaximumVelocity(velocity)
         else:
             cmd = ''
@@ -407,8 +427,18 @@ class Pump():
         self.target_volume -= vol
 
     def pickup(self, vol, velocity=None, waitForPump=False):
-        logger.debug('pump ascii {:s} picking up {:.1f} ul at {:.1f}'.format(self.psd.asciiAddress, vol, velocity))
+        """Initiate a pickup movement of the pump.
+        Args:
+            vol : int
+                volume in µl
+            velocity : float
+                velocity in µl per minute
+            waitForPump : bool
+                if True, the function only returns when the movement is done.
+        """
+        logger.debug('pump ascii {:s} picking up {:.1f} ul at {:.1f} µl/min'.format(self.psd.asciiAddress, vol, velocity))
         if velocity is not None:
+            velocity = self.velocity_upm2sps(velocity)
             cmd = self.psd.command.setMaximumVelocity(velocity)
         else:
             cmd = ''
@@ -419,8 +449,43 @@ class Pump():
             self.psd.asciiAddress, cmd, waitForPump=waitForPump)
         self.target_volume += vol
 
+    def velocity_sps2upm(self, velocity_sps):
+        """Convert velocity in steps per second to velocity in µl per minute.
+        Args:
+            velocity_sps : int
+                velocity in steps per second
+        Returns:
+            velocity_upm : float
+                velocity in µl per minute
+        """
+        steps_per_ul = self.psd.command.steps / self.psd.command.maxVolum
+        seconds_per_minute = 60
+        velocity_upm = velocity_sps / steps_per_ul * seconds_per_minute
+        return velocity_upm
+
+    def velocity_upm2sps(self, velocity_upm):
+        """Convert velocity in velocity in µl per minute to steps per second.
+        Args:
+            velocity_upm : float
+                velocity in µl per minute
+        Returns:
+            velocity_sps : int
+                velocity in steps per second
+        """
+        steps_per_ul = self.psd.command.steps / self.psd.command.maxVolum
+        seconds_per_minute = 60
+        velocity_sps = velocity_upm * steps_per_ul / seconds_per_minute
+        return int(velocity_sps)
+
     def set_velocity(self, start_velocity, max_velocity, stop_velocity):
         """Set movement start, max, and stop velocities
+        Args:
+            start_velocity : int
+                in ul/min, must be 50-1000 when converted into steps/s
+            max_velocity : int
+                in ul/min, must 2-5800 when converted into steps/s
+            stop_velocity : int
+                in ul/min, must 50-2700 when converted into steps/s
         Args:
             start_velocity : int
                 50-1000
@@ -429,6 +494,19 @@ class Pump():
             stop_velocity : int
                 50-2700
         """
+        start_velocity = self.velocity_upm2sps(start_velocity)
+        if start_velocity < 50 or start_velocity > 1000:
+            logger.error(
+                f'start_velocity {self.velocity_sps2upm(start_velocity)}um/min='
+                + f'{start_velocity}steps/s out of range (50-1000 steps/s)')
+        max_velocity = self.velocity_upm2sps(max_velocity)
+        if max_velocity < 2 or max_velocity > 5800:
+            logger.error(f'max_velocity {self.velocity_sps2upm(max_velocity)}um/min='
+                + f'{max_velocity}steps/s out of range (2-5800 steps/s)')
+        stop_velocity = self.velocity_upm2sps(stop_velocity)
+        if stop_velocity < 50 or stop_velocity > 2700:
+            logger.error(f'stop_velocity {self.velocity_sps2upm(stop_velocity)}um/min='
+                + f'{stop_velocity}steps/s out of range (50-2700 steps/s)')
         ham.communication.sendCommand(
             self.psd.asciiAddress,
             + self.psd.command.setStartVelocity(start_velocity)
