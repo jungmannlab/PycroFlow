@@ -421,9 +421,9 @@ class PycroFlowInteractive(cmd.Cmd):
         pickup/dispense_flushvalve: 0 or 1
 
         Example Command:
-        $ clean_tubings 200 cleaning_reservoirs=12
+        (PycroFlow) clean_tubings 200 cleaning_reservoirs=12
         or
-        $ clean_tubings extra_vol=200 cleaning_reservoirs=11,12 reservoir_vol=1500 empty_finally=0
+        (PycroFlow) clean_tubings extra_vol=200 cleaning_reservoirs=11,12 reservoir_vol=1500 empty_finally=0
         """
         args = arg.split()
         extra_vol = args.pop(0)
@@ -467,15 +467,23 @@ class PycroFlowInteractive(cmd.Cmd):
                 the laser (wavelength)
             state : 0 or 1
                 0 for off, 1 for on
+        Example usage:
+            (PycroFlow) laser 560 1
         """
         if not self.orchestrator:
             print('Start orchestration first.')
             return
 
-        self.orchestrator.execute_system_function(
-            'illu', self.illumination_system.set_laser(laser))
-        self.orchestrator.execute_system_function(
-            'illu', self.illumination_system.set_laser_enabled(laser, int(state)==1))
+        try:
+            self.orchestrator.execute_system_function(
+                'illu', self.illumination_system.set_laser,
+                args=[laser])
+            self.orchestrator.execute_system_function(
+                'illu', self.illumination_system.set_laser_enabled,
+                kwargs={'laser': laser, 'enabled':int(state)==1})
+        except:
+            print('There was an error. Please type "help laser" for hints on usage.')
+            pass
 
     def do_power(self, power):
         """set an illumination power in the sample
@@ -486,8 +494,12 @@ class PycroFlowInteractive(cmd.Cmd):
         if not self.orchestrator:
             print('Start orchestration first.')
             return
-        self.orchestrator.execute_system_function(
-            'illu', self.illumination_system.set_sample_power(power))
+        try:
+            self.orchestrator.execute_system_function(
+                'illu', self.illumination_system.set_sample_power,
+                args=[power])
+        except:
+            print('There was an error. Please type "help power" for hints on usage.')
 
     # ######################### Shut down
 

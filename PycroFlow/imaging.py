@@ -219,7 +219,7 @@ class ImagingSystem(AbstractSystem):
         self.curr_frame = 0
 
         self.core.set_exposure(t_exp)
-        self.core.update_display()
+        self.studio.get_application().refresh_gui()
         if self.protocol['parameters'].get('show_progress'):
             self.probar = ProgressBar('Acquisition', n_frames)
         with Acquisition(directory=acq_dir, name=acq_name, show_display=self.protocol['parameters'].get('show_display', True),
@@ -309,7 +309,7 @@ class AcquisitionThread(threading.Thread):
 
     def run(self):
         self.core.set_exposure(self.t_exp)
-        self.core.update_display()
+        self.studio.get_application().refresh_gui()
         with Acquisition(directory=self.acq_dir, name=self.acq_name,
                          show_display=True,
                          pre_hardware_hook_fn=self.hook_fn,
