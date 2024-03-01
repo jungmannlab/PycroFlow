@@ -54,7 +54,7 @@ class IlluminationSystem(AbstractSystem):
     def set_laser_enabled(self, laser, enabled=True):
         """Set the activation state of a laser in the system
         """
-        self.instrument.lasers[laser].enabled = enabled
+        self.instrument.lasers[int(laser)].enabled = enabled
 
     def set_laser_power(self, power):
         try:
@@ -161,7 +161,10 @@ class IlluminationSystem(AbstractSystem):
         if not hasattr(self, 'instrument'):
             self.instrument = mco.IlluminationLaserControl(
                 mconfig, auto_enable_lasers=False)
-            self.instrument.beampath.objects['shutter'].autoshutter = True
+            try:
+                self.instrument.beampath.objects['shutter'].autoshutter = True
+            except:
+                pass
         try:
             self.instrument.load_calibration_database()
         except Exception:
