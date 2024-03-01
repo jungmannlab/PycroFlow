@@ -365,6 +365,12 @@ class Pump():
         assert syringe in [member.value for member in SyrTypes]
         self.psd = ham.PSD(str(address), instrument_type)
         if output_pos == 1 or output_pos == 'in':
+            init_cmd = 'Y'
+            ham.communication.sendCommand(
+                self.psd.asciiAddress,
+                init_cmd + self.psd.command.enableHFactorCommandsAndQueries()
+                + self.psd.command.executeCommandBuffer(),
+                waitForPump=True)
             init_cmd = 'Z'  # 'Y' - we don't use internal 'in' and 'out' valve positions
         else:
             init_cmd = 'Z'

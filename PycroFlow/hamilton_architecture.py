@@ -1381,6 +1381,8 @@ class LegacyArchitecture(AbstractSystem):
             self.pump_a.dispense(pump_volume, velocity, waitForPump=False)
             self.pump_out.wait_until_done()
             self.pump_a.wait_until_done()
+            # wait to let the pressure equilibrate and the fluid to settle
+            time.sleep(delay)
 
         self.pump_out.set_valve('out')
         if curr_pumpout_vol > 0:
