@@ -416,6 +416,12 @@ class PycroFlowInteractive(cmd.Cmd):
             empty_finally : bool (default: True)
                 Whether to empty the tubings in the end or leave the
                 last liquid in
+            velocity : int (default: None)
+                velocity of pumping in µl/min. If None, the 'clean_velocity' or 'max_velocity'
+                parameters are used.
+            pump_out_vol : int (default: None)
+                the volume in µl to flush the output pump and tubings with. If None,
+                2 * the sum of the input tubing volumes is used
 
         Do not specify arguments with None. No comma.
         pickup/dispense_flushvalve: 0 or 1
@@ -423,7 +429,7 @@ class PycroFlowInteractive(cmd.Cmd):
         Example Command:
         (PycroFlow) clean_tubings 200 cleaning_reservoirs=12
         or
-        (PycroFlow) clean_tubings extra_vol=200 cleaning_reservoirs=11,12 reservoir_vol=1500 empty_finally=0
+        (PycroFlow) clean_tubings extra_vol=200 cleaning_reservoirs=11,12 reservoir_vol=1500 empty_finally=0 velocity=5000
         """
         args = arg.split()
         extra_vol = args.pop(0)
@@ -450,6 +456,14 @@ class PycroFlowInteractive(cmd.Cmd):
             if ',' in kwargs['empty_finally']:
                 kwargs['empty_finally'] = kwargs['empty_finally'].index(',')
             kwargs['empty_finally'] = bool(int(kwargs['empty_finally']))
+        if 'velocity' in kwargs.keys():
+            if ',' in kwargs['velocity']:
+                kwargs['velocity'] = kwargs['velocity'].index(',')
+            kwargs['velocity'] = int(kwargs['velocity'])
+        if 'pump_out_vol' in kwargs.keys():
+            if ',' in kwargs['pump_out_vol']:
+                kwargs['pump_out_vol'] = kwargs['pump_out_vol'].index(',')
+            kwargs['pump_out_vol'] = int(kwargs['pump_out_vol'])
 
         if not self.orchestrator:
             print('Start orchestration first.')
@@ -460,7 +474,7 @@ class PycroFlowInteractive(cmd.Cmd):
 
     # ######################### Direct Laser
 
-    def do_laser(self, laser, state=1):
+    def do_laser(self, arg):
         """select a laser, and enable it
         Args:
             laser : int
@@ -473,6 +487,17 @@ class PycroFlowInteractive(cmd.Cmd):
         if not self.orchestrator:
             print('Start orchestration first.')
             return
+        
+        args = arg.split()
+        laser = args[0]
+        if 'laser=' in laser:
+            laser = laser[len('laser='):]
+        state = args[1]
+        if 'state=' in state:
+            state = (int(state[len('state='):]) == 1)
+        else:
+            state = (int(state) == 1)
+        print(f'Setting laser {laser} to state {state}')
 
         try:
             self.orchestrator.execute_system_function(
@@ -480,7 +505,7 @@ class PycroFlowInteractive(cmd.Cmd):
                 args=[laser])
             self.orchestrator.execute_system_function(
                 'illu', self.illumination_system.set_laser_enabled,
-                kwargs={'laser': laser, 'enabled':int(state)==1})
+                kwargs={'laser': laser, 'enabled': state})
         except:
             print('There was an error. Please type "help laser" for hints on usage.')
             pass

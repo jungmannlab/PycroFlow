@@ -881,7 +881,10 @@ class LegacyArchitecture(AbstractSystem):
         # self.fill_and_shake_tubings(
         #     input_res=self.special_names['flushbuffer_a'])
 
-    def clean_tubings_seperate_res(self, extra_vol, cleaning_reservoirs=[], reservoir_vol=None, empty_finally=True):
+    def clean_tubings_seperate_res(
+            self, extra_vol, cleaning_reservoirs=[], reservoir_vol=None, empty_finally=True,
+            velocity=None, pump_out_vol=None
+    ):
         """Clean tubings, with separate reservoirs already connected
         to all cleaning solutions.
 
@@ -901,11 +904,18 @@ class LegacyArchitecture(AbstractSystem):
                 beginning.
             empty_finally :  bool
                 whether to empty the tubings in the end or keep the last liquid in
+            velocity : int
+                velocity of pumping in µl/min. If None, the 'clean_velocity' or 'max_velocity'
+                parameters are used. Default: None.
+            pump_out_vol : int
+                the volume in µl to flush the output pump and tubings with. If None,
+                2 * the sum of the input tubing volumes is used
         """
         print('Starting tubing cleaning procedure. Make sure the Sample Input and Output Needles are fluidly connected.')
         res_exceptions = cleaning_reservoirs
 
-        velocity = self.parameters.get('clean_velocity')
+        if not velocity:
+            velocity = self.parameters.get('clean_velocity')
         if not velocity:
             velocity = self.parameters['max_velocity']
         delay = self.parameters.get('clean_delay', 0)
@@ -918,7 +928,9 @@ class LegacyArchitecture(AbstractSystem):
         else:
             empty_vol = 3 * extra_vol
         total_vol = self.fill_tubings(empty_vol, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity, delay=delay)
-        self.flush_pump_out(total_vol * 2, only_forward=True, velocity=velocity/5, delay=delay)
+        if pump_out_vol is None:
+            pump_out_vol = 2 * total_vol
+        self.flush_pump_out(pump_out_vol, only_forward=True, velocity=velocity, delay=delay)
 
         # sequentially use cleaning liquids
         for i, clean_id in enumerate(cleaning_reservoirs):
@@ -930,14 +942,14 @@ class LegacyArchitecture(AbstractSystem):
             if empty_finally or i < len(cleaning_reservoirs) - 1:
                 self.fill_tubings(extra_vol * 2, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity, delay=delay)
             # move through output tubing
-            self.flush_pump_out(total_vol * 2, only_forward=True, velocity=velocity/5, delay=delay)
+            self.flush_pump_out(pump_out_vol, only_forward=True, velocity=velocity, delay=delay)
 
         # empty tubings
         if empty_finally:
             logger.debug('Emptying tubings and reservoirs')
             print('Emptying tubings and reservoirs')
             total_vol = self.fill_tubings(empty_vol, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity, delay=delay)
-            self.flush_pump_out(total_vol * 2, only_forward=True, velocity=velocity/5, delay=delay)
+            self.flush_pump_out(pump_out_vol, only_forward=True, velocity=velocity, delay=delay)
 
     def flush_pump_out(self, vol=None, only_forward=False, velocity=None, delay=0):
         if not velocity:
