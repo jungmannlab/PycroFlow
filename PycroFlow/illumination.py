@@ -34,6 +34,14 @@ class IlluminationSystem(AbstractSystem):
             laser : int
                 the laser line to activate
         """
+        if self.instument.laser:
+            if self.instrument.lasers[self.instument.laser].enabled:
+                print(
+                    f'WARNING: current laser {self.instument.laser}'
+                    + f' is still ON! Switching to laser {laser}.')
+                logger.warning(
+                    f'WARNING: current laser {self.instument.laser}'
+                    + f' is still ON! Switching to laser {laser}.')
         try:
             logger.debug('Setting laser {:s}.'.format(str(laser)))
             self.instrument.laser = laser
