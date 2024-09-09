@@ -156,6 +156,120 @@ class ProtocolBuilder:
                 'Experiment type {:s} not implemented.'.format(exptype))
         return steps, reservoir_vols
 
+    def create_stepset_acquisition(
+        self, illusttg, imgsttg, unique_name, readable_name,
+        fluid_wait=True
+    ):
+        """
+        Args:
+            illusttg : dict or None
+                with keys: 'laser', 'power', 'warmup_delay'
+                optional: 'shutter_off_nonacq'
+            imgsttg : dict
+                with keys: 'frames', 't_exp'
+            unique_name : str or int
+                a unique name for the acquisition. In plain Exchange-PAINT,
+                this can be the round index. for SPH-RESI, it needs to be the
+                tgt_round and resi-round combination; for dark-round imaging
+                'dark' should be prepended
+            readable_name : str or int
+                a readable name for what happens this round. In plain
+                Exchange-PAINT, this can be the imager.
+            fluid_wait : bool
+                whether the fluid system should await the completion of the
+                acquisition
+        """
+        if illusttg:
+            self.create_step_setpower(
+                illusttg['laser'], illusttg['power_acq'],
+                illusttg['warmup_delay'],
+                message=f'for imaging {readable_name}')
+            if illusttg.get('shutter_off_nonacq'):
+                self.create_step_setshutter(state=True)
+            self.create_step_signal(
+                system='illu',
+                message=f'done setting power round {unique_name}')
+            self.create_step_waitfor_signal(
+                system='img', target='illu',
+                message=f'done setting power round {unique_name}')
+        self.create_step_acquire(
+            imgsttg['frames'], imgsttg['t_exp'],
+            message=f'round_{unique_name}-{readable_name}')
+        self.create_step_signal(
+            system='img', message=f'done imaging round {unique_name}')
+        if fluid_wait:
+            self.create_step_waitfor_signal(
+                system='fluid', target='img',
+                message=f'done imaging round {unique_name}')
+        if illusttg:
+            self.create_step_waitfor_signal(
+                system='illu', target='img',
+                message=f'done imaging round {unique_name}')
+            self.create_step_setpower(
+                illusttg['laser'], illusttg['power_nonacq'],
+                illusttg['warmup_delay'])
+            if illusttg.get('shutter_off_nonacq'):
+                self.create_step_setshutter(state=False)
+
+    def create_stepset_flush(
+        self, volumes, res_idcs, wait_after_pickup, reagent, washing,
+        t_incubate=0, unique_name=None, img_wait=True, illu_wait=False
+    ):
+        """Flush liquid through the sample chamber. Optionally, this can be
+        followed by a waiting (incubation) step, and a signalling step.
+
+        Args:
+            volumes : dict
+                the volumes dicitonary, with keys
+                'vol_remove_before_flush', 'vol_wash', 'vol_reagent'
+            res_idcs : dict
+                maps from reservoir names to reservoir indices
+            wait_after_pickup : int
+                seconds to wait for equilibration
+            reagent : str
+                reservoir name of the reagent to flush (or wash buffer)
+            washing : bool
+                whether to use wash volume or reagent volume
+            t_incubate : int
+                minutes to incubate after flushing
+            unique_name : str
+                an unique name of the fluishing step. This is used for the
+                'fluid' system signal and must be the same that is going to
+                be waited for in another system
+            img_wait : bool
+                whether the imaging system should wait for this step to finish
+            illu_wait : bool
+                whether the imaging system should wait for this step to finish
+        """
+        if washing:
+            vol = volumes[f'vol_wash']
+        else:
+            vol = volumes[f'vol_reagent']
+        self.create_step_pumpout(
+            volume=volumes['vol_remove_before_flush'], extractionfactor=1)
+        self.create_step_inject(
+            volume=vol - volumes['vol_remove_before_flush'],
+            reservoir_id=res_idcs[reagent],
+            delay=wait_after_pickup)
+        self.create_step_inject(
+            volume=volumes['vol_remove_before_flush'],
+            reservoir_id=res_idcs[reagent],
+            extractionfactor=0,
+            delay=wait_after_pickup)
+        if t_incubate > 0:
+            self.create_step_incubate(t_incubate)
+        if unique_name is not None:
+            self.create_step_signal(
+                system='fluid', message=f'done flushing {unique_name}')
+            if img_wait:
+                self.create_step_waitfor_signal(
+                    system='img', target='fluid',
+                    message=f'done flushing {unique_name}')
+            if illu_wait:
+                self.create_step_waitfor_signal(
+                    system='illu', target='fluid',
+                    message=f'done flushing {unique_name}')
+
     def create_steps_exchange(self, config):
         """Creates the protocol steps for an Exchange-PAINT experiment
         Args:
@@ -169,21 +283,77 @@ class ProtocolBuilder:
                 the aria steps.
             reservoir_vols : dict
                 keys: reservoir names, values: volumes
-            imground_descriptions : list of str
-                a description of each imaging round
+
+        example for config:
+        config = {
+            "fluid": {
+                'parameters': {
+                    'start_velocity': 50,
+                    'max_velocity': 200,
+                    'stop_velocity': 50,
+                    'pumpout_dispense_velocity': 200,
+                    'clean_velocity': 1500,
+                    'mode': 'tubing_ignore',  # 'tubing_stack' or 'tubing_flush' or 'tubing_ignore'
+                    'extractionfactor': 4},
+                'settings': {
+                    'vol_wash_pre': 2,  # in ul
+                    'vol_wash': 7,  # in ul
+                    'vol_imager_pre': 7,  # in ul
+                    'vol_imager_post': 5,  # in ul
+                    'reservoir_names': {
+                        0: 'R1', 1: 'R2', 2: 'R3', 3: 'R4', 4: 'R5', 5: 'Imaging buffer', 6: 'R6'},
+                    'experiment' : {
+                        'type': 'Exchange',  # options: ['Exchange', 'MERPAINT', 'FlushTest']
+                        'wash_buffer': 'Imaging buffer',
+                        'imagers': [
+                            'R1', 'R2', 'R3', 'R4', 'R5', 'R6'],}
+                }
+            },
+            "img": {
+                'parameters': {
+                    'show_progress': True,
+                    'show_display': True,
+                    'close_display_after_acquisition': True,
+                    },
+                'settings': {
+                    'frames': 6,
+                    'darkframes': 5,
+                    't_exp': 100,  # in ms
+                    }
+            },
+            "illu": {
+                'parameters': {
+                    'channel_group': 'Filter turret',
+                    'filter': '2-G561',
+                    'ROI': [512, 512, 512, 512]},
+                'settings': {
+                    'setup': 'Mercury',
+                    'laser': 560,
+                    'power': 30,  #mW
+                    }
+            }
         """
         experiment = config['fluid']['settings']['experiment']
         reservoirs = config['fluid']['settings']['reservoir_names']
-        imager_vol_pre = config['fluid']['settings']['vol_imager_pre']
-        imager_vol_post = config['fluid']['settings']['vol_imager_post']
-        wait_after_pickup = config['fluid']['settings'].get('wait_after_pickup', 0)
-        wash_vol = config['fluid']['settings']['vol_wash']
-        wash_vol_pre = config['fluid']['settings']['vol_wash_pre']
-        vol_remove_before_wash = config['fluid']['settings'].get('vol_remove_before_wash', 0)
+
+        wait_after_pickup = config['fluid']['settings'].get(
+            'wait_after_pickup', 0)
+
+        volumes = {
+            'vol_remove_before_wash': config['fluid']['settings'].get(
+                'vol_remove_before_wash', 0),
+            'vol_reagent': config['fluid']['settings']['vol_imager'],
+            'vol_wash': config['fluid']['settings']['vol_wash'],
+        }
 
         initial_imager = experiment.get('initial_imager')
 
-        imgsttg = config['img']['settings']
+        imgsttg = {
+            'frames': config['img']['settings']['frames'],
+            't_exp': config['img']['settings']['t_exp']}
+        darkimgsttg = {
+            'frames': config['img']['settings']['darkframes'],
+            't_exp': config['img']['settings']['t_exp']}
         illusttg = config.get('illu', {}).get('settings')
 
         # check that all mentioned sources acqually exist
@@ -192,82 +362,31 @@ class ProtocolBuilder:
             [name in reservoirs.values() for name in experiment['imagers']])
 
         washbuf = experiment['wash_buffer']
-        res_idcs = {name: nr - 1 for nr, name in reservoirs.items()}
+        # res_idcs = {name: nr - 1 for nr, name in reservoirs.items()}
         res_idcs = {name: nr for nr, name in reservoirs.items()}
 
+        # if the sample already has the first imager, direcly start imaging
         if isinstance(initial_imager, str):
             round = 0
-            if illusttg:
-                self.create_step_setpower(illusttg['laser'], illusttg['power_acq'], illusttg['warmup_delay'], message=initial_imager)
-                if illusttg.get('shutter_off_nonacq'):
-                    self.create_step_setshutter(state=True)
-                self.create_step_signal(
-                    system='illu', message='done setting power round {:d}'.format(round))
-                self.create_step_waitfor_signal(
-                    system='img', target='illu',
-                    message='done setting power round {:d}'.format(round))
             imager = initial_imager
-            self.create_step_acquire(
-                imgsttg['frames'], imgsttg['t_exp'],
-                message='round_{:d}-{:s}'.format(round, imager))
-            self.create_step_signal(
-                system='img', message='done imaging round {:d}'.format(round))
-            self.create_step_waitfor_signal(
-                system='fluid', target='img',
-                message='done imaging round {:d}'.format(round))
-            if illusttg:
-                self.create_step_waitfor_signal(
-                    system='illu', target='img',
-                    message='done imaging round {:d}'.format(round))
-                self.create_step_setpower(illusttg['laser'], illusttg['power_nonacq'], illusttg['warmup_delay'])
-                if illusttg.get('shutter_off_nonacq'):
-                    self.create_step_setshutter(state=False)
-            self.create_step_pumpout(volume=vol_remove_before_wash, extractionfactor=1)
-            self.create_step_inject(
-                volume=wash_vol - vol_remove_before_wash,
-                reservoir_id=res_idcs[washbuf],
-                delay=wait_after_pickup)
-            self.create_step_inject(
-                volume=vol_remove_before_wash,
-                reservoir_id=res_idcs[washbuf],
-                extractionfactor=0,
-                delay=wait_after_pickup)
+            self.create_stepset_acquisition(
+                illusttg, imgsttg,
+                unique_name=f"img-{round}", readable_name=imager,
+                fluid_wait=True)
+            self.create_stepset_flush(
+                volumes, res_idcs, wait_after_pickup,
+                reagent=washbuf, washing=True,
+                img_wait=True, illu_wait=True)
             # check dark frames
-            self.create_step_signal(
-                system='fluid', message='done dark-round {:d}'.format(round))
-            self.create_step_waitfor_signal(
-                system='img', target='fluid',
-                message='done dark-round {:d}'.format(round))
-            if illusttg:
-                self.create_step_waitfor_signal(
-                    system='illu', target='fluid',
-                    message='done dark-round {:d}'.format(round))
-                self.create_step_setpower(illusttg['laser'], illusttg['power_acq'], illusttg['warmup_delay'])
-                if illusttg.get('shutter_off_nonacq'):
-                    self.create_step_setshutter(state=True)
-                self.create_step_signal(
-                    system='illu', message='done setting power dark-round {:d}'.format(round))
-                self.create_step_waitfor_signal(
-                    system='img', target='illu',
-                    message='done setting power dark-round {:d}'.format(round))
-            self.create_step_acquire(
-                imgsttg['darkframes'], imgsttg['t_exp'],
-                message='dark-round_{:d}-{:s}'.format(round, imager))
-            self.create_step_signal(
-                system='img', message='done imaging dark-round {:d}'.format(round))
-            self.create_step_waitfor_signal(
-                system='fluid', target='img',
-                message='done imaging dark-round {:d}'.format(round))
-            if illusttg:
-                self.create_step_waitfor_signal(
-                    system='illu', target='img',
-                message='done imaging dark-round {:d}'.format(round))
-                self.create_step_setpower(illusttg['laser'], illusttg['power_nonacq'], illusttg['warmup_delay'])
-                if illusttg.get('shutter_off_nonacq'):
-                    self.create_step_setshutter(state=False)
+            self.create_stepset_acquisition(
+                illusttg, darkimgsttg,
+                unique_name=f"dark-{round}", readable_name=imager,
+                fluid_wait=True)
         else:
-            self.create_step_pumpout(volume=wash_vol_pre)
-            self.create_step_inject(volume=wash_vol_pre, reservoir_id=res_idcs[washbuf])
+            self.create_step_pumpout(volume=volumes['vol_wash_pre'])
+            self.create_step_inject(
+                volume=volumes['wash_vol_pre'], reservoir_id=res_idcs[washbuf])
+
         for round, imager in enumerate(experiment['imagers']):
             if round < len(experiment['imagers']) - 1:
                 last_round = False
@@ -275,93 +394,340 @@ class ProtocolBuilder:
                 last_round = True
             if isinstance(initial_imager, str):
                 round = round + 1
-            self.create_step_pumpout(volume=vol_remove_before_wash, extractionfactor=1)  # reduce volume to wash
-            self.create_step_inject(  # wash at low volume
-                volume=int(imager_vol_pre - vol_remove_before_wash),
-                reservoir_id=res_idcs[imager],
-                delay=wait_after_pickup)
-            self.create_step_inject(  # fill up the missing volume
-                volume=int(vol_remove_before_wash),
-                reservoir_id=res_idcs[imager],
-                extractionfactor=0,
-                delay=wait_after_pickup)
-            self.create_step_signal(
-                system='fluid', message='done round {:d}'.format(round))
-            self.create_step_waitfor_signal(
-                system='img', target='fluid',
-                message='done round {:d}'.format(round))
-            if illusttg:
-                self.create_step_waitfor_signal(
-                    system='illu', target='fluid',
-                message='done round {:d}'.format(round))
-                self.create_step_setpower(illusttg['laser'], illusttg['power_acq'], illusttg['warmup_delay'], message=f'for imaging {imager}')
-                if illusttg.get('shutter_off_nonacq'):
-                    self.create_step_setshutter(state=True)
-                self.create_step_signal(
-                    system='illu', message='done setting power round {:d}'.format(round))
-                self.create_step_waitfor_signal(
-                    system='img', target='illu',
-                    message='done setting power round {:d}'.format(round))
-            self.create_step_acquire(
-                imgsttg['frames'], imgsttg['t_exp'],
-                message='round_{:d}-{:s}'.format(round, imager))
-            self.create_step_signal(
-                system='img', message='done imaging round {:d}'.format(round))
-            self.create_step_waitfor_signal(
-                system='fluid', target='img',
-                message='done imaging round {:d}'.format(round))
-            if illusttg:
-                self.create_step_waitfor_signal(
-                    system='illu', target='img',
-                    message='done imaging round {:d}'.format(round))
-                self.create_step_setpower(illusttg['laser'], illusttg['power_nonacq'], illusttg['warmup_delay'])
-                if illusttg.get('shutter_off_nonacq'):
-                    self.create_step_setshutter(state=False)
-            self.create_step_inject(
-                volume=int(imager_vol_post), reservoir_id=res_idcs[imager],
-                delay=wait_after_pickup)
+            self.create_stepset_flush(
+                volumes, res_idcs, wait_after_pickup,
+                reagent=imager, washing=False,
+                img_wait=True, illu_wait=True)
+            self.create_stepset_acquisition(
+                illusttg, imgsttg,
+                unique_name=f"img-{round}", readable_name=imager,
+                fluid_wait=True)
+
             if not last_round:
-                self.create_step_pumpout(volume=vol_remove_before_wash, extractionfactor=1)
-                self.create_step_inject(
-                    volume=wash_vol - vol_remove_before_wash,
-                    reservoir_id=res_idcs[washbuf],
-                    delay=wait_after_pickup)
-                self.create_step_inject(
-                    volume=vol_remove_before_wash,
-                    reservoir_id=res_idcs[washbuf],
-                    extractionfactor=0,
-                    delay=wait_after_pickup)
-                # check dark frames
-                self.create_step_signal(
-                    system='fluid', message='done dark-round {:d}'.format(round))
-                self.create_step_waitfor_signal(
-                    system='img', target='fluid',
-                    message='done dark-round {:d}'.format(round))
-                if illusttg:
-                    self.create_step_waitfor_signal(
-                        system='illu', target='fluid',
-                    message='done dark-round {:d}'.format(round))
-                    self.create_step_setpower(illusttg['laser'], illusttg['power_acq'], illusttg['warmup_delay'])
-                    if illusttg.get('shutter_off_nonacq'):
-                        self.create_step_setshutter(state=True)
-                    self.create_step_signal(
-                        system='illu', message='done setting power dark-round {:d}'.format(round))
-                    self.create_step_waitfor_signal(
-                        system='img', target='illu',
-                        message='done setting power dark-round {:d}'.format(round))
-                self.create_step_acquire(
-                    imgsttg['darkframes'], imgsttg['t_exp'],
-                    message='dark-round_{:d}-{:s}'.format(round, imager))
-                self.create_step_signal(
-                    system='img', message='done imaging dark-round {:d}'.format(round))
-                self.create_step_waitfor_signal(
-                    system='fluid', target='img',
-                    message='done imaging dark-round {:d}'.format(round))
+                self.create_stepset_flush(
+                    volumes, res_idcs, wait_after_pickup,
+                    reagent=washbuf, washing=True,
+                    img_wait=True, illu_wait=True)
+                self.create_stepset_acquisition(
+                    illusttg, darkimgsttg,
+                    unique_name=f"img-dark-{round}", readable_name=imager,
+                    fluid_wait=True)
             elif last_round:
                 if illusttg:
                     if illusttg['lasers_off_finally']:
                         self.create_step_laserenable('all', False)
                         self.create_step_setshutter(state=False)
+
+        return self.steps, self.reservoir_vols
+
+    def create_steps_sph_resi(self, config):
+        """In SPH-RESI, all target molecules of one target type are conjugated
+        with the same sequence, and imaged in multiple rounds: for each round,
+        a subset of the open target molecule sequences is labeled with an
+        adapter, which has an imager docking sequence. After imaging that, the
+        adapter is blocked using a blocker strand.
+        (https://mibwiki.biochem.mpg.de/x/eoNZCg)
+
+        As the number/density of open target molecule sequences decreases with
+        time, different concentrations and incubation times are necessary for
+        labeling equally-sized subsets.
+
+        Parameters:
+        Args:
+            config : dict
+                flow acquisition configuration with keys:
+                    save_dir, base_name
+                    fluid_settings, imaging_settings, illumination_settings,
+                    mm_parameters
+        Returns:
+            steps : list of dict
+                the aria steps.
+            reservoir_vols : dict
+                keys: reservoir names, values: volumes
+
+
+        example for config:
+        config = {
+            "fluid": {
+                'parameters': {
+                    'start_velocity': 50,
+                    'max_velocity': 200,
+                    'stop_velocity': 50,
+                    'pumpout_dispense_velocity': 200,
+                    'clean_velocity': 1500,
+                    'mode': 'tubing_ignore',  # 'tubing_stack' or 'tubing_flush' or 'tubing_ignore'
+                    'extractionfactor': 4},
+                'settings': {
+                    'vol_wash': 7,  # in ul
+                    'vol_reagent': 7,  # in ul
+                    'reservoir_names': {
+                        0: 'R1-lo', 1: 'R1-hi', 2: 'R3-A1', 3: 'R3-A2',
+                        7: 'Blocker', 8: 'A1-c1', 9: 'A1-c2', 10: 'A1-c3',
+                        11: 'A2-c1', 12: 'A2-c2',
+                        18: 'Wash Buffer 1', 19: 'Wash Buffer 2'},
+                    'experiment' : {
+                        'type': 'SPH-RESI'
+                        'wash_buffer_1': 'Wash Buffer 1',
+                        'wash_buffer_2': None,  # skip if None
+                        'blocker': 'Blocker',
+                        'blocker_incubation': 5, # in minutes
+                        'initial_imager_present': True,
+                        'target-rounds': {  # keys: various targets
+                            'A1': {  # general target parameters
+                                'BC_imager_pre': 'R1-lo',
+                                'frames_BC_pre': 5000,
+                                'BC_imager_post': 'R1-hi',
+                                'frames_BC_post': 15000,
+                                'RESI-imager': 'R3-A1',
+                                'RESI-frames': 50000,
+                                'RESI-rounds': [  # params for each RESI round
+                                    {
+                                        'adapter': 'A1-c1',
+                                        'adapter_incubation': .5,},
+                                    {
+                                        'adapter': 'A1-c1',
+                                        'adapter_incubation': 5,},
+                                    {
+                                        'adapter': 'A1-c2',
+                                        'adapter_incubation': .5,},
+                                    {
+                                        'adapter': 'A1-c2',
+                                        'adapter_incubation': 15,},
+                                    {
+                                        'adapter': 'A1-c3',
+                                        'adapter_incubation': 5,},
+                                ],
+                            },
+                            'A2': {
+                                'BC_imager_pre': 'R1-hi',
+                                'frames_BC_pre': 5000,
+                                'BC_imager_post': 'R1-hi',
+                                'frames_BC_post': 15000,
+                                'RESI-imager': 'R3-A2',
+                                'RESI-frames': 50000,
+                                'rounds': [
+                                    {
+                                        'adapter': 'A2-c1',
+                                        'adapter_incubation': .5,},
+                                    {
+                                        'adapter': 'A2-c1',
+                                        'adapter_incubation': 5,},
+                                    {
+                                        'adapter': 'A2-c2',
+                                        'adapter_incubation': .5,},
+                                ],
+                            },
+                        },
+                    },
+                }
+            },
+            "img": {
+                'parameters': {
+                    'show_progress': True,
+                    'show_display': True,
+                    'close_display_after_acquisition': True,
+                    },
+                'settings': {
+                    'frames': 6,
+                    'darkframes': 5,
+                    't_exp': 100,  # in ms
+                    }
+            },
+            "illu": {
+                'parameters': {
+                    'channel_group': 'Filter turret',
+                    'filter': '2-G561',
+                    'ROI': [512, 512, 512, 512]},
+                'settings': {
+                    'setup': 'Mercury',
+                    'laser': 560,
+                    'power': 30,  #mW
+                    }
+            }
+        """
+        experiment = config['fluid']['settings']['experiment']
+        reservoirs = config['fluid']['settings']['reservoir_names']
+
+        wait_after_pickup = config['fluid']['settings'].get(
+            'wait_after_pickup', 0)
+
+        volumes = {
+            'vol_remove_before_wash': config['fluid']['settings'].get(
+                'vol_remove_before_wash', 0),
+            'vol_reagent': config['fluid']['settings']['vol_imager'],
+            'vol_wash': config['fluid']['settings']['vol_wash'],
+        }
+        volumes = {
+            'vol_reduction': config['fluid']['settings'].get(
+                'vol_remove_before_wash', 0),
+            'wash': {
+                'vol': config['fluid']['settings']['vol_wash'],
+                'vol_pre': config['fluid']['settings']['vol_wash_pre'],
+            },
+            'reagent': {
+                'vol': config['fluid']['settings']['vol_imager_post'],
+                'vol_pre': config['fluid']['settings']['vol_imager_pre'],
+            },
+        }
+
+        initial_imager_present = experiment.get('initial_imager_present')
+
+        general_imgsttg = config['img']['settings']
+        illusttg = config.get('illu', {}).get('settings')
+
+        # check that all mentioned sources acqually exist
+        assert experiment['wash_buffer_1'] in reservoirs.values()
+
+        res_idcs = {name: nr for nr, name in reservoirs.items()}
+
+        washbuf1 = reservoirs['wash_buffer_1']
+        washbuf2 = reservoirs.get('wash_buffer_2')
+
+        # self.create_step_pumpout(volume=volumes['wash_vol_pre'])
+        # self.create_step_inject(
+        #     volume=volumes['wash_vol_pre'], reservoir_id=res_idcs[washbuf1])
+
+        # iterate over target rounds
+        for tgt_round, (tgt, tgt_pars) in enumerate(
+            experiment['target-rounds']
+        ):
+            # target-round specific preparatory steps
+
+            # inject barcode imager
+            if not initial_imager_present or tgt_round > 0:
+                self.create_stepset_flush(
+                    volumes, res_idcs, wait_after_pickup,
+                    reagent=tgt_pars["BC_imager_pre"], washing=False,
+                    img_wait=True, illu_wait=True)
+
+            # image free barcodes (the DNA conjugated to the target):
+            imgsttg = {
+                "t_exp": general_imgsttg["t_exp"],
+                "frames": tgt_pars["frames_BC_pre"]
+            }
+            self.create_stepset_acquisition(
+                illusttg, imgsttg,
+                unique_name=f"BC-pre_{tgt_round}", readable_name=f"{tgt}",
+                fluid_wait=True)
+
+            # wash using wash_buffer_1
+            self.create_stepset_flush(
+                volumes, res_idcs, wait_after_pickup,
+                reagent=washbuf1, washing=True,
+                img_wait=False, illu_wait=False)
+
+            #   wash with wash buffer 2: same volume as for wash buffer 1
+            if washbuf2 is not None:
+                self.create_stepset_flush(
+                    volumes, res_idcs, wait_after_pickup,
+                    reagent=washbuf2, washing=True,
+                    img_wait=False, illu_wait=False)
+
+            # iterate over resi-rounds for this target
+            for resi_round, resi_pars in enumerate(tgt_pars['RESI-rounds']):
+                # resi-round specific steps
+
+                # incubate adapter (mediating from barcode to docking strand)
+                # with resi-round specific incubation parameters
+                self.create_stepset_flush(
+                    volumes, res_idcs, wait_after_pickup,
+                    reagent=resi_pars['adapter'], washing=False,
+                    t_incubate=resi_pars['adapter_incubation'],
+                    img_wait=False, illu_wait=False)
+
+                #   wash with wash buffer 2: same volume as for wash buffer 1
+                if washbuf2 is not None:
+                    self.create_stepset_flush(
+                        volumes, res_idcs, wait_after_pickup,
+                        reagent=washbuf2, washing=True,
+                        img_wait=False, illu_wait=False)
+
+                # wash using wash_buffer_1
+                self.create_stepset_flush(
+                    volumes, res_idcs, wait_after_pickup,
+                    reagent=washbuf1, washing=True,
+                    img_wait=False, illu_wait=False)
+
+                # inject RESI imager
+                self.create_stepset_flush(
+                    volumes, res_idcs, wait_after_pickup,
+                    reagent=tgt_pars["RESI-imager"], washing=False,
+                    img_wait=True, illu_wait=True)
+
+                # perform RESI round imaging
+                imgsttg = {
+                    "t_exp": general_imgsttg["t_exp"],
+                    "frames": tgt_pars["RESI-frames"]
+                }
+                self.create_stepset_acquisition(
+                    illusttg, imgsttg,
+                    unique_name=f"resi_{tgt_round}", readable_name=f"{tgt}",
+                    fluid_wait=True)
+
+                # wash using wash_buffer_1
+                self.create_stepset_flush(
+                    volumes, res_idcs, wait_after_pickup,
+                    reagent=washbuf1, washing=True,
+                    img_wait=False, illu_wait=False)
+
+                # wash with wash buffer 2: same volume as for wash buffer 1
+                if washbuf2 is not None:
+                    self.create_stepset_flush(
+                        volumes, res_idcs, wait_after_pickup,
+                        reagent=washbuf2, washing=True,
+                        img_wait=False, illu_wait=False)
+
+                # block the free adapters
+                self.create_stepset_flush(
+                    volumes, res_idcs, wait_after_pickup,
+                    reagent=experiment['blocker'], washing=False,
+                    t_incubate=experiment['blocker_incubation'],
+                    img_wait=False, illu_wait=False)
+
+                # wash with wash buffer 2: same volume as for wash buffer 1
+                if washbuf2 is not None:
+                    self.create_stepset_flush(
+                        volumes, res_idcs, wait_after_pickup,
+                        reagent=washbuf2, washing=True,
+                        img_wait=False, illu_wait=False)
+
+            # wash using wash_buffer_1
+            self.create_stepset_flush(
+                volumes, res_idcs, wait_after_pickup,
+                reagent=washbuf1, washing=True,
+                img_wait=False, illu_wait=False)
+
+            # post-resi target-specific steps
+
+            # inject barcode imager
+            self.create_stepset_flush(
+                volumes, res_idcs, wait_after_pickup,
+                reagent=tgt_pars["BC_imager_post"], washing=False,
+                img_wait=True, illu_wait=True)
+            # image free barcodes (the DNA conjugated to the target):
+            imgsttg = {
+                "t_exp": general_imgsttg["t_exp"],
+                "frames": tgt_pars["frames_BC_post"]
+            }
+            self.create_stepset_acquisition(
+                illusttg, imgsttg,
+                unique_name=f"BC-post_{tgt_round}", readable_name=f"{tgt}",
+                fluid_wait=True)
+
+            # if not last round:
+            #   wash with wash buffer 1: 'vol_wash'
+            if tgt_round < len(experiment['target-rounds'].keys()) - 1:
+                # wash using wash_buffer_1
+                self.create_stepset_flush(
+                    volumes, res_idcs, wait_after_pickup,
+                    reagent=washbuf1, washing=True,
+                    img_wait=False, illu_wait=False)
+
+        # steps for finishing up.
+        if illusttg:
+            if illusttg['lasers_off_finally']:
+                self.create_step_laserenable('all', False)
+                self.create_step_setshutter(state=False)
 
         return self.steps, self.reservoir_vols
 
@@ -579,12 +945,12 @@ class ProtocolBuilder:
             steps : dict
                 the protocols
             t_incu : float
-                the incubation time in seconds
+                the incubation time in minutes
         Returns:
             step : dict
                 the step configuration
         """
-        timeoutstr = str(t_incu)
+        timeoutstr = str(t_incu * 60)
         self.steps['fluid'].append(
             {'$type': 'incubate', 'duration': timeoutstr})
 
