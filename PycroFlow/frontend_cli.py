@@ -499,6 +499,11 @@ class PycroFlowInteractive(cmd.Cmd):
             state = (int(state) == 1)
         print(f'Setting laser {laser} to state {state}')
 
+        if ' ' in laser:
+            args = laser.split(' ')
+            laser = args[0]
+            enabled = args[1]
+
         try:
             self.orchestrator.execute_system_function(
                 'illu', self.illumination_system.set_laser,

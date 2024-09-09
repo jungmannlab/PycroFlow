@@ -81,7 +81,11 @@ def sendCommand(pumpAddress: str, message: str, waitForPump=False):
     encoded_command = str.encode(command)
     ser.write(encoded_command)
     responseBytes = ser.readline()  # Read from Serial Port
-    response = responseBytes.decode()
+    # response = responseBytes.decode()
+    try:
+        response = responseBytes.decode()
+    except UnicodeDecodeError as e:
+        logger.exception(str(e))
 
     if waitForPump:
         waitForResponse(commandHeader, commandFooter)

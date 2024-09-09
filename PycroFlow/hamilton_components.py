@@ -420,11 +420,12 @@ class Pump():
             waitForPump : bool
                 if True, the function only returns when the movement is done.
         """
-        logger.debug('pump ascii {:s} dispensing {:.1f} ul at {:.1f} µl/min'.format(self.psd.asciiAddress, vol, velocity))
         if velocity is not None:
+            logger.debug('pump ascii {:s} dispensing {:.1f} ul at {:.1f} µl/min'.format(self.psd.asciiAddress, vol, velocity))
             velocity = self.velocity_upm2sps(velocity)
             cmd = self.psd.command.setMaximumVelocity(velocity)
         else:
+            logger.debug('pump ascii {:s} dispensing {:.1f} ul.'.format(self.psd.asciiAddress, vol))
             cmd = ''
         cmd += self.psd.command.syringeMovement(
             SyrMov.relativeDispense.value, vol)

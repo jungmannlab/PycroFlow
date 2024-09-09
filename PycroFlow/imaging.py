@@ -158,6 +158,9 @@ class ImagingSystem(AbstractSystem):
                 pos = pos_list.get_position(i)
                 logger.debug('moving to position {:d}'.format(i))
                 pos.go_to_position(pos, self.core)
+                self.core.set_property(
+                    self.pfs_pars['tag_status'],
+                    self.pfs_pars['prop_state'], 'On')
                 acq_name_p = acq_name + '_pos{:d}'.format(i)  # + str(pos)
                 self.record_movie(acq_name_p, acquisition_config)
 
