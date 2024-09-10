@@ -198,6 +198,7 @@ class ProtocolBuilder:
         self.create_step_signal(
             system='img', message=f'done imaging round {unique_name}')
         if fluid_wait:
+            logger.debug(f'{unique_name} {readable_name} adding fluid wait step')
             self.create_step_waitfor_signal(
                 system='fluid', target='img',
                 message=f'done imaging round {unique_name}')
@@ -213,7 +214,8 @@ class ProtocolBuilder:
 
     def create_stepset_flush(
         self, volumes, res_idcs, wait_after_pickup, reagent, washing,
-        t_incubate=0, unique_name=None, img_wait=True, illu_wait=False
+        t_incubate=0, unique_name=None, readable_name=None,
+        img_wait=True, illu_wait=False
     ):
         """Flush liquid through the sample chamber. Optionally, this can be
         followed by a waiting (incubation) step, and a signalling step.
@@ -259,13 +261,16 @@ class ProtocolBuilder:
         if t_incubate > 0:
             self.create_step_incubate(t_incubate)
         if unique_name is not None:
+            logger.debug(f'{unique_name} {readable_name} creating signal')
             self.create_step_signal(
                 system='fluid', message=f'done flushing {unique_name}')
             if img_wait:
+                logger.debug(f'{unique_name} {readable_name} adding img wait step')
                 self.create_step_waitfor_signal(
                     system='img', target='fluid',
                     message=f'done flushing {unique_name}')
             if illu_wait:
+                logger.debug(f'{unique_name} {readable_name} adding illu wait step')
                 self.create_step_waitfor_signal(
                     system='illu', target='fluid',
                     message=f'done flushing {unique_name}')
@@ -340,10 +345,11 @@ class ProtocolBuilder:
             'wait_after_pickup', 0)
 
         volumes = {
-            'vol_remove_before_wash': config['fluid']['settings'].get(
-                'vol_remove_before_wash', 0),
+            'vol_remove_before_flush': config['fluid']['settings'].get(
+                'vol_remove_before_flush', 0),
             'vol_reagent': config['fluid']['settings']['vol_imager'],
             'vol_wash': config['fluid']['settings']['vol_wash'],
+            'vol_wash_pre': config['fluid']['settings']['vol_wash_pre'],
         }
 
         initial_imager = experiment.get('initial_imager')
@@ -369,6 +375,7 @@ class ProtocolBuilder:
         if isinstance(initial_imager, str):
             round = 0
             imager = initial_imager
+            logger.debug(f'adding initial imager {imager}')
             self.create_stepset_acquisition(
                 illusttg, imgsttg,
                 unique_name=f"img-{round}", readable_name=imager,
@@ -376,6 +383,7 @@ class ProtocolBuilder:
             self.create_stepset_flush(
                 volumes, res_idcs, wait_after_pickup,
                 reagent=washbuf, washing=True,
+                unique_name=f"img-{round}", readable_name=imager,
                 img_wait=True, illu_wait=True)
             # check dark frames
             self.create_stepset_acquisition(
@@ -383,9 +391,11 @@ class ProtocolBuilder:
                 unique_name=f"dark-{round}", readable_name=imager,
                 fluid_wait=True)
         else:
-            self.create_step_pumpout(volume=volumes['vol_wash_pre'])
-            self.create_step_inject(
-                volume=volumes['wash_vol_pre'], reservoir_id=res_idcs[washbuf])
+            # self.create_step_pumpout(volume=volumes['vol_wash_pre'])
+            # self.create_step_inject(
+            #     volume=volumes['vol_wash_pre'], reservoir_id=res_idcs[washbuf])
+            logger.debug('No initial imager')
+            pass
 
         for round, imager in enumerate(experiment['imagers']):
             if round < len(experiment['imagers']) - 1:
@@ -397,6 +407,7 @@ class ProtocolBuilder:
             self.create_stepset_flush(
                 volumes, res_idcs, wait_after_pickup,
                 reagent=imager, washing=False,
+                unique_name=f"img-{round}", readable_name=imager,
                 img_wait=True, illu_wait=True)
             self.create_stepset_acquisition(
                 illusttg, imgsttg,
@@ -407,6 +418,7 @@ class ProtocolBuilder:
                 self.create_stepset_flush(
                     volumes, res_idcs, wait_after_pickup,
                     reagent=washbuf, washing=True,
+                    unique_name=f"img-dark-{round}", readable_name=imager,
                     img_wait=True, illu_wait=True)
                 self.create_stepset_acquisition(
                     illusttg, darkimgsttg,
@@ -598,6 +610,7 @@ class ProtocolBuilder:
                 self.create_stepset_flush(
                     volumes, res_idcs, wait_after_pickup,
                     reagent=tgt_pars["BC_imager_pre"], washing=False,
+                    unique_name=f"BC-pre_{tgt_round}", readable_name=f"{tgt}",
                     img_wait=True, illu_wait=True)
 
             # image free barcodes (the DNA conjugated to the target):
@@ -652,6 +665,7 @@ class ProtocolBuilder:
                 self.create_stepset_flush(
                     volumes, res_idcs, wait_after_pickup,
                     reagent=tgt_pars["RESI-imager"], washing=False,
+                    unique_name=f"resi_{tgt_round}", readable_name=f"{tgt}",
                     img_wait=True, illu_wait=True)
 
                 # perform RESI round imaging
@@ -703,6 +717,7 @@ class ProtocolBuilder:
             self.create_stepset_flush(
                 volumes, res_idcs, wait_after_pickup,
                 reagent=tgt_pars["BC_imager_post"], washing=False,
+                unique_name=f"BC-post_{tgt_round}", readable_name=f"{tgt}",
                 img_wait=True, illu_wait=True)
             # image free barcodes (the DNA conjugated to the target):
             imgsttg = {
