@@ -151,6 +151,8 @@ class ProtocolBuilder:
             steps, reservoir_vols = self.create_steps_MERPAINT(config)
         elif exptype.lower() == 'flushtest':
             steps, reservoir_vols = self.create_steps_flushtest(config)
+        elif exptype.lower() == 'sph-resi':
+            steps, reservoir_vols = self.create_steps_sph_resi(config)
         else:
             raise KeyError(
                 'Experiment type {:s} not implemented.'.format(exptype))
@@ -347,7 +349,7 @@ class ProtocolBuilder:
         volumes = {
             'vol_remove_before_flush': config['fluid']['settings'].get(
                 'vol_remove_before_flush', 0),
-            'vol_reagent': config['fluid']['settings']['vol_imager'],
+            'vol_reagent': config['fluid']['settings']['vol_reagent'],
             'vol_wash': config['fluid']['settings']['vol_wash'],
             'vol_wash_pre': config['fluid']['settings']['vol_wash_pre'],
         }
@@ -566,21 +568,21 @@ class ProtocolBuilder:
         volumes = {
             'vol_remove_before_wash': config['fluid']['settings'].get(
                 'vol_remove_before_wash', 0),
-            'vol_reagent': config['fluid']['settings']['vol_imager'],
+            'vol_reagent': config['fluid']['settings']['vol_reagent'],
             'vol_wash': config['fluid']['settings']['vol_wash'],
         }
-        volumes = {
-            'vol_reduction': config['fluid']['settings'].get(
-                'vol_remove_before_wash', 0),
-            'wash': {
-                'vol': config['fluid']['settings']['vol_wash'],
-                'vol_pre': config['fluid']['settings']['vol_wash_pre'],
-            },
-            'reagent': {
-                'vol': config['fluid']['settings']['vol_imager_post'],
-                'vol_pre': config['fluid']['settings']['vol_imager_pre'],
-            },
-        }
+        # volumes = {
+        #     'vol_reduction': config['fluid']['settings'].get(
+        #         'vol_remove_before_wash', 0),
+        #     'wash': {
+        #         'vol': config['fluid']['settings']['vol_wash'],
+        #         'vol_pre': config['fluid']['settings']['vol_wash_pre'],
+        #     },
+        #     'reagent': {
+        #         'vol': config['fluid']['settings']['vol_imager_post'],
+        #         'vol_pre': config['fluid']['settings']['vol_imager_pre'],
+        #     },
+        # }
 
         initial_imager_present = experiment.get('initial_imager_present')
 
@@ -592,8 +594,8 @@ class ProtocolBuilder:
 
         res_idcs = {name: nr for nr, name in reservoirs.items()}
 
-        washbuf1 = reservoirs['wash_buffer_1']
-        washbuf2 = reservoirs.get('wash_buffer_2')
+        washbuf1 = config['fluid']['settings']['wash_buffer_1']
+        washbuf2 = config['fluid']['settings'].get('wash_buffer_2')
 
         # self.create_step_pumpout(volume=volumes['wash_vol_pre'])
         # self.create_step_inject(
@@ -601,7 +603,7 @@ class ProtocolBuilder:
 
         # iterate over target rounds
         for tgt_round, (tgt, tgt_pars) in enumerate(
-            experiment['target-rounds']
+            experiment['target-rounds'].items()
         ):
             # target-round specific preparatory steps
 
