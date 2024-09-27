@@ -706,6 +706,13 @@ class ProtocolBuilder:
                         volumes, res_idcs, wait_after_pickup,
                         reagent=washbuf2, washing=True,
                         img_wait=False, illu_wait=False)
+                # wash using wash_buffer_1
+                else:
+                    self.create_stepset_flush(
+                        volumes, res_idcs, wait_after_pickup,
+                        reagent=washbuf1, washing=True,
+                        img_wait=False, illu_wait=False)
+
 
             # wash using wash_buffer_1
             self.create_stepset_flush(
