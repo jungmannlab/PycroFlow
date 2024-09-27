@@ -566,8 +566,8 @@ class ProtocolBuilder:
             'wait_after_pickup', 0)
 
         volumes = {
-            'vol_remove_before_wash': config['fluid']['settings'].get(
-                'vol_remove_before_wash', 0),
+            'vol_remove_before_flush': config['fluid']['settings'].get(
+                'vol_remove_before_flush', 0),
             'vol_reagent': config['fluid']['settings']['vol_reagent'],
             'vol_wash': config['fluid']['settings']['vol_wash'],
         }
@@ -667,7 +667,7 @@ class ProtocolBuilder:
                 self.create_stepset_flush(
                     volumes, res_idcs, wait_after_pickup,
                     reagent=tgt_pars["RESI-imager"], washing=False,
-                    unique_name=f"resi_{tgt_round}", readable_name=f"{tgt}",
+                    unique_name=f"resi_{tgt_round}-{resi_round}", readable_name=f"{tgt}-{resi_round}",
                     img_wait=True, illu_wait=True)
 
                 # perform RESI round imaging
@@ -677,7 +677,7 @@ class ProtocolBuilder:
                 }
                 self.create_stepset_acquisition(
                     illusttg, imgsttg,
-                    unique_name=f"resi_{tgt_round}", readable_name=f"{tgt}",
+                    unique_name=f"resi_{tgt_round}-{resi_round}", readable_name=f"{tgt}-{resi_round}",
                     fluid_wait=True)
 
                 # wash using wash_buffer_1
@@ -967,9 +967,9 @@ class ProtocolBuilder:
             step : dict
                 the step configuration
         """
-        timeoutstr = str(t_incu * 60)
+        timeout = t_incu * 60
         self.steps['fluid'].append(
-            {'$type': 'incubate', 'duration': timeoutstr})
+            {'$type': 'incubate', 'duration': timeout})
 
     def create_step_pumpout(
             self, volume, extractionfactor=None):

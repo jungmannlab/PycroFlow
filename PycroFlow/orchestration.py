@@ -185,7 +185,7 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
                 self.wait_xchange(step['target'], step['value'])
             elif step['$type'].lower() == 'incubate':
                 tic = time.time()
-                while time.time() < tic + step['duration']:
+                while time.time() < tic + float(step['duration']):
                     if ((self.txchange['abort_flag'].is_set()
                          or self.txchange['abort_protocol_flag'].is_set())):
                         return

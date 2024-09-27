@@ -216,7 +216,7 @@ class PycroFlowInteractive(cmd.Cmd):
             parts = line.split(',')
             for part in parts:
                 syst, step = part.split(':')
-                start_entries[syst.strip()] = int(step.strip())
+                start_entries[syst.strip()] = int(step.strip()) - 1
         self.orchestrator.start_protocol(start_entries)
 
     def do_pause_protocol(self, line):
