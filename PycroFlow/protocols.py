@@ -346,12 +346,21 @@ class ProtocolBuilder:
         wait_after_pickup = config['fluid']['settings'].get(
             'wait_after_pickup', 0)
 
+        # volumes = {
+        #     'vol_remove_before_flush': config['fluid']['settings'].get(
+        #         'vol_remove_before_flush', 0),
+        #     'vol_reagent': config['fluid']['settings']['vol_reagent'],
+        #     'vol_wash': config['fluid']['settings']['vol_wash'],
+        #     'vol_wash_pre': config['fluid']['settings']['vol_wash_pre'],
+        # }
+
         volumes = {
             'vol_remove_before_flush': config['fluid']['settings'].get(
-                'vol_remove_before_flush', 0),
-            'vol_reagent': config['fluid']['settings']['vol_reagent'],
+                     'vol_remove_before_flush', 0),
+            'vol_reduction': config['fluid']['settings'].get(
+                'vol_remove_before_wash', 0),
             'vol_wash': config['fluid']['settings']['vol_wash'],
-            'vol_wash_pre': config['fluid']['settings']['vol_wash_pre'],
+            'vol_reagent': config['fluid']['settings']['vol_imager_post']
         }
 
         initial_imager = experiment.get('initial_imager')
