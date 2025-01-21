@@ -317,7 +317,7 @@ class Pump():
     def __init__(self, address, syringe,
                  instrument_type='4', valve_type='1', resolution_mode=1,
                  output_pos=None, input_pos=None, waste_pos=None,
-                 motorsteps_per_step=1):
+                 motorsteps_per_step=1, speed_factor=1):
         """
         Args:
             addresss : char
@@ -377,6 +377,7 @@ class Pump():
 
         self.input_pos = input_pos
         self.output_pos = output_pos
+        self.speed_factor = speed_factor
 
         if waste_pos is not None:
             self.set_valve(waste_pos)
@@ -423,7 +424,7 @@ class Pump():
         if velocity is not None:
             logger.debug('pump ascii {:s} dispensing {:.1f} ul at {:.1f} µl/min'.format(self.psd.asciiAddress, vol, velocity))
             velocity = self.velocity_upm2sps(velocity)
-            cmd = self.psd.command.setMaximumVelocity(velocity)
+            cmd = self.psd.command.setMaximumVelocity(int(velocity * self.speed_factor))
         else:
             logger.debug('pump ascii {:s} dispensing {:.1f} ul.'.format(self.psd.asciiAddress, vol))
             cmd = ''
@@ -447,7 +448,7 @@ class Pump():
         logger.debug('pump ascii {:s} picking up {:.1f} ul at {:.1f} µl/min'.format(self.psd.asciiAddress, vol, velocity))
         if velocity is not None:
             velocity = self.velocity_upm2sps(velocity)
-            cmd = self.psd.command.setMaximumVelocity(velocity)
+            cmd = self.psd.command.setMaximumVelocity(int(velocity * self.speed_factor))
         else:
             cmd = ''
         cmd += self.psd.command.syringeMovement(
@@ -517,9 +518,9 @@ class Pump():
                 + f'{stop_velocity}steps/s out of range (50-2700 steps/s)')
         ham.communication.sendCommand(
             self.psd.asciiAddress,
-            + self.psd.command.setStartVelocity(start_velocity)
-            + self.psd.command.setMaximumVelocity(max_velocity)
-            + self.psd.command.setStopVelocity(stop_velocity)
+            + self.psd.command.setStartVelocity(int(start_velocity * self.speed_factor))
+            + self.psd.command.setMaximumVelocity(int(max_velocity * self.speed_factor))
+            + self.psd.command.setStopVelocity(int(stop_velocity * self.speed_factor))
             + self.psd.command.executeCommandBuffer(),
             waitForPump=False)
 
