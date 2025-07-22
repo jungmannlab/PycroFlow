@@ -3,6 +3,7 @@
 import PycroFlow.pyHamilton as ham
 from PycroFlow.hamilton_components import (
     Reservoir, ReservoirDict, Pump, Valve, TubingConfig)
+from PycroFlow.peristaltic_drifton import Pump as DriftonPump
 from PycroFlow.orchestration import AbstractSystem
 import numpy as np
 import unittest
@@ -311,11 +312,15 @@ class LegacyArchitecture(AbstractSystem):
         # self.pump_a = Pump(**pump_a_config)
         self.pump_a = Pump(**config['pump_a'])
         self.valve_a[config['pump_a']['address']] = self.pump_a  # for setting valve positions
-        # pump_out_config = config['pump_out'].copy()
-        # pump_out_config["pause_flag"] = self.handler_ref.txchange["pause_protocol_flag"]
-        # pump_out_config["abort_flag"] = self.handler_ref.txchange["abort_protocol_flag"]
-        # self.pump_out = Pump(**pump_out_config)
-        self.pump_out = Pump(**config['pump_out'])
+
+        # check whether pump_out is a drifton pump!
+        # drifton needs parameters
+        #    port, baud, address, ul_per_rotation=None,
+        #    role="out", clockwise=True
+        if "port" in config['pump_out'].keys():
+            self.pump_out = DriftonPump(**config['pump_out'])
+        else:  # if not, this is a Hamilton pump
+            self.pump_out = Pump(**config['pump_out'])
 
         self.special_names = config['special_names']
         self.flush_pos = config['flush_pos']
