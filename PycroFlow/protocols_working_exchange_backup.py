@@ -629,34 +629,6 @@ class ProtocolBuilder:
         # self.create_step_pumpout(volume=volumes['wash_vol_pre'])
         # self.create_step_inject(
         #     volume=volumes['wash_vol_pre'], reservoir_id=res_idcs[washbuf1])
-        
-
-        # image round0 (e.g. for Alingment structures):
-        if isinstance(experiment["round0"], dict):
-            if not initial_imager_present:
-                self.create_stepset_flush(
-                    volumes, res_idcs, wait_after_pickup,
-                    reagent=experiment["round0"]["round0_imager"], washing=False,
-                    unique_name="Round0", readable_name="Round0",
-                    img_wait=True, illu_wait=True)
-
-            imgsttg = {
-                "t_exp": general_imgsttg["t_exp"],
-                "frames": experiment["round0"]["frames_round0"]
-            }
-            self.create_stepset_acquisition(
-                illusttg, imgsttg,
-                unique_name="Round0", readable_name="Round0",
-                fluid_wait=True)
-
-            # wash using wash_buffer_1
-            self.create_stepset_flush(
-                volumes, res_idcs, wait_after_pickup,
-                reagent=washbuf1, washing=True,
-                img_wait=False, illu_wait=False)
-
-
-
 
         # iterate over target rounds
         for tgt_round, (tgt, tgt_pars) in enumerate(
@@ -665,9 +637,7 @@ class ProtocolBuilder:
             # target-round specific preparatory steps
 
             # inject barcode imager
-            #if not initial_imager_present or tgt_round > 0:
-            # only scenario where not injected: no round0 before + initial imager (BC imager) precent + tgt_round = 0
-            if not ((not isinstance(experiment["round0"], dict)) and initial_imager_present and tgt_round == 0):
+            if not initial_imager_present or tgt_round > 0:
                 self.create_stepset_flush(
                     volumes, res_idcs, wait_after_pickup,
                     reagent=tgt_pars["BC_imager_pre"], washing=False,
@@ -767,10 +737,6 @@ class ProtocolBuilder:
                         img_wait=False, illu_wait=False)
                 # wash using wash_buffer_1
                 else:
-                    self.create_stepset_flush(
-                        volumes, res_idcs, wait_after_pickup,
-                        reagent=washbuf1, washing=True,
-                        img_wait=False, illu_wait=False)
                     self.create_stepset_flush(
                         volumes, res_idcs, wait_after_pickup,
                         reagent=washbuf1, washing=True,
