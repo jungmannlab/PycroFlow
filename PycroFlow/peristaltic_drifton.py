@@ -122,10 +122,12 @@ class RS485Comm():
                 self.ser.open()
 
             # Send the message
+            print('sending [hex]', message.hex())
             self.ser.write(message)
 
             # Read the response
             response = self.ser.readline()
+            print('response [hex]', response.hex())
 
             # Check if a response was received
             if not response:
@@ -151,7 +153,7 @@ class RS485Comm():
             pass
 
     def send_message(self, pdu):
-        message = self.create_message(pdu)
+        message = self._create_message(pdu)
         response = self._send_and_receive(message)
         return response
 
