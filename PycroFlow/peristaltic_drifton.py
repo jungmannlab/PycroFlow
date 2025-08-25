@@ -261,8 +261,9 @@ class Pump():
         self.set_pump_state(
             speed, self.clockwise, run=True, fullspeed=fullspeed)
 
-        if self.calibrated and (velocity is not None) and (vol is not None):
+        if self.calibrated and (velocity is not None):
             pump_duration_s = (vol / velocity) # * 60
+            print(f"waiting for {pump_duration_s} s to reach a volume of {vol}")
             self.pump_stop_time = self.pump_start_time + pump_duration_s
 
     def wait_until_done(self):
