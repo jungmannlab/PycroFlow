@@ -131,6 +131,9 @@ class RS485Comm():
             # first, read header and message length
             hdr = self.ser.read(3)
             print('header', hdr)
+            if hdr == b"":
+                raise ValueError(
+                    "No response from pump. Is it connected and powered?")
             if hdr[0] != b"\xe9"[0]:
                 raise ValueError("Invalid header")
             if hdr[1] != self.address:
@@ -221,7 +224,9 @@ class Pump():
                 f"Peristaltic pump role {self.role}. "
                 + "Not acting on pickup command.")
         else:
-            self.start_pump(velocity)
+            self.start_pump(vol, velocity)
+            if waitForPump and (velocity is not None) and self.calibrated:
+                self.wait_until_done()
 
     def dispense(self, vol, velocity=None, waitForPump=False):
         """vol and waitForPump are only for consistency with hamilton
@@ -231,7 +236,9 @@ class Pump():
                 f"Peristaltic pump role {self.role}. "
                 + "Not acting on dispense command.")
         else:
-            self.start_pump(velocity)
+            self.start_pump(vol, velocity)
+            if waitForPump and (velocity is not None) and self.calibrated:
+                self.wait_until_done()
 
     def start_pump(self, vol, velocity=None):
         """
@@ -255,7 +262,8 @@ class Pump():
             speed, self.clockwise, run=True, fullspeed=fullspeed)
 
         if self.calibrated and (velocity is not None):
-            pump_duration_s = (vol / velocity) * 60
+            pump_duration_s = (vol / velocity) # * 60
+            print(f"waiting for {pump_duration_s} s to reach a volume of {vol}")
             self.pump_stop_time = self.pump_start_time + pump_duration_s
 
     def wait_until_done(self):
