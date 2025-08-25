@@ -396,3 +396,13 @@ class Pump():
             "fullspeed": fullspeed,
             "clockwise": clockwise,
         }
+
+
+if __name__ == "__main__":
+    p = Pump("COM5", 1200, 1)
+    # To set a pump (addr: 01) to run CW at speed of 50rpm. The message should be:
+    p.rs485._send_and_receive(
+            bytes([0xE9, 0x01, 0x06, 0x57, 0x4A, 0x01, 0xF4, 0x01, 0x01, 0xEF]))
+
+
+    # msg = p.rs845._create_message()
