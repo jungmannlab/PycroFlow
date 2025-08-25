@@ -125,8 +125,18 @@ class RS485Comm():
             print('sending [hex]', message.hex())
             self.ser.write(message)
 
+            print("successfully sent")
+
             # Read the response
-            response = self.ser.readline()
+            # first, read header and message length
+            hdr = self.ser.read(3)
+            print('header', hdr)
+            if hdr[0] != b"\xe9"[0]:
+                raise ValueError("Invalid header")
+            if hdr[1] != self.address:
+                raise ValueError("Invalid RS485 address")
+            msglen = hdr[2]
+            response = self.ser.read(msglen + 1)
             print('response [hex]', response.hex())
 
             # Check if a response was received
@@ -134,14 +144,14 @@ class RS485Comm():
                 raise TimeoutError(
                     "No response received from the device within the "
                     + "timeout period.")
-            if len(response) < 6:  # PDU should be at least 6 bytes
+            if len(response) < msglen + 1:  # PDU should be at least 6 bytes
                 raise ValueError(
                     "Invalid response length. Expected at least 6 bytes.")
 
             # Parse the response
             # Response format: flag + addr + len + pdu + fcs
             # Skip the flag (1 byte), addr (1 byte), and len (1 byte)
-            response = response[3:-1]  # Extract the PDU (excluding FCS)
+            response = response[:-1]  # Extract the PDU (excluding FCS)
             return response
 
         except serial.SerialException as e:
