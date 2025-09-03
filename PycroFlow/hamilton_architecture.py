@@ -1825,6 +1825,811 @@ class LegacyArchitecture(AbstractSystem):
             dispense_res=self.special_names['flushbuffer_a'],
             pickup_flushvalve=True)
 
+
+class LinearSyringePeristalticArchitecture(AbstractSystem):
+    """Represents the Legacy Architecture in Principle:
+    With many valves and
+    reservoirs, connected to an input syringe pump, connected to
+    the sample, connected to an output/waste peristaltic pump.
+
+    The main difference to the LegacyArchitecture is the use
+    of a peristaltic pump in the output. Here, the output pump
+    constantly removes liquid above the needle level during
+    fluid steps and only stops actuating when input steps are done.
+    """
+    valve_a = {}
+    valve_flush = None
+    pump_a = None
+    pump_out = None
+    tubing_config = {}
+    reservoir_a = ReservoirDict()
+    # maps reservoir ids to the fluid paths (legacy only has 'a')
+    reservoir_paths = {}
+    protocol = []
+    last_protocol_entry = -1
+
+    extractionfactor = 1
+
+    def __init__(self, system_config, tubing_config=None, port='4', baudrate=9600):
+        self._assign_system_config(system_config)
+
+        global is_connected
+        if not is_connected:
+            if 'COM' in port:
+                port = port[3:]
+            connect(port, baudrate)
+        self._test_communication()
+
+        if tubing_config:
+            self._assign_tubing_config(tubing_config)
+        else:
+            self._calibrate_tubing()
+
+    def _assign_system_config(self, config):
+        """Assign a system configuration
+        Args:
+            config : dict
+                the system configuration
+        """
+        assert config['system_type'] == 'legacy'
+        for vconfig in config['valve_a']:
+            self.valve_a[vconfig['address']] = Valve(**vconfig)
+        for rconfig in config['reservoir_a']:
+            self.reservoir_a.add(Reservoir(**rconfig))
+            self.reservoir_paths[rconfig['id']] = 'a'
+        if config.get('valve_flush'):
+            self.valve_flush = Valve(**config['valve_flush'])
+        else:
+            self.valve_flush = None
+        self.pump_a = Pump(**config['pump_a'])
+        self.valve_a[config['pump_a']['address']] = self.pump_a  # for setting valve positions
+
+        # check whether pump_out is a drifton pump!
+        # drifton needs parameters
+        #    port, baud, address, ul_per_rotation=None,
+        #    role="out", clockwise=True
+        if "port" in config['pump_out'].keys():
+            self.pump_out = DriftonPump(**config['pump_out'])
+        else:  # if not, this is a Hamilton pump
+            self.pump_out = Pump(**config['pump_out'])
+
+        self.special_names = config['special_names']
+        self.flush_pos = config['flush_pos']
+
+    def _assign_protocol(self, protocol):
+        self.protocol = protocol['protocol_entries']
+        self.parameters = protocol['parameters']
+
+    def _assign_tubing_config(self, config):
+        self.tubing_config = TubingConfig(config)
+        self.tubing_config.set_special_names(self.special_names)
+
+    def _test_communication(self):
+        """Asks all devives for status to check whether they are connected
+        """
+        conn_dev = {}
+        result = self.pump_a.get_status()
+        conn_dev['pump_a'] = (result != '')
+        result = self.pump_out.get_status()
+        conn_dev['pump_out'] = (result != '')
+        for v_id, valve in self.valve_a.items():
+            result = valve.get_status()
+            conn_dev['valve_a-' + str(v_id)] = (result != '')
+        all_connected = all(conn_dev.values())
+        if not all_connected:
+            logger.warning('Not all devices are connected: ' + str(conn_dev))
+        else:
+            logger.info('All Hamilton devices are connected.')
+
+    def _create_wettest_protocol(self, vol):
+        """Create a test protocol, pumping an amount of fluid from all
+        reservoirs to the sample.
+        Args:
+            vol : float
+                the amount of fluid to pump
+        """
+        protocol = {
+            'parameters': {
+                'start_velocity': 50,
+                'max_velocity': 3000,
+                'stop_velocity': 500,
+                'mode': 'tubing_stack',  # or 'tubing_flush'
+                'extractionfactor': 1},
+            'protocol_entries': []}
+        for rid, res in self.reservoir_a.items():
+            protocol['protocol_entries'].append({
+                '$type': 'inject',
+                'reservoir_id': rid,
+                'volume': vol})
+        self._assign_protocol(protocol)
+
+    def execute_protocol_entry(self, i):
+        """Execute a protocol entry.
+        When not executing the next protocol entry but jumping to one
+        out of order, the tubing-'stack' needs to be re-assembled.
+
+        A protocol entry consists of:
+            type, parameters.
+        e.g.
+            type='inject', reserviorID, volume, speed, extractionfactor
+            type='wait_image',
+            type='wait_time', duration
+        """
+        delay = self.protocol[i].get('delay', 0)
+        extractionfactor = self.protocol[i].get('extractionfactor')
+        if self.parameters['mode'] == 'tubing_stack':
+            if (self.last_protocol_entry != i - 1) or (i == 0):
+                self._assemble_tubing_stack(i)
+            for reservoir_id, vol in self.tubing_stack[i]:
+                self._set_valves(reservoir_id)
+                self._inject(vol, delay=delay, extractionfactor=extractionfactor)
+            self.last_protocol_entry = i
+        elif self.parameters['mode'] == 'tubing_flush':
+            # # this way, we flush (1+flushfactor)
+            # # and also through sample. But that shouldn't matter for now.
+            # self._flush()
+            # self.execute_single_protocol_entry(i)
+            pass
+        elif self.parameters['mode'] == 'tubing_ignore':
+            # this way, exactly the volumes given in the protocol are used
+            self.execute_single_protocol_entry(i)
+        else:
+            raise NotImplmentedError('Mode ' + self.parameters['mode'])
+
+    def execute_single_protocol_entry(self, i):
+        """Execute only one single entry of the protocol; do not fill the
+        tubing with the (potentially precious) later protocol entry fluids,
+        but with buffer.
+        $types:
+            - inject: inject from a given reservoir via pump_a
+            - start_pump_out: start the peristaltic output pump
+            - stop_pump_out: stop the peristaltic output pump
+        """
+        pentry = self.protocol[i]
+        if pentry.get('velocity'):
+            velocity = pentry['velocity']
+        else:
+            velocity = self.parameters['max_velocity']
+        if pentry['$type'] == 'inject':
+            # flush_volume = self._calc_vol_to_inlet(pentry['reservoir_id'])
+            injection_volume = pentry['volume']
+            delay = pentry.get('delay', 0)
+            extractionfactor = pentry.get('extractionfactor')
+            # first, set up the volume required
+            self._set_valves(pentry['reservoir_id'])
+            self._inject(
+                injection_volume, velocity, delay=delay,
+                extractionfactor=extractionfactor)
+            # afterwards, flush in buffer to get the pentry
+            # volume to the sample
+            # self._set_valves(self.special_names['flushbuffer_a'])
+            # self._inject(flush_volume, velocity)
+        elif pentry['$type'] == 'start_pump_out':
+            self._start_pump_out(pentry.get('volume'), pentry.get("velocity"))
+        elif pentry['$type'] == 'stop_pump_out':
+            self._start_pump_out()
+
+        # tubing full of buffer, cannot simply proceed
+        self.last_protocol_entry = -1
+
+    def deliver_fluid(self, reservoir_id, volume):
+        """Deliver fluid to the sample without regard to the protocol.
+        """
+        flush_volume = self._calc_vol_to_inlet(reservoir_id)
+        # first, set up the volume required
+        self._set_valves(reservoir_id)
+        self._inject(volume)
+        # afterwards, flush in buffer to get the pentry volume to the sample
+        self._set_valves(self.special_names['flushbuffer_a'])
+        self._inject(flush_volume)
+
+    def clean_tubings(self):
+        """Clean the tubings by flushing through detergent and ethanol.
+        This is analog to the Fluigent Aria cleaning procedure (but faster)
+        """
+
+        clean_liquids = ['rbs', 'ipa', 'h2o', 'empty']
+        specnames = [sn.lower() for sn in self.special_names.keys()]
+        print(specnames)
+        print([cl.lower() in specnames for cl in clean_liquids])
+        if all([cl.lower() in specnames
+                for cl in clean_liquids]):
+            print('starting short')
+            cl_ids = {cl: self.special_names[cl] for cl in clean_liquids}
+            input(
+                'Please empty all reservoirs. Put the sample tubing'
+                + ' into the same reservoir as the waste tubing. '
+                + 'Make sure it is large enough to hold all internal volume'
+                + 'Press Enter to continue.')
+            print('Performing cleaning procedure.')
+            extra_vol = 100
+            self.clean_tubings_seperate_res(
+                extra_vol, res_detergent=cl_ids['rbs'], res_ipa=cl_ids['ipa'],
+                res_h2o=cl_ids['h2o'], res_empty=cl_ids['empty'])
+            return
+        print('not on short track')
+
+        velocity = self.parameters.get('clean_velocity')
+        if not velocity:
+            velocity = self.parameters['max_velocity']
+        # Empty all tubings
+        input(
+            'Please empty all reservoirs. Put the sample tubing'
+            + ' into a reservoir. put output tubings into an empty reservoir.'
+            + 'Press Enter to continue.')
+        print('emptying all tubings into flushbuffer.')
+        self.empty_tubings_to_flushbuffer(extra_vol=200)
+        self.flush_pump_out()
+        # self.fill_and_shake_tubings(
+        #     input_res=self.special_names['flushbuffer_a'], do_shake=False)
+
+        # Fill with detergent
+        input(
+            'Please fill the flushbuffer reservoir and sample out with 10% Detergent '
+            + '(Fluigent) and empty all reservoirs. Put the sample tubing'
+            + ' into a reservoir. Put output tubings into 10% Detergent too.'
+            + 'Press Enter to continue.')
+        print('Filling all tubings with detergent and putting it back.')
+        # Go through all tubings and wash/shake
+        self.fill_tubings_w_flushbuffer(extra_vol=500)
+        self.empty_tubings_to_flushbuffer(extra_vol=600)
+        self.flush_pump_out()
+        # self.fill_and_shake_tubings(
+        #     input_res=self.special_names['flushbuffer_a'])
+
+        # fill with Ethanol
+        input(
+            'Please fill the flushbuffer reservoir and sample out with Ethanol '
+            + '(Fluigent) and empty all reservoirs. Put the sample tubing'
+            + ' into a reservoir. Press Enter to continue.')
+        print('Filling all tubings with ethanol and putting it back.')
+        # Go through all tubings and wash/shake
+        self.fill_tubings_w_flushbuffer(extra_vol=500)
+        self.empty_tubings_to_flushbuffer(extra_vol=600)
+        self.flush_pump_out()
+        # self.fill_and_shake_tubings(
+        #     input_res=self.special_names['flushbuffer_a'])
+
+    def clean_tubings_seperate_res(
+            self, extra_vol, cleaning_reservoirs=[], reservoir_vol=None, empty_finally=True,
+            velocity=None, pump_out_vol=None
+    ):
+        """Clean tubings, with separate reservoirs already connected
+        to all cleaning solutions.
+
+        All reservoirs are filled with the cleaning liquid, which is then pumped into the sample,
+        and extracted with the waste pump; for each cleaning liquid in turn.
+        The waste tubing is assumed to be fluidly connected withe sample tubing, and
+        to hold the whole volume.
+
+        ARgs:
+            extra_vol : int
+                volume to add to the reservoirs in excess of the tubing volume
+            cleaning_reservoirs : list of int
+                the IDs of the cleaning solution reservoirs, in the oder of use for cleaning
+                Standard Fluigent cleaning protocol is ['rbs', 'ipa', 'h2o']
+            reservoir_vol : int
+                the volume in µl of the reservoirs. To make sure all volume is emptied in the
+                beginning.
+            empty_finally :  bool
+                whether to empty the tubings in the end or keep the last liquid in
+            velocity : int
+                velocity of pumping in µl/min. If None, the 'clean_velocity' or 'max_velocity'
+                parameters are used. Default: None.
+            pump_out_vol : int
+                the volume in µl to flush the output pump and tubings with. If None,
+                2 * the sum of the input tubing volumes is used
+        """
+        print('Starting tubing cleaning procedure. Make sure the Sample Input and Output Needles are fluidly connected.')
+        res_exceptions = cleaning_reservoirs
+
+        if not velocity:
+            velocity = self.parameters.get('clean_velocity')
+        if not velocity:
+            velocity = self.parameters['max_velocity']
+        delay = self.parameters.get('clean_delay', 0)
+
+        # empty tubings and reservoirs
+        logger.debug('Emptying tubings and reservoirs')
+        print('Emptying tubings and reservoirs')
+        if reservoir_vol:
+            empty_vol = reservoir_vol
+        else:
+            empty_vol = 3 * extra_vol
+        total_vol = self.fill_tubings(empty_vol, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity, delay=delay)
+        if pump_out_vol is None:
+            pump_out_vol = 2 * total_vol
+        self.flush_pump_out(pump_out_vol, only_forward=True, velocity=velocity, delay=delay)
+
+        # sequentially use cleaning liquids
+        for i, clean_id in enumerate(cleaning_reservoirs):
+            logger.debug(f'Cleaning with Liquid {clean_id}')
+            print(f'Cleaning with Liquid {clean_id}')
+            # fill with liquid
+            self.fill_tubings_reverse(extra_vol, clean_id, res_exceptions, velocity=velocity, delay=delay)
+            # empty
+            if empty_finally or i < len(cleaning_reservoirs) - 1:
+                self.fill_tubings(extra_vol * 2, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity, delay=delay)
+            # move through output tubing
+            self.flush_pump_out(pump_out_vol, only_forward=True, velocity=velocity, delay=delay)
+
+        # empty tubings
+        if empty_finally:
+            logger.debug('Emptying tubings and reservoirs')
+            print('Emptying tubings and reservoirs')
+            total_vol = self.fill_tubings(empty_vol, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity, delay=delay)
+            self.flush_pump_out(pump_out_vol, only_forward=True, velocity=velocity, delay=delay)
+
+    def flush_pump_out(self, vol=None, only_forward=False, velocity=None, delay=0):
+        if not velocity:
+            velocity = self.parameters.get('clean_velocity')/10
+        if not velocity:
+            velocity = self.parameters['max_velocity']
+        if not vol:
+            vol = int(self.pump_out.syringe_volume/2)
+
+        for i in range(1):
+            self._pump(
+                self.pump_out, vol,
+                velocity=int(velocity),
+                pickup_dir='in', dispense_dir='out', delay=delay)
+        if not only_forward:
+            for i in range(1):
+                self._pump(
+                    self.pump_out, vol,
+                    velocity=int(velocity),
+                    pickup_dir='out', dispense_dir='in', delay=delay)
+
+    def fill_and_shake_tubings(self, input_res, do_shake=True):
+        velocity = self.parameters.get('clean_velocity')
+        if not velocity:
+            velocity = self.parameters['max_velocity']
+        for ires, (resid, res) in enumerate(self.reservoir_a.items()):
+            # fill reservoir tubings
+            nstrokes = 2
+            if ires == 0:
+                nstrokes_fill = 3
+            else:
+                nstrokes_fill = 0
+            if ires == len(self.reservoir_a.items()) - 1:
+                nstrokes_empty = 4
+            else:
+                nstrokes_empty = 0
+            for i in range(nstrokes + nstrokes_fill):
+                self._pump(
+                    self.pump_a, self.pump_a.syringe_volume,
+                    velocity=velocity,
+                    pickup_dir='in', dispense_dir='in',
+                    pickup_res=input_res,
+                    dispense_res=resid)
+            # shake
+            if do_shake:
+                for i in range(2):
+                    self._pump(
+                        self.pump_a, self.pump_a.syringe_volume,
+                        velocity=velocity,
+                        pickup_dir='in', dispense_dir='in',
+                        pickup_res=resid,
+                        dispense_res=resid)
+            # put liquid back
+            for i in range(nstrokes + nstrokes_empty):
+                self._pump(
+                    self.pump_a, self.pump_a.syringe_volume,
+                    velocity=velocity,
+                    pickup_dir='in', dispense_dir='in',
+                    pickup_res=resid,
+                    dispense_res=input_res)
+        # flush and sample tubing
+        for do_flushvalve in [True, False]:
+            # fill
+            for i in range(2):
+                self._pump(
+                    self.pump_a, self.pump_a.syringe_volume,
+                    velocity=velocity,
+                    pickup_dir='in', dispense_dir='out',
+                    pickup_res=input_res,
+                    dispense_flushvalve=do_flushvalve)
+            # shake
+            if do_shake:
+                for i in range(2):
+                    self._pump(
+                        self.pump_a, self.pump_a.syringe_volume,
+                        velocity=velocity,
+                        pickup_dir='out', dispense_dir='out',
+                        pickup_flushvalve=do_flushvalve,
+                        dispense_flushvalve=do_flushvalve)
+            # put back
+            for i in range(2):
+                self._pump(
+                    self.pump_a, self.pump_a.syringe_volume,
+                    velocity=velocity,
+                    pickup_dir='out', dispense_dir='in',
+                    dispense_res=input_res,
+                    pickup_flushvalve=do_flushvalve)
+        # sample_out
+        for i in range(2):
+            self._pump(
+                self.pump_out, self.pump_out.syringe_volume,
+                velocity=velocity/10,
+                pickup_dir='in', dispense_dir='out')
+            self._pump(
+                self.pump_out, self.pump_out.syringe_volume,
+                velocity=velocity/10,
+                pickup_dir='out', dispense_dir='in')
+
+    def pause_execution(self):
+        """Pause the execution of a protocol step. Specifically,
+        stop the syringes
+        """
+        self.pump_a.stop_current_move()
+        self.pump_out.stop_current_move()
+
+    def resume_execution(self):
+        """Resume the execution of a paused protocol step.
+        Specifically, move the syringes again.
+        """
+        self.pump_a.resume_current_move()
+        self.pump_out.resume_current_move()
+
+    def abort_execution(self):
+        """Abort the execution of a protocol step. Specifically,
+        stop the syringes
+        """
+        self.pump_a.stop_current_move()
+        self.pump_out.stop_current_move()
+
+    def _assemble_tubing_stack(self, i):
+        """Assemble the 'column' of different fluids stacked into the tubing.
+        In an efficient delivery, when delivering fluid of step i into the
+        sample, the tubing already needs to be switched to fluids of later steps.
+        Tubing stack is only used in flow parameter mode 'tubing_stack', not
+        in 'tubing_flush'
+
+        Args:
+            i : int
+                the protocol step to start with
+        Returns:
+            column : dict
+                keys: protocol step
+                values: list of injection tuples with (reservoir_a_id, volume)
+        """
+        column = {}
+        nsteps = len(self.protocol[i:])
+        reservoirs = np.zeros(nsteps + 1, dtype=np.int32)
+        volumes = np.zeros(nsteps + 1, dtype=np.float64)
+
+        for idx, pentry in enumerate(self.protocol[i:]):
+            if pentry['$type'] == 'inject':
+                reservoirs[idx] = pentry['reservoir_id']
+                volumes[idx] = pentry['volume']
+            elif pentry['$type'] == 'flush':
+                # flush step is meant only for mode 'tubing_flush', this 
+                # _assemble_tubing_stack si meant for mode 'tubing_stack'
+                # however, let's add this; will go through sample and not
+                # through the flush valve, though.
+                reservoirs[idx] = self.special_names['flushbuffer_a']
+                flushfactor = pentry.get('flushfactor', 1)
+                if self.valve_flush:
+                    tubing_vol = (
+                        self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
+                        + self.tubing_config.get('pump_a', 'valve_flush'))
+                else:
+                    tubing_vol = (
+                        self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a'))
+                volumes[idx] = flushfactor * tubing_vol
+        reservoirs[-1] = self.special_names['flushbuffer_a']
+        volumes[-1] = self._calc_vol_to_inlet(reservoirs[-1])
+
+        volumes_cum = np.cumsum(volumes)
+
+        for idx, step in enumerate(range(i, i + nsteps)):
+            injection_tuples = []
+            if idx == 0:
+                vol = (
+                    volumes[idx]
+                    + self._calc_vol_to_inlet(reservoirs[idx]))
+            else:
+                vol = (
+                    volumes[idx]
+                    + self._calc_vol_to_inlet(reservoirs[idx])
+                    - self._calc_vol_to_inlet(reservoirs[idx - 1]))
+            vol_rest = vol
+            cum_start = np.argwhere(volumes_cum > 0).flatten()[0]
+            try:
+                cum_stop = np.argwhere(volumes_cum > vol).flatten()[0] + 1
+            except IndexError:
+                cum_stop = len(volumes_cum)
+            for cum_idx in range(cum_start, cum_stop):
+                vol_step = min([vol_rest, volumes_cum[cum_idx]])
+                if vol_step == 0:
+                    continue
+                injection_tuples.append(
+                    tuple([reservoirs[cum_idx], vol_step]))
+                volumes_cum -= vol_step
+                vol_rest -= vol_step
+            column[step] = injection_tuples
+        self.tubing_stack = column
+        logger.debug('generated tubing stack')
+        logger.debug(str(self.tubing_stack))
+
+    def _calc_vol_to_inlet(self, reservoir_id):
+        """Calculates the tubing volume between reservoir and inlet needle
+        from the tubing configuration. This is legacy system specific
+        """
+        vol_res_pump_a = self.tubing_config.get_reservoir_to_pump(reservoir_id, 'a')
+        if self.valve_flush:
+            vol_pump_a_valveflush = self.tubing_config.get('pump_a', 'valve_flush')
+            vol_valveflush_inlet = self.tubing_config.get('valve_flush', 'sample')
+            vol_pump_a_inlet = vol_pump_a_valveflush + vol_valveflush_inlet
+        else:
+            vol_pump_a_inlet = self.tubing_config.get('pump_a', 'sample')
+        return vol_res_pump_a + vol_pump_a_inlet
+
+    def _set_valves(self, reservoir_id):
+        """Set the valves to access the reservoir specified
+        """
+        if self.reservoir_paths[reservoir_id] == 'a':
+            valve_positions = self.reservoir_a.get_reservoir_valve_positions(reservoir_id)
+            for valve, pos in valve_positions.items():
+                self.valve_a[valve].set_valve(pos)
+        else:
+            raise NotImplmentedError('Legacy system only has fluid path "a".')
+
+    def _flush(self, flushfactor=1):
+        """Flush the tubing up to the flush valve with the flush buffer.
+        This makes sure there are no residual molecules of one injection fluid
+        in tubing or syringe for the next injection step
+
+        Args:
+            flushfactor : float
+                fold of tubing volume to flush
+        """
+        if isinstance(self.valve_flush, Valve):
+            self._set_flush_valve(to_flush=True)
+            self._set_valves(self.special_names['flushbuffer_a'])
+            tubing_vol = (
+                self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
+                + self.tubing_config.get('pump_a', 'valve_flush'))
+            self._pump(tubing_vol * flushfactor)
+        else:
+            tubing_vol = (
+                self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
+                + self.tubing_config.get('pump_a', 'valve_flush'))
+            self._pump(tubing_vol * flushfactor, dispense_dir=self.flush_pos['flush'])
+
+    def _set_flush_valve(self, to_flush=True):
+        """Set the flush valve position
+        Args:
+            flushpos: bool
+                True: Set to the flush position
+                False: Set to the sample position
+        """
+        if to_flush:
+            pos = self.flush_pos['flush']
+        else:
+            pos = self.flush_pos['inject']
+        if isinstance(self.valve_flush, Valve):
+            self.valve_flush.set_valve(pos)
+        else:
+            self.pump_a.set_valve(pos)
+
+    def _pump(self, pump, vol, velocity=None,
+              pickup_dir='in', dispense_dir='out',
+              pickup_res=None, dispense_res=None,
+              pickup_flushvalve=None, dispense_flushvalve=None, delay=0):
+        """Pump fluid with a given pump. By default, pump from the currently
+        set reservoir valve position to the pump outlet. Arguments can be
+        set to pump e.g. from one reservoir to another.
+        This routine is meant for flushing or for calibration. For experiment
+        steps, use _inject.
+        Args:
+            pump : Pump
+                the pump to use
+            vol : float
+                the volume to pump
+            velocity : int
+                the flow velocity of injection in µl/min
+            pickup_dir : str
+                one of ['in', 'out']. where to pump from. Default: 'in'
+            dispense_dir : str
+                one of ['in', 'out', range(nvalves)]. where to pump from. Default: 'out'
+            pickup_res, dispense_res : int or None
+                the reservoir to pickup from / dispense to
+            pickup_flushvalve, dispense_flushvalve : int or None
+                the flush valve position during pickup / dispense
+            delay : float
+                the number of seconds to wait between pickup and dispense
+        """
+        if velocity is None:
+            velocity = self.parameters['max_velocity']
+        logger.debug(
+            'Pump {:s} pumps {:f} ul at velocity {:s} from {:s}({:s}) to {:s}({:s})'.format(
+                pump.psd.asciiAddress, vol, str(velocity), str(pickup_res), str(pickup_dir),
+                str(dispense_res), str(dispense_dir))
+            + '. Flushvalve settings pickup: {:s}, dispense: {:s}'.format(
+                str(pickup_flushvalve), str(dispense_flushvalve)))
+        curr_pump_vol = pump.get_current_volume()
+        if curr_pump_vol > 0:
+            pump.set_valve(dispense_dir)
+            if dispense_res is not None:
+                self._set_valves(dispense_res)
+            if dispense_flushvalve is not None:
+                self._set_flush_valve(dispense_flushvalve)
+            pump.dispense(curr_pump_vol, velocity)
+            pump.wait_until_done()
+
+        volume_quant = pump.syringe_volume
+        nr_pumpings = int(vol // volume_quant)
+        if vol % volume_quant > 0:
+            nr_pumpings += 1
+        pump_volumes = volume_quant * np.ones(nr_pumpings)
+        if vol % volume_quant > 0:
+            pump_volumes[-1] = vol % volume_quant
+        logger.debug('pump volumes: {:s}'.format(str(pump_volumes)))
+
+        for pump_volume in pump_volumes:
+            pump.set_valve(pickup_dir)
+            if pickup_res is not None:
+                self._set_valves(pickup_res)
+            if pickup_flushvalve is not None:
+                self._set_flush_valve(pickup_flushvalve)
+            pump.pickup(pump_volume, velocity, waitForPump=True)
+            time.sleep(delay)
+            pump.set_valve(dispense_dir)
+            if dispense_res is not None:
+                self._set_valves(dispense_res)
+            if dispense_flushvalve is not None:
+                self._set_flush_valve(dispense_flushvalve)
+            pump.dispense(pump_volume, velocity, waitForPump=True)
+
+    def _inject(self, vol, velocity=None, extractionfactor=None, delay=0):
+        """Inject volume from the currently selected reservoir into
+        the sample with a given flow velocity. Simultaneously, the extraction
+        pump extracts the same volume.
+
+        Args:
+            vol : float
+                the volume to inject in µl
+            velocity : float
+                the flow velocity of the injection in µl/min
+            extractionfactor : float
+                the factor of flow speeds of extraction vs injection.
+                a non-perfectly calibrated system may result in less volume
+                being extracted than injected, leading to spillage. To prevent
+                this, the extraction needle could be positioned higher, and
+                extraction performed faster than injection
+            delay : int
+                the time to wait between pickup and dispense
+        """
+        logger.debug('injecting {:.1f}'.format(vol))
+        if velocity is None:
+            velocity = self.parameters['max_velocity']
+
+        # assuming valve of pump a is set to pickup pos initially
+        pickup_pos = self.pump_a.valve_pos
+        if pickup_pos is None:
+            pickup_pos = self.pump_a.input_pos
+
+        if isinstance(self.valve_flush, Valve):
+            self._set_flush_valve(to_flush=False)
+        curr_pumpa_vol = self.pump_a.get_current_volume()
+        if curr_pumpa_vol > 0:
+            self.pump_a.set_valve('out')
+            self.pump_a.dispense(curr_pumpa_vol, velocity)
+            self.pump_a.wait_until_done()
+
+        volume_quant = self.pump_a.syringe_volume
+        nr_pumpings = int(vol // volume_quant)
+        if vol % volume_quant > 0:
+            nr_pumpings += 1
+        pump_volumes = volume_quant * np.ones(nr_pumpings)
+        if vol % volume_quant > 0:
+            pump_volumes[-1] = vol % volume_quant
+        logger.debug('pump volumes: {:s}'.format(str(pump_volumes)))
+
+        self.pump_a.wait_until_done()
+        self.pump_out.wait_until_done()
+        for pump_volume in pump_volumes:
+            self.pump_a.set_valve(pickup_pos)
+            self.pump_a.pickup(pump_volume, velocity, waitForPump=False)
+            self.pump_a.wait_until_done()
+            # wait to let the pressure equilibrate and the fluid to settle
+            time.sleep(delay)
+
+            self.pump_a.set_valve('out')
+            self.pump_a.dispense(pump_volume, velocity, waitForPump=False)
+            self.pump_a.wait_until_done()
+            # wait to let the pressure equilibrate and the fluid to settle
+            time.sleep(delay)
+
+    def _start_pump_out(self, vol=None, velocity=None):
+        """Start a pump out extraction stroke.
+        """
+        logger.debug('pumping out {:.1f}'.format(vol))
+        if velocity is None:
+            velocity = self.parameters['max_velocity']
+        self.pump_out.start_pump(vol, velocity)
+
+    def _stop_pump_out(self):
+        """Stop the move of the output peristaltic pump
+        """
+        logger.debug("stopping output pump")
+        self.pump_out.stop_current_move()
+
+    def fill_tubings(
+        self, extra_vol=0, dest='flushwaste', res_exceptions=[],
+        post_fill_flushbuffer=True, velocity=None, include_flushwaste=False,
+        delay=0):
+        """Fill the tubings with the liquids of their reservoirs.
+
+        Args:
+            extra_vol : int
+                the extra volume to pull from each tubing
+            dest : 'flushwaste', 'sample'
+                where to pump to
+            res_exceptions : list of int
+                reservoirs not to flush
+            post_fill_flushbuffer : bool
+                whether to fill the central tubing with flushbuffer
+            include_flushwaste : bool
+                whether to also fill tubings of the flush waste (makes
+                sense for cleaning, to empty the reservoir)
+            delay : int
+                seconds to wait between pickup and dispense
+
+        Returns:
+            total_vol : float
+                the total volume moved
+        """
+        total_vol = 0
+        clean_liquids = ['rbs', 'ipa', 'h2o', 'empty']
+        clid = [self.special_names[cl] for cl in clean_liquids
+                if cl.lower() in self.special_names.keys()]
+        res_exceptions = res_exceptions + clid
+        logger.debug('Filling tubings from respective reservoirs to ' + str(dest))
+        logger.debug('Except reservoirs: ' + str(res_exceptions))
+        logger.debug('Filling everything with flushbuffer in the end? ' + str(post_fill_flushbuffer))
+
+        dispense_flushvalve = (dest!='sample')
+        for res_id, res in self.reservoir_a.items():
+            # take care of the flushbuffer last
+            if res_id in res_exceptions:
+                continue
+            # vol = self.tubing_config.get_reservoir_to_pump(res_id, 'a')
+            vol = self.tubing_config.get_reservoir_to_closest_valve(res_id)
+            vol += extra_vol
+            total_vol += vol
+            self._pump(
+                self.pump_a, vol, velocity=velocity, pickup_res=res_id,
+                dispense_flushvalve=dispense_flushvalve, delay=delay)
+        if include_flushwaste:
+            vol = self.tubing_config.get('pump_a', 'valve_flush')
+            vol += self.tubing_config.get('valve_flush', 'flush_waste')
+            vol += extra_vol
+            total_vol += vol
+            self._pump(
+                self.pump_a, vol, velocity=velocity, pickup_dir='out',
+                pickup_flushvalve=True,
+                dispense_flushvalve=dispense_flushvalve, delay=delay)
+
+        if post_fill_flushbuffer:
+            # now, flush everything with the flushbuffer
+            vol = self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
+            if isinstance(self.valve_flush, Valve):
+                vol += (
+                    self.tubing_config.get('pump_a', 'valve_flush')
+                    + self.tubing_config.get('valve_flush', 'sample'))
+            else:
+                vol += self.tubing_config.get('pump_a', 'sample')
+            vol += extra_vol
+            total_vol += vol
+            self._pump(
+                self.pump_a, vol, velocity=velocity,
+                pickup_res=self.special_names['flushbuffer_a'],
+                dispense_flushvalve=False, delay=delay)
+        return total_vol
+
+
 """
 Diluter system architecture:
 * a1) N valves for N*6+1 secondary probe reservoirs ('valve_a')

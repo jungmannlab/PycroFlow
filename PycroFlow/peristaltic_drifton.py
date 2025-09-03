@@ -26,7 +26,7 @@ class RS485Comm():
     ser = None
     address = 0
 
-    def __init__(self, port="COM1", baudrate=9600, address=0):
+    def __init__(self, port="COM1", baudrate=9600, address=1):
         """
         Args:
             port : str
@@ -240,7 +240,7 @@ class Pump():
             if waitForPump and (velocity is not None) and self.calibrated:
                 self.wait_until_done()
 
-    def start_pump(self, vol, velocity=None):
+    def start_pump(self, vol=None, velocity=None):
         """
         Args:
             vol : float
@@ -261,9 +261,8 @@ class Pump():
         self.set_pump_state(
             speed, self.clockwise, run=True, fullspeed=fullspeed)
 
-        if self.calibrated and (velocity is not None):
+        if self.calibrated and (velocity is not None) and (vol is not None):
             pump_duration_s = (vol / velocity) # * 60
-            print(f"waiting for {pump_duration_s} s to reach a volume of {vol}")
             self.pump_stop_time = self.pump_start_time + pump_duration_s
 
     def wait_until_done(self):
