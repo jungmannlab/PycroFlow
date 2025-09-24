@@ -261,16 +261,19 @@ class ImagingSystem(AbstractSystem):
         if self.curr_frame % 100 == 0:
             pfs_state = self.core.get_property(
                 self.pfs_pars['tag_status'], self.pfs_pars['prop_state'])
+            pfs_status = self.core.get_property(
+                self.pfs_pars['tag_status'], self.pfs_pars['prop_status'])
             self.pfs_log.loc[int(self.curr_frame/100)] = {
                 'datetime': datetime.now(),
                 'frame': self.curr_frame,
                 #'pfs': self.core.get_position(self.pfs_pars['tag_pfs']),
                 'zdrive': self.core.get_position(self.pfs_pars['tag_zdrive']),
                 'state': pfs_state,
-                'status': self.core.get_property(
-                    self.pfs_pars['tag_status'], self.pfs_pars['prop_status']),
+                'status': pfs_status,
             }
-            if not pfs_state and self.handler_ref is not None:
+            if ("failed" in pfs_status.lower())
+                and (self.handler_ref is not None)
+            :
                 self.handler_ref.pause_protocol()
                 print("Pausing protocol because PFS is off.")
         self.curr_frame += 1
