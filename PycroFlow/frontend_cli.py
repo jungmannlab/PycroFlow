@@ -345,6 +345,8 @@ class PycroFlowInteractive(cmd.Cmd):
                 being extracted than injected, leading to spillage. To prevent
                 this, the extraction needle could be positioned higher, and
                 extraction performed faster than injection
+            pickup_res : int
+                the pickup reservoir ID
         """
         args = arg.split()
         vol = args.pop(0)
@@ -353,6 +355,7 @@ class PycroFlowInteractive(cmd.Cmd):
         vol = float(vol)
         kwargs = {ar.split('=')[0]: ar.split('=')[1] for ar in args}
         kwargs['vol'] = vol
+        kwargs_setvalves = {}
         if 'velocity' in kwargs.keys():
             if ',' in kwargs['velocity']:
                 kwargs['velocity'] = kwargs['velocity'].index(',')
@@ -361,10 +364,18 @@ class PycroFlowInteractive(cmd.Cmd):
             if ',' in kwargs['extractionfactor']:
                 kwargs['extractionfactor'] = kwargs['extractionfactor'].index(',')
             kwargs['extractionfactor'] = int(kwargs['extractionfactor'])
+        if 'pickup_res' in kwargs.keys():
+            if ',' in kwargs['pickup_res']:
+                kwargs['pickup_res'] = kwargs['pickup_res'][:kwargs['pickup_res'].index(',')]
+            kwargs['pickup_res'] = int(kwargs['pickup_res'])
+            kwargs_setvalves = kwargs.pop('pickup_res')
 
         if not self.orchestrator:
             print('Start orchestration first.')
             return
+        self.orchestrator.execute_system_function(
+            'fluid', self.fluid_system._set_valves,
+            kwargs=kwargs_setvalves)
         self.orchestrator.execute_system_function(
             'fluid', self.fluid_system._inject,
             kwargs=kwargs)
