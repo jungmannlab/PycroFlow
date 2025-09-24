@@ -265,6 +265,9 @@ class FluidHandler(AbstractSystemHandler):
         with self.txchange[self.target + '_lock']:
             self.system.execute_protocol_entry(i)
 
+    def pause_protocol(self, msg=None):
+        self.txchange['pause_protocol_flag'].set()
+
     def work_queue(self):
         try:
             item = self.txchange['fluid_queue'].get(timeout=.05)
@@ -288,6 +291,7 @@ class ImagingHandler(AbstractSystemHandler):
     def __init__(self, imaging_system, protocol, threadexchange):
         super().__init__(protocol, threadexchange)
         self.system = imaging_system
+        self.system.handler_ref = self
         if self.system is not None:
             self.system._assign_protocol(protocol)
 

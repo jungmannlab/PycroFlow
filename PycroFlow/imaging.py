@@ -50,6 +50,8 @@ class ImagingSystem(AbstractSystem):
         self.core = PyMgrSingleton.get_core()
         self.studio = PyMgrSingleton.get_studio()
 
+        self.handler_ref = None
+
         # PFS logging
         # self.pfs_pars = {  # for Mercury
         #     'tag_pfs': 'TIPFSOffset',
@@ -257,16 +259,20 @@ class ImagingSystem(AbstractSystem):
                 print(e)
         # log PFS position
         if self.curr_frame % 100 == 0:
+            pfs_state = self.core.get_property(
+                self.pfs_pars['tag_status'], self.pfs_pars['prop_state'])
             self.pfs_log.loc[int(self.curr_frame/100)] = {
                 'datetime': datetime.now(),
                 'frame': self.curr_frame,
                 #'pfs': self.core.get_position(self.pfs_pars['tag_pfs']),
                 'zdrive': self.core.get_position(self.pfs_pars['tag_zdrive']),
-                'state': self.core.get_property(
-                    self.pfs_pars['tag_status'], self.pfs_pars['prop_state']),
+                'state': pfs_state,
                 'status': self.core.get_property(
                     self.pfs_pars['tag_status'], self.pfs_pars['prop_status']),
             }
+            if not pfs_state and self.handler_ref is not None:
+                self.handler_ref.pause_protocol()
+                print("Pausing protocol because PFS is off.")
         self.curr_frame += 1
 
         return (img, meta)
