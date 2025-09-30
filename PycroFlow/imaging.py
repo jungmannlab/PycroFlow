@@ -271,9 +271,9 @@ class ImagingSystem(AbstractSystem):
                 'state': pfs_state,
                 'status': pfs_status,
             }
-            if ("failed" in pfs_status.lower())
+            if ("failed" in pfs_status.lower()
                 and (self.handler_ref is not None)
-            :
+            ):
                 self.handler_ref.pause_protocol()
                 print("Pausing protocol because PFS is off.")
         self.curr_frame += 1

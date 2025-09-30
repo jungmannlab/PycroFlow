@@ -356,6 +356,7 @@ class PycroFlowInteractive(cmd.Cmd):
         kwargs = {ar.split('=')[0]: ar.split('=')[1] for ar in args}
         kwargs['vol'] = vol
         kwargs_setvalves = {}
+        args_setvalves = []
         if 'velocity' in kwargs.keys():
             if ',' in kwargs['velocity']:
                 kwargs['velocity'] = kwargs['velocity'].index(',')
@@ -368,14 +369,15 @@ class PycroFlowInteractive(cmd.Cmd):
             if ',' in kwargs['pickup_res']:
                 kwargs['pickup_res'] = kwargs['pickup_res'][:kwargs['pickup_res'].index(',')]
             kwargs['pickup_res'] = int(kwargs['pickup_res'])
-            kwargs_setvalves = kwargs.pop('pickup_res')
+            kwargs_setvalves['reservoir_id'] = kwargs.pop('pickup_res')
+            args_setvalves.append(kwargs_setvalves['reservoir_id'])
 
         if not self.orchestrator:
             print('Start orchestration first.')
             return
         self.orchestrator.execute_system_function(
             'fluid', self.fluid_system._set_valves,
-            kwargs=kwargs_setvalves)
+            args=args_setvalves)
         self.orchestrator.execute_system_function(
             'fluid', self.fluid_system._inject,
             kwargs=kwargs)
