@@ -1052,6 +1052,7 @@ class LegacyArchitecture(AbstractSystem):
         """Pause the execution of a protocol step. Specifically,
         stop the syringes
         """
+        # print("Fluid system stops the current move")
         self.pump_a.stop_current_move()
         self.pump_out.stop_current_move()
 
@@ -1059,6 +1060,7 @@ class LegacyArchitecture(AbstractSystem):
         """Resume the execution of a paused protocol step.
         Specifically, move the syringes again.
         """
+        # print("Fluid system resumes the current move")
         self.pump_a.resume_current_move()
         self.pump_out.resume_current_move()
 

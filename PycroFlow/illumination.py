@@ -223,11 +223,13 @@ class IlluminationSystem(AbstractSystem):
     def pause_execution(self):
         """Pause protocol execution
         """
+        # print("Illu system does nothing for pausing")
         pass
 
     def resume_execution(self):
         """Resume protocol execution after pausing
         """
+        # print("Illu system does nothing for resuming")
         pass
 
     def abort_execution(self):

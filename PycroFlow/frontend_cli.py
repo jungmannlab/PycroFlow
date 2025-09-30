@@ -228,11 +228,12 @@ class PycroFlowInteractive(cmd.Cmd):
         self.orchestrator.pause_protocol()
 
     def do_resume_protocol(self, line):
-        """Start the protocol
+        """Resume the protocol
         """
         if not self.orchestrator:
             print('Start orchestration first.')
             return
+        print("frontend: calling orchestrator to resume protocol")
         self.orchestrator.resume_protocol()
 
     def do_abort_protocol(self, line):
@@ -242,6 +243,50 @@ class PycroFlowInteractive(cmd.Cmd):
             print('Start orchestration first.')
             return
         self.orchestrator.abort_protocol()
+
+    def do_get_protocol_iter(self, line):
+        if not self.orchestrator:
+            print('Start orchestration first.')
+            return
+
+        iters = {}
+        iters['fluid'] = self.orchestrator.execute_system_function(
+            'fluid', self.orchestrator.fluid_handler.get_current_protocol_iter)
+        iters['img'] = self.orchestrator.execute_system_function(
+            'img', self.orchestrator.imaging_handler.get_current_protocol_iter)
+        iters['illu'] = self.orchestrator.execute_system_function(
+            'illu', self.orchestrator.illumination_handler.get_current_protocol_iter)
+        print(iters)
+
+    def do_set_protocol_iter(self, arg):
+        """
+        Set the protocol iterations of the different systems
+        Args:
+            img=3, illu=6, fluid=7
+        """
+        args = arg.split()
+        try:
+            kwargs = {ar.split('=')[0]: int(ar.split('=')[1]) for ar in args}
+        except:
+            print("Input Error: Values must be integers.")
+            return
+
+        if not self.orchestrator:
+            print('Start orchestration first.')
+            return
+
+        if 'fluid' in kwargs.keys():
+            self.orchestrator.execute_system_function(
+                'fluid', self.orchestrator.fluid_handler.set_current_protocol_iter,
+                [kwargs['fluid']])
+        if 'img' in kwargs.keys():
+            self.orchestrator.execute_system_function(
+                'img', self.orchestrator.imaging_handler.set_current_protocol_iter,
+                [kwargs['img']])
+        if 'illu' in kwargs.keys():
+            self.orchestrator.execute_system_function(
+                'illu', self.orchestrator.illumination_handler.set_current_protocol_iter,
+                [kwargs['illu']])
 
     def do_is_protocol_done(self, line):
         """Start the protocol

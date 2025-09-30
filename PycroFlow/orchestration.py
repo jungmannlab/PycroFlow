@@ -145,6 +145,7 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         logger.debug('starting {:s} system handler with protocol {:s}'.format(self.target, str(self.protocol)))
         self.txchange = threadexchange
         self.system = None  # is set in Handler subclasses
+        self.protocol_iter = 0
 
     def run(self):
         if self.system is None:
@@ -175,10 +176,11 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         else:
             start_entry = 0
 
-        for i in range(start_entry, len(self.protocol['protocol_entries'])):
-            step = self.protocol['protocol_entries'][i]
-            logger.debug('System {:s} performing step {:d}/{:d}: {:s}'.format(self.target, i+1, nsteps, str(step)))
-            print('System ', self.target, ' performing step', i+1, '/', nsteps, ':', step)
+        self.protocol_iter = 0
+        while self.protocol_iter < len(self.protocol['protocol_entries']):
+            step = self.protocol['protocol_entries'][self.protocol_iter]
+            logger.debug('System {:s} performing step {:d}/{:d}: {:s}'.format(self.target, self.protocol_iter+1, nsteps, str(step)))
+            print('System ', self.target, ' performing step', self.protocol_iter+1, '/', nsteps, ':', step)
             if step['$type'].lower() == 'signal':
                 self.send_message(step['value'])
             elif step['$type'].lower() == 'wait for signal':
@@ -191,33 +193,75 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
                         return
                     time.sleep(.05)
             else:
-                self.execute_protocol_entry(i)
+                self.execute_protocol_entry(self.protocol_iter)
 
-            goon_housekeeping = self.housekeeping()
-            if not goon_housekeeping:
+            self.protocol_iter += 1
+
+            do_abort = self.housekeeping()
+            # print('done housekeeping')
+            if do_abort:
                 self.send_message('Ending.')
                 return
 
         self.txchange[self.target + '_finished'].set()
         return
 
+    def get_current_protocol_iter(self, arg=None):
+        return self.protocol_iter
+
+    def set_current_protocol_iter(self, i):
+        self.protocol_iter = i
+
+    def pause_protocol(self, msg=None):
+        # print(f"Setting pause flag from abstract system ({self.system})")
+        self.txchange['pause_protocol_flag'].set()
+
     def housekeeping(self):
-        if ((self.txchange['abort_protocol_flag'].is_set()
-             or self.txchange['abort_flag'].is_set())):
-            self.system.abort_execution()
-            return False
-        elif self.txchange['pause_protocol_flag'].is_set():
-            self.system.pause_execution()
-            return False
-        else:
-            return True
+        """
+        Return: do_abort : bool
+        """
+        pausing_protocol = False
+
+        while True:
+            if ((self.txchange['abort_protocol_flag'].is_set()
+                 or self.txchange['abort_flag'].is_set())):
+                self.system.abort_execution()
+                return True
+            elif ((self.txchange['pause_protocol_flag'].is_set()) and (not pausing_protocol)):
+                # print(f"Abstract system housekeeping. Pause Protocol Flag is set. System {self.system} is pausing")
+                pausing_protocol = True
+                self.system.pause_execution()
+                continue
+            elif ((self.txchange['pause_protocol_flag'].is_set()) and pausing_protocol):
+                # continuing to pause
+                continue
+            elif ((not self.txchange['pause_protocol_flag'].is_set()) and pausing_protocol):
+                # print(f"Abstract system housekeeping. Pause Protocol Flag has been cleared. System {self.system} will resume")
+                pausing_protocol = False
+                self.system.resume_execution()
+                return False
+            else:
+                # print("no condition met in housekeeping")
+                time.sleep(.05)
+                return False
+
+    def change_protocol_iteration(self, delta_iter):
+        """Move the protocol iteration forward or backwards
+        This is useful e.g. if a recording failed and should be recorded again
+        """
+        self.protocol_iter += delta_iter
+
 
     def wait_xchange(self, target, message):
         busy = True
-        while (busy
-               and not self.txchange['abort_flag'].is_set()
-               and not self.txchange['abort_protocol_flag'].is_set()
-               and not self.txchange['pause_protocol_flag'].is_set()):
+        protocol_iter_begin = self.protocol_iter
+        while (
+            busy
+            and not self.txchange['abort_flag'].is_set()
+            and not self.txchange['abort_protocol_flag'].is_set()
+            # and not self.txchange['pause_protocol_flag'].is_set()
+            and (protocol_iter_begin == self.protocol_iter)  # abort the wait if i was changed
+        ):
             with self.txchange[target + '_lock']:
                 if ((message in self.txchange[target]
                      or (target + ' ' + message) in self.txchange[target])):
@@ -264,9 +308,6 @@ class FluidHandler(AbstractSystemHandler):
     def execute_protocol_entry(self, i):
         with self.txchange[self.target + '_lock']:
             self.system.execute_protocol_entry(i)
-
-    def pause_protocol(self, msg=None):
-        self.txchange['pause_protocol_flag'].set()
 
     def work_queue(self):
         try:
@@ -388,6 +429,7 @@ class ProtocolOrchestrator():
         self.threadexchange['pause_protocol_flag'].set()
 
     def resume_protocol(self):
+        # print("orchestrator resuming protocol. clearing pause flag.")
         self.threadexchange['pause_protocol_flag'].clear()
 
     def abort_orchestration(self):
@@ -429,7 +471,8 @@ class ProtocolOrchestrator():
                 the keyword arguments to the function
         """
         with self.threadexchange[target + '_lock']:
-            fun(*args, **kwargs)
+            result = fun(*args, **kwargs)
+        return result
 
     def __del__(self):
         try:

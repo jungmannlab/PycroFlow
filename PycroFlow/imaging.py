@@ -169,11 +169,13 @@ class ImagingSystem(AbstractSystem):
     def pause_execution(self):
         """Pause protocol execution
         """
+        # print("Imaging system sets its own pause flag")
         self.acq_pause.set()
 
     def resume_execution(self):
         """Resume protocol execution after pausing
         """
+        # print("Imaging system clears its own pause flag")
         self.acq_pause.clear()
 
     def abort_execution(self):
@@ -271,11 +273,15 @@ class ImagingSystem(AbstractSystem):
                 'state': pfs_state,
                 'status': pfs_status,
             }
-            if ("failed" in pfs_status.lower()
+            if (("failed" in pfs_status.lower())
                 and (self.handler_ref is not None)
             ):
                 self.handler_ref.pause_protocol()
-                print("Pausing protocol because PFS is off.")
+                self.handler_ref.change_protocol_iteration(-1)
+                print(
+                    "Pausing protocol because PFS is off. Rewinding protocol \
+                    for img to re-acquire, but this acquisition will continue \
+                    to the end. Execute 'resume_protocol' when ready.")
         self.curr_frame += 1
 
         return (img, meta)
