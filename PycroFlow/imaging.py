@@ -253,7 +253,7 @@ class ImagingSystem(AbstractSystem):
             self.probar.end_progress()
         logger.debug('acquired all images of {:s}'.format(acq_name))
 
-    def image_process_fn(self, img, meta):
+    def image_process_fn(self, img, meta, event_queue):
         if self.protocol['parameters'].get('show_progress'):
             try:
                 self.probar.progress_increment()
@@ -282,6 +282,29 @@ class ImagingSystem(AbstractSystem):
                     "Pausing protocol because PFS is off. Rewinding protocol \
                     for img to re-acquire, but this acquisition will continue \
                     to the end. Execute 'resume_protocol' when ready.")
+                # abort the acquisition
+                event_queue.put(None)
+
+        # should the acquisition be aborted?
+        if self.acq_abort.is_set():
+            # abort the acquisition
+            event_queue.put(None)
+        # if the acquisition is paused, go into a loop
+        t_pause_start = time.time()
+        i_pause = 0
+        while self.acq_pause.is_set():
+            if i_pause == 0:
+                print("Pausing acquisition.")
+            i_pause += 1
+            # abort the acquisition if it additionally gets aborted
+            if self.acq_abort.is_set():
+                # abort the acquisition
+                event_queue.put(None)
+            time.sleep(50)
+        if i_pause > 0:
+            t_pause = time.time() - t_pause_start
+            print(f"resuming after {t_pause:.1f} s of pausing.")
+
         self.curr_frame += 1
 
         return (img, meta)
