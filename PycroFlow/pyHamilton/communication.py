@@ -8,6 +8,8 @@ logger = logging.getLogger('pyHamilton.communication')
 # Global Variables
 ser = 0
 ComPort = 'COM'
+abort_flag = None
+
 
 statusBytesInfo = {
     '@': "Pump is busy - no error",
@@ -71,6 +73,12 @@ def waitForResponse(header: str, footer: str):
         logger.debug("Pump status: " + responseBit + ' - ' + statusBytesInfo[responseBit])
         if responseBit == '`':
             break
+        if abort_flag is not None:
+            if abort_flag.is_set():
+                break
+        if pasue_flag is not None:
+            if pause_flag.is_set():
+                break
 
 def sendCommand(pumpAddress: str, message: str, waitForPump=False):
     commandHeader = '/' + pumpAddress

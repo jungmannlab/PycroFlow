@@ -301,6 +301,7 @@ class FluidHandler(AbstractSystemHandler):
     def __init__(self, fluid_system, protocol, threadexchange):
         super().__init__(protocol, threadexchange)
         self.system = fluid_system
+        self.system.handler_ref = self
         if self.system is not None:
             # assign the protocol - restructure this later on
             self.system._assign_protocol(protocol)

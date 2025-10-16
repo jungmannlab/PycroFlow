@@ -11,6 +11,10 @@ import sys
 import yaml
 import time
 
+import threading
+from functools import wraps
+
+
 
 logger = logging.getLogger(__name__)
 # logger.level = logging.DEBUG
@@ -209,6 +213,15 @@ def find_reservoirs(la):
                 return
 
 
+def run_in_thread(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        thread = threading.Thread(target=fn, args=args, kwargs=kwargs)
+        thread.start()
+        return thread  # Optionally return the thread object
+    return wrapper
+
+
 class LegacyArchitecture(AbstractSystem):
     """Represents the Legacy Architecture, with many valves and
     reservoirs, connected to an input syringe pump, connected to
@@ -242,6 +255,11 @@ class LegacyArchitecture(AbstractSystem):
         else:
             self._calibrate_tubing()
 
+        self.handler_ref = None
+        # self.fluid_lock = threading.Lock()
+        # self.fluid_pause = threading.Event()
+        # self.fluid_abort = threading.Event()
+
     def _assign_system_config(self, config):
         """Assign a system configuration
         Args:
@@ -258,9 +276,16 @@ class LegacyArchitecture(AbstractSystem):
             self.valve_flush = Valve(**config['valve_flush'])
         else:
             self.valve_flush = None
-        self.pump_a = Pump(**config['pump_a'])
+
+        pump_a_config = copy(config['pump_a'])
+        pump_a_config["pause_flag"] = self.handler_ref.txchange["pause_protocol_flag"]
+        pump_a_config["abort_flag"] = self.handler_ref.txchange["abort_protocol_flag"]
+        self.pump_a = Pump(**pump_a_config)
         self.valve_a[config['pump_a']['address']] = self.pump_a  # for setting valve positions
-        self.pump_out = Pump(**config['pump_out'])
+        pump_out_config = copy(config['pump_out'])
+        pump_out_config["pause_flag"] = self.handler_ref.txchange["pause_protocol_flag"]
+        pump_out_config["abort_flag"] = self.handler_ref.txchange["abort_protocol_flag"]
+        self.pump_out = Pump(**pump_out_config)
 
         self.special_names = config['special_names']
         self.flush_pos = config['flush_pos']
@@ -773,6 +798,7 @@ class LegacyArchitecture(AbstractSystem):
         else:
             raise NotImplmentedError('Mode ' + self.parameters['mode'])
 
+    # @run_in_thread
     def execute_single_protocol_entry(self, i):
         """Execute only one single entry of the protocol; do not fill the
         tubing with the (potentially precious) later protocol entry fluids,
@@ -1053,6 +1079,7 @@ class LegacyArchitecture(AbstractSystem):
         stop the syringes
         """
         # print("Fluid system stops the current move")
+        self.fluid_pause.set()
         self.pump_a.stop_current_move()
         self.pump_out.stop_current_move()
 
@@ -1061,6 +1088,7 @@ class LegacyArchitecture(AbstractSystem):
         Specifically, move the syringes again.
         """
         # print("Fluid system resumes the current move")
+        self.fluid_pause.clear()
         self.pump_a.resume_current_move()
         self.pump_out.resume_current_move()
 
@@ -1068,6 +1096,7 @@ class LegacyArchitecture(AbstractSystem):
         """Abort the execution of a protocol step. Specifically,
         stop the syringes
         """
+        self.fluid_abort.set()
         self.pump_a.stop_current_move()
         self.pump_out.stop_current_move()
 

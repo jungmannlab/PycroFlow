@@ -317,7 +317,8 @@ class Pump():
     def __init__(self, address, syringe,
                  instrument_type='4', valve_type='1', resolution_mode=1,
                  output_pos=None, input_pos=None, waste_pos=None,
-                 motorsteps_per_step=1, speed_factor=1):
+                 motorsteps_per_step=1, speed_factor=1,
+                 pause_flag=None, abort_flag=None):
         """
         Args:
             addresss : char
@@ -363,6 +364,12 @@ class Pump():
         """
         assert instrument_type in [member.value for member in PSDTypes]
         assert syringe in [member.value for member in SyrTypes]
+
+        ham.communication.pause_flag = pause_flag
+        ham.communication.abort_flag = abort_flag
+        self.pause_flag = pause_flag
+        self.abort_flag = abort_flag
+
         self.psd = ham.PSD(str(address), instrument_type)
         if output_pos == 1 or output_pos == 'in':
             init_cmd = 'Y'
@@ -421,6 +428,12 @@ class Pump():
             waitForPump : bool
                 if True, the function only returns when the movement is done.
         """
+        if self.pause_flag.is_set():
+            logger.debug(f"Pause Flag is set. Pump ascii {:s} not dispensing.")
+            return
+        if self.abort_flag.is_set():
+            logger.debug(f"Abort Flag is set. Pump ascii {:s} not dispensing.")
+            return
         if velocity is not None:
             logger.debug('pump ascii {:s} dispensing {:.1f} ul at {:.1f} µl/min'.format(self.psd.asciiAddress, vol, velocity))
             velocity = self.velocity_upm2sps(velocity)
@@ -445,6 +458,12 @@ class Pump():
             waitForPump : bool
                 if True, the function only returns when the movement is done.
         """
+        if self.pause_flag.is_set():
+            logger.debug(f"Pause Flag is set. Pump ascii {:s} not picking up.")
+            return
+        if self.abort_flag.is_set():
+            logger.debug(f"Abort Flag is set. Pump ascii {:s} not picking up.")
+            return
         logger.debug('pump ascii {:s} picking up {:.1f} ul at {:.1f} µl/min'.format(self.psd.asciiAddress, vol, velocity))
         if velocity is not None:
             velocity = self.velocity_upm2sps(velocity)
@@ -535,6 +554,12 @@ class Pump():
             cmd_ex_later : str
                 the command to execute later, only if move_now is True
         """
+        if self.pause_flag.is_set():
+            logger.debug(f"Pause Flag is set. Pump ascii {:s} not setting valve.")
+            return
+        if self.abort_flag.is_set():
+            logger.debug(f"Abort Flag is set. Pump ascii {:s} not setting valve.")
+            return
         assert pos in ['in', 'out', *list(range(1, 9)), None]
         if pos == 'in':
             pos = self.input_pos  # may be 'in', 'out', None, or a number
