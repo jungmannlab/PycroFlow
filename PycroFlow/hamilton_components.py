@@ -263,6 +263,9 @@ class Valve():
             + self.mvp.command.executeCommandBuffer())
         valve_type = map_valve_type(valve_type)
 
+        self.pause_flag = None
+        self.abort_flag = None
+
     def set_valve(self, pos, move_now=True):
         """Sets the valve position of the PSD.
         Args:
@@ -275,6 +278,22 @@ class Valve():
                 the command to execute later, only if move_now is True
         """
         assert pos in ['in', 'out', *list(range(1, 9))]
+
+        i = 0
+        while self.pause_flag.is_set():
+            if i == 0:
+                logger.debug(f"Pause Flag is set. Valve ascii {self.mvp.asciiAddress} waiting for moving valve.")
+            i += 1
+            if self.abort_flag.is_set():
+                logger.debug(f"Abort Flag is set additionally. Valve ascii {self.mvp.asciiAddress} not moving valve.")
+                return
+            time.sleep(.2)
+        if i > 0:
+            logger.debug("Pause flag has been removed. Continuing to move valve")
+        if self.abort_flag.is_set():
+            logger.debug(f"Abort Flag is set. Valve ascii {self.mvp.asciiAddress} not moving valve.")
+            return
+
         if pos == 'in':
             cmd = self.mvp.command.moveValveToInputPosition()
         elif pos == 'out':
@@ -386,6 +405,8 @@ class Pump():
         self.output_pos = output_pos
         self.speed_factor = speed_factor
 
+        self.vol_change_when_done = 0
+
         if waste_pos is not None:
             self.set_valve(waste_pos)
         ham.communication.sendCommand(
@@ -418,7 +439,7 @@ class Pump():
         if syringe[-1] == 'm':
             self.syringe_volume *= 1000
 
-    def dispense(self, vol, velocity=None, waitForPump=False):
+    def dispense(self, vol, velocity=None, waitForPump=False, override_pause_flag=False):
         """Initiate a dispense movement of the pump.
         Args:
             vol : int
@@ -428,27 +449,56 @@ class Pump():
             waitForPump : bool
                 if True, the function only returns when the movement is done.
         """
-        if self.pause_flag.is_set():
-            logger.debug(f"Pause Flag is set. Pump ascii {self.psd.asciiAddress} not dispensing.")
-            return
+        i = 0
+        while self.pause_flag.is_set() and not override_pause_flag:
+            if i == 0:
+                logger.debug(f"Pause Flag is set. Pump ascii {self.psd.asciiAddress} waiting before dispensing.")
+            i += 1
+            if self.abort_flag.is_set():
+                logger.debug(f"Abort Flag is set additionally. Pump ascii {self.psd.asciiAddress} not dispensing.")
+                return
+            time.sleep(.2)
+        if i > 0:
+            logger.debug("Pause flag has been removed. Continuing to dispense")
         if self.abort_flag.is_set():
             logger.debug(f"Abort Flag is set. Pump ascii {self.psd.asciiAddress} not dispensing.")
             return
+
         if velocity is not None:
-            logger.debug('pump ascii {self.psd.asciiAddress} dispensing {vol:.1f} ul at {velocity:.1f} µl/min')
+            logger.debug(f'pump ascii {self.psd.asciiAddress} dispensing {vol:.1f} ul')
             velocity = self.velocity_upm2sps(velocity)
             cmd = self.psd.command.setMaximumVelocity(int(velocity * self.speed_factor))
         else:
-            logger.debug('pump ascii {self.psd.asciiAddress} dispensing {vol:.1f} ul.')
+            logger.debug(f'pump ascii {self.psd.asciiAddress} dispensing {vol:.1f} ul.')
             cmd = ''
         cmd += self.psd.command.syringeMovement(
             SyrMov.relativeDispense.value, vol)
         cmd += self.psd.command.executeCommandBuffer()
         ham.communication.sendCommand(
             self.psd.asciiAddress, cmd, waitForPump=waitForPump)
-        self.target_volume -= vol
 
-    def pickup(self, vol, velocity=None, waitForPump=False):
+        self.target_volume -= vol
+        # else:
+        #     self.vol_change_when_done = -vol
+        logger.debug(f"Pump {self.psd.asciiAddress} target vol: {self.target_volume}")
+
+        i = 0
+        while self.pause_flag.is_set() and not override_pause_flag:
+            if i == 0:
+                logger.debug(f"Pause Flag is set. Pump ascii {self.psd.asciiAddress} waiting after dispensing.")
+            i += 1
+            if self.abort_flag.is_set():
+                logger.debug(f"Abort Flag is set additionally. Pump ascii {self.psd.asciiAddress} not dispensing.")
+                return
+            time.sleep(.2)
+        if i > 0:
+            logger.debug("Pause flag has been removed. Continuing to dispense")
+        if self.abort_flag.is_set():
+            logger.debug(f"Abort Flag is set. Pump ascii {self.psd.asciiAddress} not dispensing.")
+            return
+
+
+    def pickup(self, vol, velocity=None, waitForPump=False, override_pause_flag=False):
         """Initiate a pickup movement of the pump.
         Args:
             vol : int
@@ -458,13 +508,22 @@ class Pump():
             waitForPump : bool
                 if True, the function only returns when the movement is done.
         """
-        if self.pause_flag.is_set():
-            logger.debug(f"Pause Flag is set. Pump ascii {self.psd.asciiAddress} not picking up.")
-            return
+        i = 0
+        while self.pause_flag.is_set() and not override_pause_flag:
+            if i == 0:
+                logger.debug(f"Pause Flag is set. Pump ascii {self.psd.asciiAddress} waiting for picking up.")
+            i += 1
+            if self.abort_flag.is_set():
+                logger.debug(f"Abort Flag is set additionally. Pump ascii {self.psd.asciiAddress} not picking up.")
+                return
+            time.sleep(.2)
+        if i > 0:
+            logger.debug("Pause flag has been removed. Continuing to pick up")
         if self.abort_flag.is_set():
             logger.debug(f"Abort Flag is set. Pump ascii {self.psd.asciiAddress} not picking up.")
             return
-        logger.debug(f'pump ascii {self.psd.asciiAddress} picking up {vol:.1f} ul at {velocity:.1f} µl/min')
+
+        logger.debug(f'pump ascii {self.psd.asciiAddress} picking up {vol:.1f} ul')
         if velocity is not None:
             velocity = self.velocity_upm2sps(velocity)
             cmd = self.psd.command.setMaximumVelocity(int(velocity * self.speed_factor))
@@ -475,7 +534,30 @@ class Pump():
         cmd += self.psd.command.executeCommandBuffer()
         ham.communication.sendCommand(
             self.psd.asciiAddress, cmd, waitForPump=waitForPump)
+
+        # if waitForPump:
         self.target_volume += vol
+        # else:
+        #     self.vol_change_when_done = vol
+
+        logger.debug(f"Pump {self.psd.asciiAddress} target vol: {self.target_volume}")
+
+        i = 0
+        while self.pause_flag.is_set() and not override_pause_flag:
+            if i == 0:
+                logger.debug(f"Pause Flag is set. Pump ascii {self.psd.asciiAddress} waiting after picking up.")
+            i += 1
+            if self.abort_flag.is_set():
+                logger.debug(f"Abort Flag is set additionally. Pump ascii {self.psd.asciiAddress} not picking up.")
+                return
+            time.sleep(.2)
+        if i > 0:
+            logger.debug("Pause flag has been removed. Continuing to pick up")
+        if self.abort_flag.is_set():
+            logger.debug(f"Abort Flag is set. Pump ascii {self.psd.asciiAddress} not picking up.")
+            return
+
+        logger.debug(f"Pump {self.psd.asciiAddress} target vol: {self.target_volume}")
 
     def velocity_sps2upm(self, velocity_sps):
         """Convert velocity in steps per second to velocity in µl per minute.
@@ -554,12 +636,21 @@ class Pump():
             cmd_ex_later : str
                 the command to execute later, only if move_now is True
         """
-        if self.pause_flag.is_set():
-            logger.debug(f"Pause Flag is set. Pump ascii {self.psd.asciiAddress} not setting valve.")
-            return
+        i = 0
+        while self.pause_flag.is_set():
+            if i == 0:
+                logger.debug(f"Pause Flag is set. Pump ascii {self.psd.asciiAddress} waiting for moving valve.")
+            i += 1
+            if self.abort_flag.is_set():
+                logger.debug(f"Abort Flag is set additionally. Pump ascii {self.psd.asciiAddress} not moving valve.")
+                return
+            time.sleep(.2)
+        if i > 0:
+            logger.debug("Pause flag has been removed. Continuing to move valve")
         if self.abort_flag.is_set():
-            logger.debug(f"Abort Flag is set. Pump ascii {self.psd.asciiAddress} not setting valve.")
+            logger.debug(f"Abort Flag is set. Pump ascii {self.psd.asciiAddress} not moving valve.")
             return
+
         assert pos in ['in', 'out', *list(range(1, 9)), None]
         if pos == 'in':
             pos = self.input_pos  # may be 'in', 'out', None, or a number
@@ -599,7 +690,9 @@ class Pump():
             self.psd.asciiAddress, 'Q', waitForPump=True)
         # also set volumes
         current_volume = self.get_current_volume()
-        self.target_volume = current_volume
+        if not (self.pause_flag.is_set() or ham.communication.abort_wait_response_flag.is_set()):
+            self.target_volume = current_volume
+        logger.debug(f"Pump ascii {self.psd.asciiAddress} wud. current volume: {current_volume}, target_volume: {self.target_volume}")
         # tic = time.time()
         # while time.time() < tic + timeout:
         #     time.sleep(.05)
@@ -637,12 +730,17 @@ class Pump():
         """
         current_volume = self.get_current_volume()
         missing_volume = self.target_volume - current_volume
+        logger.debug(f"Pump {self.psd.asciiAddress} resuming. current_volume: {current_volume}, missing_volume: {missing_volume}, target_volume {self.target_volume}")
+        # offset target volume, as this will be changed by missing_volume in pickup or dispense
+        self.target_volume -= missing_volume
+        logger.debug(f"Pump {self.psd.asciiAddress} after tvol offset. current_volume: {current_volume}, missing_volume: {missing_volume}, target_volume {self.target_volume}")
         if missing_volume > 0:
-            self.pickup(missing_volume)
+            self.pickup(missing_volume, override_pause_flag=True)
         elif missing_volume < 0:
-            self.dispense(abs(missing_volume))
+            self.dispense(abs(missing_volume), override_pause_flag=True)
         else:
             pass
+        logger.debug(f"Pump {self.psd.asciiAddress} after calling pickup/dispense. current_volume: {current_volume}, missing_volume: {missing_volume}, target_volume {self.target_volume}")
 
     def decode_response(self, response):
         """This should go into PyHamiltonPSD, but as they don't provide

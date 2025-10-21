@@ -305,9 +305,11 @@ class FluidHandler(AbstractSystemHandler):
             # assign the protocol - restructure this later on
             self.system._assign_protocol(protocol)
             self.system.handler_ref = self
+            self.abort_hamilton_wait_response_flag = threading.Event()
             self.system._assign_multiprocess_events(
                 threadexchange["pause_protocol_flag"],
-                threadexchange["abort_protocol_flag"])
+                threadexchange["abort_protocol_flag"],
+                self.abort_hamilton_wait_response_flag)
 
     def execute_protocol_entry(self, i):
         with self.txchange[self.target + '_lock']:
@@ -321,6 +323,27 @@ class FluidHandler(AbstractSystemHandler):
         if item:
             if item['fun'] == 'deliver':
                 self.deliver_fluid(*item['args'], **item('kwargs'))
+
+    def pause_protocol(self, msg=None):
+        # print(f"Setting pause flag from abstract system ({self.system})")
+        logger.debug("fluid handler pausing protocol")
+        self.txchange['pause_protocol_flag'].set()
+        self.abort_hamilton_wait_response_flag.set()
+        self.system.stop_all_moves()
+
+    def resume_protocol(self, msg=None):
+        # print(f"Setting pause flag from abstract system ({self.system})")
+        logger.debug("fluid handler resuming protocol")
+        self.abort_hamilton_wait_response_flag.clear()
+        self.system.resume_execution()
+        logger.debug(f"finished the stopped execution")
+
+    def abort_protocol(self, msg=None):
+        # print(f"Setting pause flag from abstract system ({self.system})")
+        logger.debug("fluid handler aborting protocol")
+        self.txchange['abort_protocol_flag'].set()
+        self.abort_hamilton_wait_response_flag.set()
+        self.system.stop_all_moves()
 
     def deliver_fluid(self, reservoir_id, volume):
         """Deliver fluid of a given reservoir
@@ -428,12 +451,16 @@ class ProtocolOrchestrator():
 
     def abort_protocol(self):
         self.threadexchange['abort_protocol_flag'].set()
+        self.fluid_handler.abort_protocol()
 
     def pause_protocol(self):
+        logger.debug("orchestrator pausing protocol")
         self.threadexchange['pause_protocol_flag'].set()
+        self.fluid_handler.pause_protocol()
 
     def resume_protocol(self):
         # print("orchestrator resuming protocol. clearing pause flag.")
+        self.fluid_handler.resume_protocol()
         self.threadexchange['pause_protocol_flag'].clear()
 
     def abort_orchestration(self):

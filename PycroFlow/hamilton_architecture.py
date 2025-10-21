@@ -300,11 +300,19 @@ class LegacyArchitecture(AbstractSystem):
         self.tubing_config = TubingConfig(config)
         self.tubing_config.set_special_names(self.special_names)
 
-    def _assign_multiprocess_events(self, pause_flag, abort_flag):
+    def _assign_multiprocess_events(self, pause_flag, abort_flag, abort_hamilton_wait_response_flag):
+        self.pause_flag = pause_flag
+        self.abort_flag = abort_flag
         self.pump_a.pause_flag = pause_flag
         self.pump_a.abort_flag = abort_flag
         self.pump_out.pause_flag = pause_flag
         self.pump_out.abort_flag = abort_flag
+        for k, vlv in self.valve_a.items():
+            vlv.pause_flag = pause_flag
+            vlv.abort_flag = abort_flag
+        # creat the flag in hamilton communication for aborting the wait loop
+        self.abort_hamilton_wait_response_flag = abort_hamilton_wait_response_flag
+        ham.communication.abort_wait_response_flag = abort_hamilton_wait_response_flag
 
     def _test_communication(self):
         """Asks all devives for status to check whether they are connected
@@ -1087,24 +1095,35 @@ class LegacyArchitecture(AbstractSystem):
         stop the syringes
         """
         # print("Fluid system stops the current move")
-        self.fluid_pause.set()
+        logger.debug("pausing execution")
+        self.pause_flag.set()
+        self.stop_all_moves()
+
+    def stop_all_moves(self):
+        logger.debug("stopping all moves")
+        # self.abort_hamilton_wait_response_flag.set()
         self.pump_a.stop_current_move()
         self.pump_out.stop_current_move()
+        # time.sleep(1)
 
     def resume_execution(self):
         """Resume the execution of a paused protocol step.
         Specifically, move the syringes again.
         """
         # print("Fluid system resumes the current move")
-        self.fluid_pause.clear()
+        # self.pause_flag.clear()
+        logger.debug("resuming paused moves of the syringes.")
         self.pump_a.resume_current_move()
         self.pump_out.resume_current_move()
+        self.pump_a.wait_until_done()
+        self.pump_out.wait_until_done()
+        logger.debug("paused moves have finished.")
 
     def abort_execution(self):
         """Abort the execution of a protocol step. Specifically,
         stop the syringes
         """
-        self.fluid_abort.set()
+        self.abort_flag.set()
         self.pump_a.stop_current_move()
         self.pump_out.stop_current_move()
 

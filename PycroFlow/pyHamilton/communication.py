@@ -1,6 +1,7 @@
 import serial
 import time
 import logging
+import threading
 
 
 logger = logging.getLogger('pyHamilton.communication')
@@ -8,7 +9,8 @@ logger = logging.getLogger('pyHamilton.communication')
 # Global Variables
 ser = 0
 ComPort = 'COM'
-abort_flag = None
+abort_wait_response_flag = None
+hamilton_comm_lock = threading.Lock()
 
 
 statusBytesInfo = {
@@ -65,20 +67,26 @@ def waitForResponse(header: str, footer: str):
         time.sleep(0.2)
         temp = header + "QR" + footer
         encoded_temp = str.encode(temp)
-        ser.write(encoded_temp)
-        respond_bytes = ser.readline()
+        with hamilton_comm_lock:
+            ser.write(encoded_temp)
+            respond_bytes = ser.readline()
         decoded_temp = respond_bytes.decode()
         time.sleep(0.2)
         responseBit = decoded_temp[2:3]
-        logger.debug("Pump status: " + responseBit + ' - ' + statusBytesInfo[responseBit])
-        if responseBit == '`':
-            break
-        if abort_flag is not None:
-            if abort_flag.is_set():
+        try:
+            logger.debug("Pump status: " + responseBit + ' - ' + statusBytesInfo[responseBit])
+            if responseBit == '`':
                 break
-        if pause_flag is not None:
-            if pause_flag.is_set():
-                break
+        except KeyError:
+            pass
+        if abort_wait_response_flag is not None:
+            logger.debug(f"flag is not None: {abort_wait_response_flag}")
+            if abort_wait_response_flag.is_set():
+                logger.debug("flag is set")
+                return
+        # if pause_flag is not None:
+        #     if pause_flag.is_set():
+        #         break
 
 def sendCommand(pumpAddress: str, message: str, waitForPump=False):
     commandHeader = '/' + pumpAddress
@@ -87,13 +95,14 @@ def sendCommand(pumpAddress: str, message: str, waitForPump=False):
     command = commandHeader + message + commandFooter
     logger.debug("Sending command " + command)
     encoded_command = str.encode(command)
-    ser.write(encoded_command)
-    responseBytes = ser.readline()  # Read from Serial Port
-    # response = responseBytes.decode()
-    try:
-        response = responseBytes.decode()
-    except UnicodeDecodeError as e:
-        logger.exception(str(e))
+    with hamilton_comm_lock:
+        ser.write(encoded_command)
+        responseBytes = ser.readline()  # Read from Serial Port
+        # response = responseBytes.decode()
+        try:
+            response = responseBytes.decode()
+        except UnicodeDecodeError as e:
+            logger.exception(str(e))
 
     if waitForPump:
         waitForResponse(commandHeader, commandFooter)
