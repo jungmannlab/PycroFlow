@@ -224,6 +224,7 @@ class ImagingSystem(AbstractSystem):
             columns=['datetime', 'frame', 'pfs', 'state', 'status', 'zdrive'],
             index=range(int(acquisition_config['frames']/100)))
         self.curr_frame = 0
+        self.is_out_of_focus = False
 
         self.core.set_exposure(t_exp)
         self.studio.get_application().refresh_gui()
@@ -275,7 +276,9 @@ class ImagingSystem(AbstractSystem):
             }
             if (("failed" in pfs_status.lower())
                 and (self.handler_ref is not None)
+                and (not self.is_out_of_focus)
             ):
+                self.is_out_of_focus = True  # make sure to only pause and rewind once
                 self.handler_ref.pause_protocol()
                 self.handler_ref.change_protocol_iteration(-1)
                 print(
