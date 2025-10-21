@@ -76,7 +76,7 @@ def waitForResponse(header: str, footer: str):
         if abort_flag is not None:
             if abort_flag.is_set():
                 break
-        if pasue_flag is not None:
+        if pause_flag is not None:
             if pause_flag.is_set():
                 break
 

@@ -277,15 +277,17 @@ class LegacyArchitecture(AbstractSystem):
         else:
             self.valve_flush = None
 
-        pump_a_config = copy(config['pump_a'])
-        pump_a_config["pause_flag"] = self.handler_ref.txchange["pause_protocol_flag"]
-        pump_a_config["abort_flag"] = self.handler_ref.txchange["abort_protocol_flag"]
-        self.pump_a = Pump(**pump_a_config)
+        # pump_a_config = config['pump_a'].copy()
+        # pump_a_config["pause_flag"] = self.handler_ref.txchange["pause_protocol_flag"]
+        # pump_a_config["abort_flag"] = self.handler_ref.txchange["abort_protocol_flag"]
+        # self.pump_a = Pump(**pump_a_config)
+        self.pump_a = Pump(**config['pump_a'])
         self.valve_a[config['pump_a']['address']] = self.pump_a  # for setting valve positions
-        pump_out_config = copy(config['pump_out'])
-        pump_out_config["pause_flag"] = self.handler_ref.txchange["pause_protocol_flag"]
-        pump_out_config["abort_flag"] = self.handler_ref.txchange["abort_protocol_flag"]
-        self.pump_out = Pump(**pump_out_config)
+        # pump_out_config = config['pump_out'].copy()
+        # pump_out_config["pause_flag"] = self.handler_ref.txchange["pause_protocol_flag"]
+        # pump_out_config["abort_flag"] = self.handler_ref.txchange["abort_protocol_flag"]
+        # self.pump_out = Pump(**pump_out_config)
+        self.pump_out = Pump(**config['pump_out'])
 
         self.special_names = config['special_names']
         self.flush_pos = config['flush_pos']
@@ -297,6 +299,12 @@ class LegacyArchitecture(AbstractSystem):
     def _assign_tubing_config(self, config):
         self.tubing_config = TubingConfig(config)
         self.tubing_config.set_special_names(self.special_names)
+
+    def _assign_multiprocess_events(self, pause_flag, abort_flag):
+        self.pump_a.pause_flag = pause_flag
+        self.pump_a.abort_flag = abort_flag
+        self.pump_out.pause_flag = pause_flag
+        self.pump_out.abort_flag = abort_flag
 
     def _test_communication(self):
         """Asks all devives for status to check whether they are connected

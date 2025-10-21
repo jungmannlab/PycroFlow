@@ -429,17 +429,17 @@ class Pump():
                 if True, the function only returns when the movement is done.
         """
         if self.pause_flag.is_set():
-            logger.debug(f"Pause Flag is set. Pump ascii {:s} not dispensing.")
+            logger.debug(f"Pause Flag is set. Pump ascii {self.psd.asciiAddress} not dispensing.")
             return
         if self.abort_flag.is_set():
-            logger.debug(f"Abort Flag is set. Pump ascii {:s} not dispensing.")
+            logger.debug(f"Abort Flag is set. Pump ascii {self.psd.asciiAddress} not dispensing.")
             return
         if velocity is not None:
-            logger.debug('pump ascii {:s} dispensing {:.1f} ul at {:.1f} µl/min'.format(self.psd.asciiAddress, vol, velocity))
+            logger.debug('pump ascii {self.psd.asciiAddress} dispensing {vol:.1f} ul at {velocity:.1f} µl/min')
             velocity = self.velocity_upm2sps(velocity)
             cmd = self.psd.command.setMaximumVelocity(int(velocity * self.speed_factor))
         else:
-            logger.debug('pump ascii {:s} dispensing {:.1f} ul.'.format(self.psd.asciiAddress, vol))
+            logger.debug('pump ascii {self.psd.asciiAddress} dispensing {vol:.1f} ul.')
             cmd = ''
         cmd += self.psd.command.syringeMovement(
             SyrMov.relativeDispense.value, vol)
@@ -459,12 +459,12 @@ class Pump():
                 if True, the function only returns when the movement is done.
         """
         if self.pause_flag.is_set():
-            logger.debug(f"Pause Flag is set. Pump ascii {:s} not picking up.")
+            logger.debug(f"Pause Flag is set. Pump ascii {self.psd.asciiAddress} not picking up.")
             return
         if self.abort_flag.is_set():
-            logger.debug(f"Abort Flag is set. Pump ascii {:s} not picking up.")
+            logger.debug(f"Abort Flag is set. Pump ascii {self.psd.asciiAddress} not picking up.")
             return
-        logger.debug('pump ascii {:s} picking up {:.1f} ul at {:.1f} µl/min'.format(self.psd.asciiAddress, vol, velocity))
+        logger.debug(f'pump ascii {self.psd.asciiAddress} picking up {vol:.1f} ul at {velocity:.1f} µl/min')
         if velocity is not None:
             velocity = self.velocity_upm2sps(velocity)
             cmd = self.psd.command.setMaximumVelocity(int(velocity * self.speed_factor))
@@ -555,10 +555,10 @@ class Pump():
                 the command to execute later, only if move_now is True
         """
         if self.pause_flag.is_set():
-            logger.debug(f"Pause Flag is set. Pump ascii {:s} not setting valve.")
+            logger.debug(f"Pause Flag is set. Pump ascii {self.psd.asciiAddress} not setting valve.")
             return
         if self.abort_flag.is_set():
-            logger.debug(f"Abort Flag is set. Pump ascii {:s} not setting valve.")
+            logger.debug(f"Abort Flag is set. Pump ascii {self.psd.asciiAddress} not setting valve.")
             return
         assert pos in ['in', 'out', *list(range(1, 9)), None]
         if pos == 'in':
