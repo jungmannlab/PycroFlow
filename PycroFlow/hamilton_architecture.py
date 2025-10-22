@@ -260,6 +260,28 @@ class LegacyArchitecture(AbstractSystem):
         # self.fluid_pause = threading.Event()
         # self.fluid_abort = threading.Event()
 
+        if "spill_sensor" in system_config.keys():
+            self._start_spill_sensor(system_config["spill_sensor"])
+        else:
+            self.spill_sensor = None
+
+    def _start_spill_sensor(self, sensor_config):
+        """
+        {"port": None, "baud_rate": 115200, "timeout": 2}
+        """
+        from PycroFlow.spill_sensor_arduino import ArduinoSensorInterface
+        self.spill_sensor = ArduinoSensorInterface(system_config["spill_sensor"])
+        if not self.spill_sensor.connect():
+            logger.debug("Failed to establish connection to spill sensor. Exiting.")
+            return
+        self.spill_sensor_wet_flag = self.spill_sensor.sensor_wet_flag
+        self.spill_sensor.monitor_sensor(self.pause_execution)
+
+    def __del__(self):
+        if self.spill_sensor is not None:
+            self.spill_sensor.stop_monitoring()
+            self.spill_sensor.disconnect()
+
     def _assign_system_config(self, config):
         """Assign a system configuration
         Args:
@@ -1097,6 +1119,7 @@ class LegacyArchitecture(AbstractSystem):
         # print("Fluid system stops the current move")
         logger.debug("pausing execution")
         self.pause_flag.set()
+        ham.communication.abort_wait_response_flag.set()
         self.stop_all_moves()
 
     def stop_all_moves(self):
