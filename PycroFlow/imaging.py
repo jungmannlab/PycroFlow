@@ -28,7 +28,8 @@ protocol_imaging = [
 """
 import os
 import time
-import logging
+# import logging
+from loguru import logger
 import threading
 # import ic
 from datetime import datetime, timedelta
@@ -39,7 +40,7 @@ from PycroFlow.orchestration import AbstractSystem
 from PycroFlow.util import ProgressBar, PyMgrSingleton
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 # ic.configureOutput(outputFunction=logger.debug)
 
 
@@ -169,18 +170,19 @@ class ImagingSystem(AbstractSystem):
     def pause_execution(self):
         """Pause protocol execution
         """
-        # print("Imaging system sets its own pause flag")
+        logger.debug("Imaging system sets its own pause flag")
         self.acq_pause.set()
 
     def resume_execution(self):
         """Resume protocol execution after pausing
         """
-        # print("Imaging system clears its own pause flag")
+        logger.debug("Imaging system clears its own pause flag")
         self.acq_pause.clear()
 
     def abort_execution(self):
         """Abort protocol execution
         """
+        logger.debug("setting abort flag")
         self.acq_abort.set()
 
     def check_finished(self):
@@ -303,7 +305,7 @@ class ImagingSystem(AbstractSystem):
             if self.acq_abort.is_set():
                 # abort the acquisition
                 event_queue.put(None)
-            time.sleep(50)
+            time.sleep(.05)
         if i_pause > 0:
             t_pause = time.time() - t_pause_start
             print(f"resuming after {t_pause:.1f} s of pausing.")

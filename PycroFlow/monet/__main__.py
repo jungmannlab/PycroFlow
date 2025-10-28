@@ -6,7 +6,8 @@
     :authors: Heinrich Grabmayr, 2022
     :copyright: Copyright (c) 2022 Jungmann Lab, MPI of Biochemistry
 """
-import logging
+# import logging
+from loguru import logger
 import time
 import pprint
 from logging import handlers
@@ -14,6 +15,7 @@ import yaml as _yaml
 import cmd
 import copy
 import os
+import sys
 import traceback
 from io import StringIO
 from contextlib import redirect_stdout
@@ -23,19 +25,31 @@ from PycroFlow.monet import CONFIGS, CONFIGS_PATH, PROTOCOLS, PROTOCOLS_PATH
 
 # configure logger and log that this shouldn't be done here
 def config_logger():
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.DEBUG)
-    formatter = logging.Formatter(
-        '%(asctime)s | %(name)s | %(levelname)s -> %(message)s')
-    file_handler = handlers.RotatingFileHandler(
-        'monet.log', maxBytes=1e6, backupCount=5)
-    file_handler.setFormatter(formatter)
-    file_handler.setLevel(logging.DEBUG)
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-    stream_handler.setLevel(logging.WARNING)
-    logger.addHandler(file_handler)
-    # logger.addHandler(stream_handler)
+    # logger = logging.getLogger(__name__)
+    # logger.setLevel(logging.DEBUG)
+    # formatter = logging.Formatter(
+    #     '%(asctime)s | %(name)s | %(levelname)s -> %(message)s')
+    # file_handler = handlers.RotatingFileHandler(
+    #     'monet.log', maxBytes=1e6, backupCount=5)
+    # file_handler.setFormatter(formatter)
+    # file_handler.setLevel(logging.DEBUG)
+    # stream_handler = logging.StreamHandler()
+    # stream_handler.setFormatter(formatter)
+    # stream_handler.setLevel(logging.WARNING)
+    # logger.addHandler(file_handler)
+    # # logger.addHandler(stream_handler)
+
+    # using loguru
+    logfile = "monet.log"
+    logger.remove()
+    logger.add(
+        logfile,
+        format="{time:YYYY-MM-DD HH:mm:ss:SSS} | PID:{process} | {name} | {function} | {level} -> {message}",
+        rotation="1 MB", retention=5, enqueue=True, serialize=False)
+    logger.add(
+        sys.stderr,
+        format="{time:YYYY-MM-DD HH:mm:ss:SSS} | PID:{process} | {name} | {function} | {level} -> {message}",
+        level="ERROR")
 
 
 def main():
@@ -855,6 +869,6 @@ def print_help_interactive_config(config_commands):
 
 if __name__ == "__main__":
     config_logger()
-    logger = logging.getLogger(__name__)
+    # logger = logging.getLogger(__name__)
     logger.debug('start logging')
     main()

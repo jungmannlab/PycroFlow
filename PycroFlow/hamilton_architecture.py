@@ -6,7 +6,8 @@ from PycroFlow.hamilton_components import (
 from PycroFlow.orchestration import AbstractSystem
 import numpy as np
 import unittest
-import logging
+# import logging
+from loguru import logger
 import sys
 import yaml
 import time
@@ -16,7 +17,7 @@ from functools import wraps
 
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 # logger.level = logging.DEBUG
 # logger.addHandler(logging.StreamHandler(sys.stdout))
 
@@ -233,6 +234,7 @@ class LegacyArchitecture(AbstractSystem):
     pump_out = None
     tubing_config = {}
     reservoir_a = ReservoirDict()
+    spill_sensor = None
     # maps reservoir ids to the fluid paths (legacy only has 'a')
     reservoir_paths = {}
     protocol = []
@@ -270,12 +272,13 @@ class LegacyArchitecture(AbstractSystem):
         {"port": None, "baud_rate": 115200, "timeout": 2}
         """
         from PycroFlow.spill_sensor_arduino import ArduinoSensorInterface
-        self.spill_sensor = ArduinoSensorInterface(system_config["spill_sensor"])
+        self.spill_sensor = ArduinoSensorInterface(**sensor_config)
         if not self.spill_sensor.connect():
             logger.debug("Failed to establish connection to spill sensor. Exiting.")
             return
-        self.spill_sensor_wet_flag = self.spill_sensor.sensor_wet_flag
-        self.spill_sensor.monitor_sensor(self.pause_execution)
+        self.spill_sensor.stop_broadcast()  # avoid interference between broadcasting and polling
+        # self.spill_sensor_wet_flag = self.spill_sensor.sensor_wet_flag
+        self.spill_sensor.monitor_sensor(fn_on_wet=self.pause_execution)
 
     def __del__(self):
         if self.spill_sensor is not None:
@@ -1112,13 +1115,19 @@ class LegacyArchitecture(AbstractSystem):
                 velocity=velocity/10,
                 pickup_dir='out', dispense_dir='in')
 
-    def pause_execution(self):
+    def pause_execution(self, msg=""):
         """Pause the execution of a protocol step. Specifically,
         stop the syringes
         """
         # print("Fluid system stops the current move")
-        logger.debug("pausing execution")
+        if msg != "":
+            print(f"Pausing execution: {msg}")
+            logger.debug(f"Pausing execution: {msg}")
+        else:
+            logger.debug("pausing execution")
+        logger.debug("setting pause protocol flag")
         self.pause_flag.set()
+        logger.debug("setting hamilton wait flag")
         ham.communication.abort_wait_response_flag.set()
         self.stop_all_moves()
 
@@ -1132,20 +1141,40 @@ class LegacyArchitecture(AbstractSystem):
     def resume_execution(self):
         """Resume the execution of a paused protocol step.
         Specifically, move the syringes again.
+
+        Returns: bool, successfully resumed
         """
         # print("Fluid system resumes the current move")
         # self.pause_flag.clear()
+        logger.debug("resuming spill sensor monitoring")
+        if self.spill_sensor is not None:
+            # self.spill_sensor.sensor_wet_flag.clear()
+            if hasattr(self.spill_sensor, "_monitor_thread"):
+                logger.debug("there is already a monitor thread in the spill sensor")
+                logger.debug(self.spill_sensor._monitor_thread)
+                logger.debug(self.spill_sensor._monitor_thread.__dict__)
+                self.spill_sensor.stop_monitoring()
+                logger.debug("stopped 'old' monitoring Thread")
+            logger.debug("starting new spill sensor monitoring")
+            self.spill_sensor.monitor_sensor(fn_on_wet=self.pause_execution)
         logger.debug("resuming paused moves of the syringes.")
         self.pump_a.resume_current_move()
         self.pump_out.resume_current_move()
         self.pump_a.wait_until_done()
         self.pump_out.wait_until_done()
-        logger.debug("paused moves have finished.")
+        # may have dropped out of wait until done because of another pausing event!
+        if ham.communication.abort_wait_response_flag.is_set():
+            logger.debug("did not finish previously paused moves because another pause occurred.")
+            return False
+        else:
+            logger.debug("previously paused moves are now completed.")
+            return True
 
     def abort_execution(self):
         """Abort the execution of a protocol step. Specifically,
         stop the syringes
         """
+        logger.debug("setting abort flag")
         self.abort_flag.set()
         self.pump_a.stop_current_move()
         self.pump_out.stop_current_move()

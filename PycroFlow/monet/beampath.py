@@ -10,7 +10,8 @@
     :authors: Heinrich Grabmayr, 2022
     :copyright: Copyright (c) 2022 Jungmann Lab, MPI of Biochemistry
 """
-import logging
+# import logging
+from loguru import logger
 from icecream import ic
 import os
 import abc
@@ -26,7 +27,7 @@ from PycroFlow.monet.util import load_class
 from PycroFlow.util import PyMgrSingleton
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 ic.configureOutput(outputFunction=logger.debug)
 
 # pycrocore = None

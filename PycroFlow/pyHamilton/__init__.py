@@ -7,28 +7,49 @@ from .commandPSD4SmoothFlow import *
 from .commandPSD6 import *
 from .commandPSD6SmoothFlow import *
 
-import logging
-from logging import handlers
+# import logging
+# from logging import handlers
+from loguru import logger
 import os
+import sys
 
 
 # configure logger
 def config_logger():
-    logger = logging.getLogger('pyHamilton')
-    for handler in logger.handlers:  # don't log into the main pycroflow.log file
-        logger.removeHandler(handler)
-    logger.setLevel(logging.DEBUG)
-    formatter = logging.Formatter(
-        '%(asctime)s | %(threadName)s | %(name)s | %(levelname)s -> %(message)s')
-    file_handler = handlers.RotatingFileHandler(
-        'pyhamilton.log', maxBytes=1e6, backupCount=5)
-    file_handler.setFormatter(formatter)
-    file_handler.setLevel(logging.DEBUG)
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-    stream_handler.setLevel(logging.WARNING)
-    logger.addHandler(file_handler)
-    # logger.addHandler(stream_handler)
+    # logger = logging.getLogger('pyHamilton')
+    # for handler in logger.handlers:  # don't log into the main pycroflow.log file
+    #     logger.removeHandler(handler)
+    # logger.setLevel(logging.DEBUG)
+    # formatter = logging.Formatter(
+    #     '%(asctime)s | %(threadName)s | %(name)s | %(levelname)s -> %(message)s')
+    # file_handler = handlers.RotatingFileHandler(
+    #     'pyhamilton.log', maxBytes=1e6, backupCount=5)
+    # file_handler.setFormatter(formatter)
+    # file_handler.setLevel(logging.DEBUG)
+    # stream_handler = logging.StreamHandler()
+    # stream_handler.setFormatter(formatter)
+    # stream_handler.setLevel(logging.WARNING)
+    # logger.addHandler(file_handler)
+    # # logger.addHandler(stream_handler)
+
+    # using loguru
+    logfile = "hamilton.log"
+    # logger.remove()
+    logger.add(
+        logfile,
+        format="{time:YYYY-MM-DD HH:mm:ss:SSS} | PID:{process} | {thread} | {name} | {function} | {level} -> {message}",
+        filter=log_filter,
+        rotation="1 MB", retention=5, enqueue=True, serialize=False)
+    # logger.add(
+    #     sys.stderr,
+    #     format="{time:YYYY-MM-DD HH:mm:ss:SSS} | PID:{process} | {name} | {function} | {level} -> {message}",
+    #     level="ERROR")
+
+
+def log_filter(record):
+    if "pyHamilton" in record["name"]:
+        return True
+    return False
 
 
 def rem_old_logfiles():
@@ -40,7 +61,7 @@ def rem_old_logfiles():
 
 rem_old_logfiles()  # comment out if old logs are relevant
 config_logger()
-logger = logging.getLogger('pyHamilton')
+# logger = logging.getLogger('pyHamilton')
 
 
 #List of pumps. Initially the list is empty

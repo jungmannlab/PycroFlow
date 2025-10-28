@@ -8,7 +8,8 @@
     :authors: Heinrich Grabmayr, 2022
     :copyright: Copyright (c) 2022 Jungmann Lab, MPI of Biochemistry
 """
-import logging
+# import logging
+from loguru import logger
 from icecream import ic
 import abc
 from collections.abc import Iterable
@@ -20,7 +21,7 @@ from numpy.polynomial import Polynomial as _Polynomial
 import matplotlib.pyplot as plt
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 ic.configureOutput(outputFunction=logger.debug)
 
 class AbstractAttenuationCurveAnalyzer(abc.ABC):

@@ -1,10 +1,11 @@
 import serial
 import time
-import logging
+# import logging
+from loguru import logger
 import threading
 
 
-logger = logging.getLogger('pyHamilton.communication')
+# logger = logging.getLogger('pyHamilton.communication')
 
 # Global Variables
 ser = 0
@@ -64,14 +65,14 @@ def encodeCommand(message: str):
 def waitForResponse(header: str, footer: str):
     logger.debug("Waiting for pump status ..")
     while True:
-        time.sleep(0.2)
+        time.sleep(0.02)
         temp = header + "QR" + footer
         encoded_temp = str.encode(temp)
         with hamilton_comm_lock:
             ser.write(encoded_temp)
             respond_bytes = ser.readline()
         decoded_temp = respond_bytes.decode()
-        time.sleep(0.2)
+        time.sleep(0.02)
         responseBit = decoded_temp[2:3]
         try:
             logger.debug("Pump status: " + responseBit + ' - ' + statusBytesInfo[responseBit])

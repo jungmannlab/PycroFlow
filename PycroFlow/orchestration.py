@@ -58,10 +58,11 @@ import threading
 import queue
 import time
 import abc
-import logging
+# import logging
+from loguru import logger
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 protocol_fluid = [
@@ -149,6 +150,7 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
 
     def run(self):
         if self.system is None:
+            logger.debug(f"setting {self.target + '_finished'} flag")
             self.txchange[self.target + '_finished'].set()
             return
         while ((not self.txchange['abort_flag'].is_set())
@@ -161,10 +163,11 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
                          or self.txchange['abort_protocol_flag'].is_set())):
                         return
                     time.sleep(.05)
+                logger.debug("Clearing start_protocol_flag")
                 self.txchange['start_protocol_flag'].clear()
 
             self.work_queue()
-            time.sleep(.1)
+            time.sleep(.02)
 
     def run_protocol(self):
         logger.debug('start running protocol: {:s}'.format(str(self.protocol['protocol_entries'])))
@@ -203,6 +206,7 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
                 self.send_message('Ending.')
                 return
 
+        logger.debug(f"setting {self.target + '_finished'} flag.")
         self.txchange[self.target + '_finished'].set()
         return
 
@@ -213,7 +217,7 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         self.protocol_iter = i
 
     def pause_protocol(self, msg=None):
-        # print(f"Setting pause flag from abstract system ({self.system})")
+        logger.debug(f"Setting pause flag from abstract system ({self.system})")
         self.txchange['pause_protocol_flag'].set()
 
     def housekeeping(self):
@@ -238,8 +242,12 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
             elif ((not self.txchange['pause_protocol_flag'].is_set()) and pausing_protocol):
                 # print(f"Abstract system housekeeping. Pause Protocol Flag has been cleared. System {self.system} will resume")
                 pausing_protocol = False
-                self.system.resume_execution()
-                return False
+                resumed = self.system.resume_execution()
+                if resumed:
+                    return False
+                else:
+                    # another pausing event occurred
+                    continue
             else:
                 # print("no condition met in housekeeping")
                 time.sleep(.05)
@@ -326,22 +334,29 @@ class FluidHandler(AbstractSystemHandler):
 
     def pause_protocol(self, msg=None):
         # print(f"Setting pause flag from abstract system ({self.system})")
-        logger.debug("fluid handler pausing protocol")
+        logger.debug("fluid handler setting protocol pausing flag")
         self.txchange['pause_protocol_flag'].set()
+        logger.debug("setting hammilton wait flag")
         self.abort_hamilton_wait_response_flag.set()
         self.system.stop_all_moves()
 
     def resume_protocol(self, msg=None):
         # print(f"Setting pause flag from abstract system ({self.system})")
         logger.debug("fluid handler resuming protocol")
+        logger.debug("clearing hamilton wait flag")
         self.abort_hamilton_wait_response_flag.clear()
-        self.system.resume_execution()
-        logger.debug(f"finished the stopped execution")
+        resumed = self.system.resume_execution()
+        if resumed:
+            logger.debug(f"finished the stopped execution")
+        else:
+            logger.debug("paused again during resuming")
+        return resumed
 
     def abort_protocol(self, msg=None):
         # print(f"Setting pause flag from abstract system ({self.system})")
-        logger.debug("fluid handler aborting protocol")
+        logger.debug("fluid handler aborting protocol & setting abort flag")
         self.txchange['abort_protocol_flag'].set()
+        logger.debug("setting hamilton wait flag")
         self.abort_hamilton_wait_response_flag.set()
         self.system.stop_all_moves()
 
@@ -447,23 +462,30 @@ class ProtocolOrchestrator():
                 with self.threadexchange[syst + '_lock']:
                     self.threadexchange[syst].append(f'start entry: {step}')
 
+        logger.debug("setting start protocol flag")
         self.threadexchange['start_protocol_flag'].set()
 
     def abort_protocol(self):
+        logger.debug("setting abort protocol flag")
         self.threadexchange['abort_protocol_flag'].set()
         self.fluid_handler.abort_protocol()
 
     def pause_protocol(self):
-        logger.debug("orchestrator pausing protocol")
+        logger.debug("orchestrator pausing protocol & setting pause flag")
         self.threadexchange['pause_protocol_flag'].set()
         self.fluid_handler.pause_protocol()
 
     def resume_protocol(self):
         # print("orchestrator resuming protocol. clearing pause flag.")
-        self.fluid_handler.resume_protocol()
-        self.threadexchange['pause_protocol_flag'].clear()
+        resumed = self.fluid_handler.resume_protocol()
+        if resumed:
+            logger.debug("Successfully resumed. clearing pause protocol flag")
+            self.threadexchange['pause_protocol_flag'].clear()
+        else:
+            logger.debug("Paused again during resuming. not clearing pause flag.")
 
     def abort_orchestration(self):
+        logger.debug("setting abort flag")
         self.threadexchange['abort_flag'].set()
         self.fluid_handler.join()
         self.imaging_handler.join()
@@ -477,6 +499,7 @@ class ProtocolOrchestrator():
         return all(finished)
 
     def end_orchestration(self):
+        logger.debug("setting graceful stop flag")
         self.threadexchange['graceful_stop_flag'].set()
         self.fluid_handler.join()
         self.imaging_handler.join()

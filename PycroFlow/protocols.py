@@ -73,13 +73,14 @@ protocol_illumination = [
 
 """
 # import ic
-import logging
+# import logging
+from loguru import logger
 import os
 import yaml
 from datetime import datetime
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 # ic.configureOutput(outputFunction=logger.debug)
 
 

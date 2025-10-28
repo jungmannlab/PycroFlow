@@ -11,7 +11,8 @@
 """
 import numpy as np
 import pandas as pd
-import logging
+# import logging
+from loguru import logger
 from icecream import ic
 
 from PycroFlow.monet.util import load_class
@@ -21,7 +22,7 @@ import PycroFlow.monet.laser as mlas
 from PycroFlow.monet import LASER_TAG, POWER_TAG, DEVICE_TAG
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 ic.configureOutput(outputFunction=logger.debug)
 
 

@@ -15,12 +15,13 @@ protocol_illumination = [
 from PycroFlow.orchestration import AbstractSystem
 import PycroFlow.monet as monet
 import PycroFlow.monet.control as mco
-import logging
+# import logging
+from loguru import logger
 import pprint
 import time
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 class IlluminationSystem(AbstractSystem):
     def __init__(self):

@@ -14,7 +14,8 @@ import os
 import shutil
 import time
 from datetime import datetime
-import logging
+# import logging
+from loguru import logger
 from icecream import ic
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
@@ -22,7 +23,7 @@ import matplotlib.dates as mdates
 from PycroFlow.monet import LASER_TAG, POWER_TAG, DEVICE_TAG
 from PycroFlow.monet import DATABASE_INDEXLEVELS
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 ic.configureOutput(outputFunction=logger.debug)
 
 

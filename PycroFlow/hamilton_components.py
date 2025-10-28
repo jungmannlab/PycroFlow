@@ -12,12 +12,13 @@ from PycroFlow.pyHamilton.util import PSDTypes
 import numpy as np
 import unittest
 from unittest.mock import patch, MagicMock, call
-import logging
+# import logging
+from loguru import logger
 import sys
 import time
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 def map_valve_type(valve):
@@ -287,7 +288,7 @@ class Valve():
             if self.abort_flag.is_set():
                 logger.debug(f"Abort Flag is set additionally. Valve ascii {self.mvp.asciiAddress} not moving valve.")
                 return
-            time.sleep(.2)
+            time.sleep(.02)
         if i > 0:
             logger.debug("Pause flag has been removed. Continuing to move valve")
         if self.abort_flag.is_set():
@@ -457,7 +458,7 @@ class Pump():
             if self.abort_flag.is_set():
                 logger.debug(f"Abort Flag is set additionally. Pump ascii {self.psd.asciiAddress} not dispensing.")
                 return
-            time.sleep(.2)
+            time.sleep(.02)
         if i > 0:
             logger.debug("Pause flag has been removed. Continuing to dispense")
         if self.abort_flag.is_set():
@@ -490,7 +491,7 @@ class Pump():
             if self.abort_flag.is_set():
                 logger.debug(f"Abort Flag is set additionally. Pump ascii {self.psd.asciiAddress} not dispensing.")
                 return
-            time.sleep(.2)
+            time.sleep(.02)
         if i > 0:
             logger.debug("Pause flag has been removed. Continuing to dispense")
         if self.abort_flag.is_set():
@@ -516,7 +517,7 @@ class Pump():
             if self.abort_flag.is_set():
                 logger.debug(f"Abort Flag is set additionally. Pump ascii {self.psd.asciiAddress} not picking up.")
                 return
-            time.sleep(.2)
+            time.sleep(.02)
         if i > 0:
             logger.debug("Pause flag has been removed. Continuing to pick up")
         if self.abort_flag.is_set():
@@ -550,7 +551,7 @@ class Pump():
             if self.abort_flag.is_set():
                 logger.debug(f"Abort Flag is set additionally. Pump ascii {self.psd.asciiAddress} not picking up.")
                 return
-            time.sleep(.2)
+            time.sleep(.02)
         if i > 0:
             logger.debug("Pause flag has been removed. Continuing to pick up")
         if self.abort_flag.is_set():
@@ -644,7 +645,7 @@ class Pump():
             if self.abort_flag.is_set():
                 logger.debug(f"Abort Flag is set additionally. Pump ascii {self.psd.asciiAddress} not moving valve.")
                 return
-            time.sleep(.2)
+            time.sleep(.02)
         if i > 0:
             logger.debug("Pause flag has been removed. Continuing to move valve")
         if self.abort_flag.is_set():

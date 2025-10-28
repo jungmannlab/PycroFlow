@@ -6,7 +6,8 @@ Provides a command line interface frontend.
 import os
 import cmd
 import yaml
-import logging
+# import logging
+from loguru import logger
 # import NotImplmentedError
 
 import PycroFlow.hamilton_architecture as ha
@@ -16,7 +17,7 @@ import PycroFlow.illumination as il
 from PycroFlow.orchestration import ProtocolOrchestrator
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 def start():
