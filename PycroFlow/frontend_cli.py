@@ -531,6 +531,16 @@ class PycroFlowInteractive(cmd.Cmd):
             'fluid', self.fluid_system.clean_tubings_seperate_res,
             kwargs=kwargs)
 
+    def do_stop_spill_sensor(self, line=''):
+        """Perform the complete cleaning protocol. The configuration must
+        specify special reservoir names for 'h2o', 'ipa', 'rbs', 'empty'
+        """
+        if not self.orchestrator:
+            print('Start orchestration first.')
+            return
+        self.orchestrator.execute_system_function(
+            'fluid', self.fluid_system._stop_spill_sensor)
+
     # ######################### Direct Laser
 
     def do_laser(self, arg):

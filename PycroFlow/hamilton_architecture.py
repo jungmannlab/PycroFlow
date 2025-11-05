@@ -280,10 +280,13 @@ class LegacyArchitecture(AbstractSystem):
         # self.spill_sensor_wet_flag = self.spill_sensor.sensor_wet_flag
         self.spill_sensor.monitor_sensor(fn_on_wet=self.pause_execution)
 
-    def __del__(self):
+    def _stop_spill_sensor(self):
         if self.spill_sensor is not None:
             self.spill_sensor.stop_monitoring()
             self.spill_sensor.disconnect()
+
+    def __del__(self):
+        self._stop_spill_sensor()
 
     def _assign_system_config(self, config):
         """Assign a system configuration
