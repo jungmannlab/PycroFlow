@@ -884,142 +884,197 @@ class LegacyArchitecture(AbstractSystem):
         self._set_valves(self.special_names['flushbuffer_a'])
         self._inject(flush_volume)
 
-    def clean_tubings(self):
-        """Clean the tubings by flushing through detergent and ethanol.
-        This is analog to the Fluigent Aria cleaning procedure (but faster)
-        """
+    def clean_tubings(self, cleaning_reservoirs, extra_vol=100,
+                       velocity=None, delay=None, mode='chain',
+                       max_reservoir_vol=None):
+        """Clean all tubings by pumping cleaning liquids through
+        reservoir paths.
 
-        clean_liquids = ['rbs', 'ipa', 'h2o', 'empty']
-        specnames = [sn.lower() for sn in self.special_names.keys()]
-        print(specnames)
-        print([cl.lower() in specnames for cl in clean_liquids])
-        if all([cl.lower() in specnames
-                for cl in clean_liquids]):
-            print('starting short')
-            cl_ids = {cl: self.special_names[cl] for cl in clean_liquids}
-            input(
-                'Please empty all reservoirs. Put the sample tubing'
-                + ' into the same reservoir as the waste tubing. '
-                + 'Make sure it is large enough to hold all internal volume'
-                + 'Press Enter to continue.')
-            print('Performing cleaning procedure.')
-            extra_vol = 100
-            self.clean_tubings_seperate_res(
-                extra_vol, res_detergent=cl_ids['rbs'], res_ipa=cl_ids['ipa'],
-                res_h2o=cl_ids['h2o'], res_empty=cl_ids['empty'])
-            return
-        print('not on short track')
+        Prerequisites:
+            - Input and output needles are placed in the same container
+              so the output needle can suck up what the input needle
+              dispenses.
+            - Each cleaning reservoir is connected to a large tank of
+              cleaning liquid.
 
-        velocity = self.parameters.get('clean_velocity')
-        if not velocity:
-            velocity = self.parameters['max_velocity']
-        # Empty all tubings
-        input(
-            'Please empty all reservoirs. Put the sample tubing'
-            + ' into a reservoir. put output tubings into an empty reservoir.'
-            + 'Press Enter to continue.')
-        print('emptying all tubings into flushbuffer.')
-        self.empty_tubings_to_flushbuffer(extra_vol=200)
-        self.flush_pump_out()
-        # self.fill_and_shake_tubings(
-        #     input_res=self.special_names['flushbuffer_a'], do_shake=False)
-
-        # Fill with detergent
-        input(
-            'Please fill the flushbuffer reservoir and sample out with 10% Detergent '
-            + '(Fluigent) and empty all reservoirs. Put the sample tubing'
-            + ' into a reservoir. Put output tubings into 10% Detergent too.'
-            + 'Press Enter to continue.')
-        print('Filling all tubings with detergent and putting it back.')
-        # Go through all tubings and wash/shake
-        self.fill_tubings_w_flushbuffer(extra_vol=500)
-        self.empty_tubings_to_flushbuffer(extra_vol=600)
-        self.flush_pump_out()
-        # self.fill_and_shake_tubings(
-        #     input_res=self.special_names['flushbuffer_a'])
-
-        # fill with Ethanol
-        input(
-            'Please fill the flushbuffer reservoir and sample out with Ethanol '
-            + '(Fluigent) and empty all reservoirs. Put the sample tubing'
-            + ' into a reservoir. Press Enter to continue.')
-        print('Filling all tubings with ethanol and putting it back.')
-        # Go through all tubings and wash/shake
-        self.fill_tubings_w_flushbuffer(extra_vol=500)
-        self.empty_tubings_to_flushbuffer(extra_vol=600)
-        self.flush_pump_out()
-        # self.fill_and_shake_tubings(
-        #     input_res=self.special_names['flushbuffer_a'])
-
-    def clean_tubings_seperate_res(
-            self, extra_vol, cleaning_reservoirs=[], reservoir_vol=None, empty_finally=True,
-            velocity=None, pump_out_vol=None
-    ):
-        """Clean tubings, with separate reservoirs already connected
-        to all cleaning solutions.
-
-        All reservoirs are filled with the cleaning liquid, which is then pumped into the sample,
-        and extracted with the waste pump; for each cleaning liquid in turn.
-        The waste tubing is assumed to be fluidly connected withe sample tubing, and
-        to hold the whole volume.
-
-        ARgs:
-            extra_vol : int
-                volume to add to the reservoirs in excess of the tubing volume
+        Args:
             cleaning_reservoirs : list of int
-                the IDs of the cleaning solution reservoirs, in the oder of use for cleaning
-                Standard Fluigent cleaning protocol is ['rbs', 'ipa', 'h2o']
-            reservoir_vol : int
-                the volume in µl of the reservoirs. To make sure all volume is emptied in the
-                beginning.
-            empty_finally :  bool
-                whether to empty the tubings in the end or keep the last liquid in
-            velocity : int
-                velocity of pumping in µl/min. If None, the 'clean_velocity' or 'max_velocity'
-                parameters are used. Default: None.
-            pump_out_vol : int
-                the volume in µl to flush the output pump and tubings with. If None,
-                2 * the sum of the input tubing volumes is used
+                Reservoir IDs connected to cleaning liquid tanks, in
+                the order they should be used for cleaning.
+            extra_vol : int
+                Volume in ul beyond the tubing volume to push through
+                each path. Default: 100.
+            velocity : int or None
+                Pumping velocity in ul/min. If None, uses
+                clean_velocity or max_velocity from parameters.
+            delay : float or None
+                Seconds to wait between pickup and dispense strokes.
+                If None, uses clean_delay from parameters (default 0).
+            mode : str
+                'chain' (default): Pump cleaning liquid from tank into
+                    the first reservoir, then chain it through all
+                    reservoirs (res_0 -> res_1 -> ... -> res_N) before
+                    pushing out the needle. Uses one fill volume per
+                    cleaning liquid.
+                'individual': Pump fresh cleaning liquid from tank into
+                    each reservoir individually, push it out the needle,
+                    and extract. More thorough but uses more liquid.
+            max_reservoir_vol : int or None
+                Maximum volume in ul that a reservoir may contain from
+                a previous protocol. If set, each reservoir is emptied
+                (up to this volume) through the needle before cleaning
+                begins. If None, the pre-emptying step is skipped.
         """
-        print('Starting tubing cleaning procedure. Make sure the Sample Input and Output Needles are fluidly connected.')
-        res_exceptions = cleaning_reservoirs
-
         if not velocity:
             velocity = self.parameters.get('clean_velocity')
         if not velocity:
             velocity = self.parameters['max_velocity']
-        delay = self.parameters.get('clean_delay', 0)
+        if delay is None:
+            delay = self.parameters.get('clean_delay', 0)
 
-        # empty tubings and reservoirs
-        logger.debug('Emptying tubings and reservoirs')
-        print('Emptying tubings and reservoirs')
-        if reservoir_vol:
-            empty_vol = reservoir_vol
+        res_to_clean = [rid for rid in self.reservoir_a.keys()
+                        if rid not in cleaning_reservoirs]
+
+        logger.debug(
+            f'Starting clean_tubings (mode={mode}). '
+            f'Cleaning reservoirs: {cleaning_reservoirs}, '
+            f'Reservoirs to clean: {res_to_clean}')
+        print('Starting tubing cleaning procedure.')
+        print('Make sure input and output needles are in the same '
+              'container (fluidly connected).')
+
+        # Pre-empty: push leftover protocol liquid out of all reservoirs
+        if max_reservoir_vol is not None:
+            self._clean_tubings_pre_empty(
+                res_to_clean, max_reservoir_vol, velocity, delay)
+
+        if mode == 'chain':
+            self._clean_tubings_chain(
+                cleaning_reservoirs, res_to_clean,
+                extra_vol, velocity, delay)
+        elif mode == 'individual':
+            self._clean_tubings_individual(
+                cleaning_reservoirs, res_to_clean,
+                extra_vol, velocity, delay)
         else:
-            empty_vol = 3 * extra_vol
-        total_vol = self.fill_tubings(empty_vol, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity, delay=delay)
-        if pump_out_vol is None:
-            pump_out_vol = 2 * total_vol
-        self.flush_pump_out(pump_out_vol, only_forward=True, velocity=velocity, delay=delay)
+            raise ValueError(
+                f'Unknown clean_tubings mode: {mode}. '
+                f'Use "chain" or "individual".')
 
-        # sequentially use cleaning liquids
-        for i, clean_id in enumerate(cleaning_reservoirs):
-            logger.debug(f'Cleaning with Liquid {clean_id}')
-            print(f'Cleaning with Liquid {clean_id}')
-            # fill with liquid
-            self.fill_tubings_reverse(extra_vol, clean_id, res_exceptions, velocity=velocity, delay=delay)
-            # empty
-            if empty_finally or i < len(cleaning_reservoirs) - 1:
-                self.fill_tubings(extra_vol * 2, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity, delay=delay)
-            # move through output tubing
-            self.flush_pump_out(pump_out_vol, only_forward=True, velocity=velocity, delay=delay)
+        print('Tubing cleaning procedure complete.')
 
-        # empty tubings
-        if empty_finally:
-            logger.debug('Emptying tubings and reservoirs')
-            print('Emptying tubings and reservoirs')
-            total_vol = self.fill_tubings(empty_vol, 'sample', res_exceptions, post_fill_flushbuffer=False, velocity=velocity, delay=delay)
-            self.flush_pump_out(pump_out_vol, only_forward=True, velocity=velocity, delay=delay)
+    def _clean_tubings_pre_empty(self, res_to_clean, max_reservoir_vol,
+                                 velocity, delay):
+        """Empty leftover protocol liquid from all reservoirs before
+        cleaning. For each reservoir, pump up to max_reservoir_vol
+        from the reservoir out through the input needle, then extract
+        with the output needle.
+        """
+        logger.debug(f'Pre-emptying reservoirs (max {max_reservoir_vol} ul)')
+        print(f'Emptying leftover liquid from reservoirs '
+              f'(up to {max_reservoir_vol} ul each)')
+
+        for res_id in res_to_clean:
+            vol = self._calc_vol_to_inlet(res_id) + max_reservoir_vol
+            logger.debug(f'  Emptying reservoir {res_id} ({vol} ul)')
+
+            # Push from reservoir out through the input needle
+            self._pump(
+                self.pump_a, vol, velocity=velocity,
+                pickup_dir='in', dispense_dir='out',
+                pickup_res=res_id,
+                dispense_flushvalve=False,
+                delay=delay)
+
+            # Extract with output needle into waste
+            self.flush_pump_out(vol, only_forward=True, delay=delay)
+
+    def _clean_tubings_chain(self, cleaning_reservoirs, res_to_clean,
+                             extra_vol, velocity, delay):
+        """Chain mode: pump cleaning liquid from tank into the first
+        reservoir, shuttle it through all reservoirs, then push out.
+        Each transfer cleans both the source branch (on draw) and the
+        destination branch (on push). Uses one fill volume per
+        cleaning liquid.
+        """
+        fill_vol = (max(self._calc_vol_to_inlet(rid)
+                        for rid in res_to_clean)
+                    + extra_vol)
+        logger.debug(f'Chain mode fill volume: {fill_vol}')
+
+        for clean_res_id in cleaning_reservoirs:
+            logger.debug(f'Cleaning with liquid from reservoir '
+                         f'{clean_res_id}')
+            print(f'Cleaning with liquid from reservoir {clean_res_id}')
+
+            # 1. Pump cleaning liquid from tank into first reservoir
+            first_res = res_to_clean[0]
+            logger.debug(f'  Filling reservoir {first_res} from tank')
+            self._pump(
+                self.pump_a, fill_vol, velocity=velocity,
+                pickup_dir='in', dispense_dir='in',
+                pickup_res=clean_res_id, dispense_res=first_res,
+                delay=delay)
+
+            # 2. Chain through all reservoirs: res[i] -> res[i+1]
+            for i in range(len(res_to_clean) - 1):
+                src = res_to_clean[i]
+                dst = res_to_clean[i + 1]
+                logger.debug(f'  Chaining reservoir {src} -> {dst}')
+                self._pump(
+                    self.pump_a, fill_vol, velocity=velocity,
+                    pickup_dir='in', dispense_dir='in',
+                    pickup_res=src, dispense_res=dst,
+                    delay=delay)
+
+            # 3. Push from last reservoir out through the input needle
+            last_res = res_to_clean[-1]
+            logger.debug(f'  Pushing from reservoir {last_res} to needle')
+            self._pump(
+                self.pump_a, fill_vol, velocity=velocity,
+                pickup_dir='in', dispense_dir='out',
+                pickup_res=last_res,
+                dispense_flushvalve=False,
+                delay=delay)
+
+            # 4. Extract with output needle into waste
+            self.flush_pump_out(
+                fill_vol, only_forward=True, delay=delay)
+
+    def _clean_tubings_individual(self, cleaning_reservoirs, res_to_clean,
+                                  extra_vol, velocity, delay):
+        """Individual mode: for each reservoir, pump fresh cleaning
+        liquid from tank, push it through that reservoir's full path
+        out the needle, and extract. More thorough but uses more liquid.
+        """
+        for clean_res_id in cleaning_reservoirs:
+            logger.debug(f'Cleaning with liquid from reservoir '
+                         f'{clean_res_id}')
+            print(f'Cleaning with liquid from reservoir {clean_res_id}')
+
+            for res_id in res_to_clean:
+                logger.debug(f'  Cleaning path of reservoir {res_id}')
+
+                fill_vol = self._calc_vol_to_inlet(res_id) + extra_vol
+
+                # 1. Pump cleaning liquid from tank into this reservoir
+                self._pump(
+                    self.pump_a, fill_vol, velocity=velocity,
+                    pickup_dir='in', dispense_dir='in',
+                    pickup_res=clean_res_id, dispense_res=res_id,
+                    delay=delay)
+
+                # 2. Push from reservoir out through the input needle
+                self._pump(
+                    self.pump_a, fill_vol, velocity=velocity,
+                    pickup_dir='in', dispense_dir='out',
+                    pickup_res=res_id,
+                    dispense_flushvalve=False,
+                    delay=delay)
+
+                # 3. Extract with output needle into waste
+                self.flush_pump_out(
+                    fill_vol, only_forward=True, delay=delay)
 
     def flush_pump_out(self, vol=None, only_forward=False, velocity=None, delay=0):
         if not velocity:

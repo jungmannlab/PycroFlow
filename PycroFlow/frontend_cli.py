@@ -451,44 +451,54 @@ class PycroFlowInteractive(cmd.Cmd):
             kwargs={'reservoir_id': reservoir_id, 'volume': volume})
 
     def do_clean(self, line=''):
-        """Perform the complete cleaning protocol. The configuration must
-        specify special reservoir names for 'h2o', 'ipa', 'rbs', 'empty'
+        """Perform the cleaning protocol using special-named reservoirs.
+        The configuration must specify special reservoir names for
+        'rbs', 'ipa', 'h2o'.
         """
         if not self.orchestrator:
             print('Start orchestration first.')
             return
+        clean_liquids = ['rbs', 'ipa', 'h2o']
+        specnames = [sn.lower() for sn in self.fluid_system.special_names.keys()]
+        if not all(cl in specnames for cl in clean_liquids):
+            print('Configuration must define special_names for: '
+                  + ', '.join(clean_liquids))
+            return
+        cleaning_reservoirs = [
+            self.fluid_system.special_names[cl] for cl in clean_liquids]
         self.orchestrator.execute_system_function(
-            'fluid', self.fluid_system.clean_tubings)
+            'fluid', self.fluid_system.clean_tubings,
+            kwargs={'cleaning_reservoirs': cleaning_reservoirs})
 
     def do_clean_tubings(self, arg):
-        """Fill and empty all tubings with liquid from one or more
-        reservoirs.
-        Args:
-            extra_vol : int (default 0)
-                the volume to use on top of the tubing volume
-            cleaning_reservoirs : int or list of int (default [])
-                the reservoir IDs of the cleaning liquids to use.
-            reservoir_vol : int (optional)
-                the volume of the reservoirs. If given, this volue
-                is extracted initially to make sure the reservoirs
-                are empty
-            empty_finally : bool (default: True)
-                Whether to empty the tubings in the end or leave the
-                last liquid in
-            velocity : int (default: None)
-                velocity of pumping in µl/min. If None, the 'clean_velocity' or 'max_velocity'
-                parameters are used.
-            pump_out_vol : int (default: None)
-                the volume in µl to flush the output pump and tubings with. If None,
-                2 * the sum of the input tubing volumes is used
+        """Clean all tubings by pumping cleaning liquids through each
+        reservoir path. Input and output needles must be in the same
+        container (fluidly connected).
 
-        Do not specify arguments with None. No comma.
-        pickup/dispense_flushvalve: 0 or 1
+        Args:
+            extra_vol : int (default 100)
+                the volume in ul to use on top of the tubing volume
+            cleaning_reservoirs : int or comma-separated list of int
+                the reservoir IDs of the cleaning liquids, in order.
+            velocity : int (default: None)
+                velocity of pumping in ul/min. If None, uses
+                clean_velocity or max_velocity from parameters.
+            mode : str (default: chain)
+                'chain': shuttle one fill volume through all reservoirs
+                    sequentially, then out the needle. Saves liquid.
+                'individual': pump fresh liquid per reservoir. More
+                    thorough.
+            max_reservoir_vol : int (default: None)
+                max volume in ul that a reservoir may contain from a
+                previous protocol. If set, reservoirs are emptied
+                before cleaning. Omit to skip pre-emptying.
 
         Example Command:
         (PycroFlow) clean_tubings 200 cleaning_reservoirs=12
         or
-        (PycroFlow) clean_tubings extra_vol=200 cleaning_reservoirs=11,12 reservoir_vol=1500 empty_finally=0 velocity=5000
+        (PycroFlow) clean_tubings extra_vol=200 cleaning_reservoirs=11,12 velocity=5000 mode=individual
+        or
+        (PycroFlow) clean_tubings 200 cleaning_reservoirs=11,12 max_reservoir_vol=1500
         """
         args = arg.split()
         extra_vol = args.pop(0)
@@ -507,28 +517,18 @@ class PycroFlowInteractive(cmd.Cmd):
             else:
                 clres = [clres]
             kwargs['cleaning_reservoirs'] = [int(r) for r in clres]
-        if 'reservoir_vol' in kwargs.keys():
-            if ',' in kwargs['reservoir_vol']:
-                kwargs['reservoir_vol'] = kwargs['reservoir_vol'].index(',')
-            kwargs['reservoir_vol'] = int(kwargs['reservoir_vol'])
-        if 'empty_finally' in kwargs.keys():
-            if ',' in kwargs['empty_finally']:
-                kwargs['empty_finally'] = kwargs['empty_finally'].index(',')
-            kwargs['empty_finally'] = bool(int(kwargs['empty_finally']))
         if 'velocity' in kwargs.keys():
             if ',' in kwargs['velocity']:
                 kwargs['velocity'] = kwargs['velocity'].index(',')
             kwargs['velocity'] = int(kwargs['velocity'])
-        if 'pump_out_vol' in kwargs.keys():
-            if ',' in kwargs['pump_out_vol']:
-                kwargs['pump_out_vol'] = kwargs['pump_out_vol'].index(',')
-            kwargs['pump_out_vol'] = int(kwargs['pump_out_vol'])
+        if 'max_reservoir_vol' in kwargs.keys():
+            kwargs['max_reservoir_vol'] = int(kwargs['max_reservoir_vol'])
 
         if not self.orchestrator:
             print('Start orchestration first.')
             return
         self.orchestrator.execute_system_function(
-            'fluid', self.fluid_system.clean_tubings_seperate_res,
+            'fluid', self.fluid_system.clean_tubings,
             kwargs=kwargs)
 
     def do_stop_spill_sensor(self, line=''):
