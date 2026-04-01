@@ -501,10 +501,13 @@ class PycroFlowInteractive(cmd.Cmd):
         (PycroFlow) clean_tubings 200 cleaning_reservoirs=11,12 max_reservoir_vol=1500
         """
         args = arg.split()
-        extra_vol = args.pop(0)
-        if 'extra_vol=' in extra_vol:
-            extra_vol = extra_vol[len('extra_vol='):]
-        extra_vol = float(extra_vol)
+        try:
+            extra_vol = args.pop(0)
+            if 'extra_vol=' in extra_vol:
+                extra_vol = extra_vol[len('extra_vol='):]
+            extra_vol = float(extra_vol)
+        except IndexError:
+            extra_vol = 100
         kwargs = {ar.split('=')[0].strip(): ar.split('=')[1].strip()
                   for ar in args}
         kwargs['extra_vol'] = extra_vol
