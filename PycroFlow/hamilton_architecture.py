@@ -319,6 +319,7 @@ class LegacyArchitecture(AbstractSystem):
 
         self.special_names = config['special_names']
         self.flush_pos = config['flush_pos']
+        self.cleaning_reservoirs = config.get("cleaning_reservoirs", {})
 
     def _assign_protocol(self, protocol):
         self.protocol = protocol['protocol_entries']
@@ -884,7 +885,7 @@ class LegacyArchitecture(AbstractSystem):
         self._set_valves(self.special_names['flushbuffer_a'])
         self._inject(flush_volume)
 
-    def clean_tubings(self, cleaning_reservoirs, extra_vol=100,
+    def clean_tubings(self, cleaning_reservoirs=None, extra_vol=100,
                        velocity=None, delay=None, mode='chain',
                        max_reservoir_vol=None):
         """Clean all tubings by pumping cleaning liquids through
@@ -931,6 +932,28 @@ class LegacyArchitecture(AbstractSystem):
             velocity = self.parameters['max_velocity']
         if delay is None:
             delay = self.parameters.get('clean_delay', 0)
+        if cleaning_reservoirs is None:
+            cleaning_reservoirs = self.cleaning_reservoirs
+        if not isinstance(cleaning_reservoirs, list):
+            if isinstance(cleaning_reservoirs, dict):
+                cleaning_reservoirs = list(cleaning_reservoirs.values())
+            else:
+                logger.debug(f"Cleaning reservoirs is not a list or dict: {cleaning_reservoirs}. Setting empty list.")
+                cleaning_reservoirs = []
+        else:
+            # may be list of int (reservoir ids, used this way here), or of special names
+            cleaning_reservoirs_new = []
+            for res in cleaning_reservoirs:
+                if isinstance(res, int):
+                    cleaning_reservoirs_new.append(res)
+                elif isinstance(res, str):
+                    res_id = self.special_names.get(res)
+                    if res_id is None:
+                        logger.debug(f"Trying to set cleaning reservoir '{res}', but this is not defined in special names: {self.special_names}")
+                    else:
+                        cleaning_reservoirs.append(res_id)
+                else:
+                    logger.debug(f"Reservoir '{res}' in cleaning reservoirs has type {type(res)}. str or int is needed. Ignoring.")
 
         res_to_clean = [rid for rid in self.reservoir_a.keys()
                         if rid not in cleaning_reservoirs]

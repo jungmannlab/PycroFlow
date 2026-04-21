@@ -478,8 +478,9 @@ class PycroFlowInteractive(cmd.Cmd):
         Args:
             extra_vol : int (default 100)
                 the volume in ul to use on top of the tubing volume
-            cleaning_reservoirs : int or comma-separated list of int
+            cleaning_reservoirs : int or comma-separated list of int (default: None)
                 the reservoir IDs of the cleaning liquids, in order.
+                if not given, use as defined in experiment config.
             velocity : int (default: None)
                 velocity of pumping in ul/min. If None, uses
                 clean_velocity or max_velocity from parameters.
