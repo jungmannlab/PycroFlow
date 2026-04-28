@@ -955,6 +955,8 @@ class LegacyArchitecture(AbstractSystem):
                 else:
                     logger.debug(f"Reservoir '{res}' in cleaning reservoirs has type {type(res)}. str or int is needed. Ignoring.")
 
+        logger.debug(f"Cleaning Reservoirs: {cleaning_reservoirs}")
+        logger.debug(f"reservoir_a: {self.reservoir_a.items()}")
         res_to_clean = [rid for rid in self.reservoir_a.keys()
                         if rid not in cleaning_reservoirs]
 

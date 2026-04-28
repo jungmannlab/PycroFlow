@@ -75,6 +75,16 @@ class ReservoirDict():
         """
         return self.reservoirs.items()
 
+    def keys(self):
+        """Get the entry keys
+        """
+        return self.reservoirs.keys()
+
+    def values(self):
+        """Get the entry values
+        """
+        return self.reservoirs.values()
+
     def get_reservoir_nvalves(self, res):
         """Get the number of valves between a reservoir and the pump
         Args:
