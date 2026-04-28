@@ -932,14 +932,17 @@ class LegacyArchitecture(AbstractSystem):
             velocity = self.parameters['max_velocity']
         if delay is None:
             delay = self.parameters.get('clean_delay', 0)
+        logger.debug(f"Cleaning Reservoirs initial: {cleaning_reservoirs}")
         if cleaning_reservoirs is None:
             cleaning_reservoirs = self.cleaning_reservoirs
+        logger.debug(f"Cleaning Reservoirs after none check: {cleaning_reservoirs}")
         if not isinstance(cleaning_reservoirs, list):
             if isinstance(cleaning_reservoirs, dict):
                 cleaning_reservoirs = list(cleaning_reservoirs.values())
             else:
                 logger.debug(f"Cleaning reservoirs is not a list or dict: {cleaning_reservoirs}. Setting empty list.")
                 cleaning_reservoirs = []
+            logger.debug(f"Cleaning Reservoirs was no list, now: {cleaning_reservoirs}")
         else:
             # may be list of int (reservoir ids, used this way here), or of special names
             cleaning_reservoirs_new = []
@@ -948,12 +951,15 @@ class LegacyArchitecture(AbstractSystem):
                     cleaning_reservoirs_new.append(res)
                 elif isinstance(res, str):
                     res_id = self.special_names.get(res)
+                    logger.debug(f"Converting cleaning reservoir {res} via special names to {res_id}. All special names: {self.special_names}")
                     if res_id is None:
                         logger.debug(f"Trying to set cleaning reservoir '{res}', but this is not defined in special names: {self.special_names}")
                     else:
-                        cleaning_reservoirs.append(res_id)
+                        cleaning_reservoirs_new.append(res_id)
                 else:
                     logger.debug(f"Reservoir '{res}' in cleaning reservoirs has type {type(res)}. str or int is needed. Ignoring.")
+            cleaning_reservoirs = cleaning_reservoirs_new
+            logger.debug(f"Cleaning Reservoirs was a list, now: {cleaning_reservoirs}")
 
         logger.debug(f"Cleaning Reservoirs: {cleaning_reservoirs}")
         logger.debug(f"reservoir_a: {self.reservoir_a.items()}")
@@ -1103,11 +1109,14 @@ class LegacyArchitecture(AbstractSystem):
 
     def flush_pump_out(self, vol=None, only_forward=False, velocity=None, delay=0):
         if not velocity:
-            velocity = self.parameters.get('clean_velocity')/10
+            velocity = self.parameters.get('clean_velocity')
         if not velocity:
             velocity = self.parameters['max_velocity']
         if not vol:
             vol = int(self.pump_out.syringe_volume/2)
+        dispense_velocity = self.parameters.get('pumpout_dispense_velocity')
+        if dispense_velocity is None:
+            dispense_velocity = velocity
 
         for i in range(1):
             self._pump(
@@ -1118,7 +1127,7 @@ class LegacyArchitecture(AbstractSystem):
             for i in range(1):
                 self._pump(
                     self.pump_out, vol,
-                    velocity=int(velocity),
+                    velocity=int(dispense_velocity),
                     pickup_dir='out', dispense_dir='in', delay=delay)
 
     def fill_and_shake_tubings(self, input_res, do_shake=True):
