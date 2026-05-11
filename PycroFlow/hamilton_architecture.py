@@ -971,8 +971,11 @@ class LegacyArchitecture(AbstractSystem):
             f'Cleaning reservoirs: {cleaning_reservoirs}, '
             f'Reservoirs to clean: {res_to_clean}')
         print('Starting tubing cleaning procedure.')
+        print(f'Make sure no reservoirs have more than {max_reservoir_vol} ul'
+              'volume left. Replace with empty reservoirs otherwise.')
         print('Make sure input and output needles are in the same '
               'container (fluidly connected).')
+        input('Press Enter to confirm and continue...')
 
         # Pre-empty: push leftover protocol liquid out of all reservoirs
         if max_reservoir_vol is not None:
