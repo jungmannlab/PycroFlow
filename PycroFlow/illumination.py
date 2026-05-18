@@ -13,8 +13,8 @@ protocol_illumination = [
 ]
 """
 from PycroFlow.orchestration import AbstractSystem
-import PycroFlow.monet as monet
-import PycroFlow.monet.control as mco
+import monet
+import monet.control as mco
 # import logging
 from loguru import logger
 import pprint
