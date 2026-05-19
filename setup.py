@@ -1,11 +1,12 @@
 from setuptools import setup, find_packages
  
 classifiers = [
-  'Development Status :: Development',
+  'Development Status :: 3 - Alpha',
   'Intended Audience :: Education',
   'Operating System :: Microsoft :: Windows :: Windows 10',
   'License :: OSI Approved :: MIT License',
-  'Programming Language :: Python :: 3'
+  'Programming Language :: Python :: 3',
+  'Programming Language :: Python :: 3.10'
 ]
  
 setup(
@@ -20,5 +21,6 @@ setup(
   classifiers=classifiers,
   keywords='pycromanager',
   packages=find_packages(),
+  python_requires='>=3.10',
   install_requires=['pyserial']
 )
