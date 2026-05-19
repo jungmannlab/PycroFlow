@@ -1,4 +1,5 @@
 pycromanager==0.29.5  # 0.27.2 for nightly build 20230312 | or 0.27.5 with 20230601 | or 0.28.2 with 20230830 | or 0.29.5 with 20230928
+ndtiff==2.2.1  # pycromanager 0.29.5 declares only ndtiff>=2.2.0; ndtiff>=3 changed the Dataset API (drops _summary_metadata). Pin to 0.29.5's era.
 arduino-python3==0.6
 icecream>=2.1
 inputimeout==1.0.4
