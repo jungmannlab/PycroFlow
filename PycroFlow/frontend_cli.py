@@ -4,10 +4,8 @@ frontend_cli.py
 Provides a command line interface frontend.
 """
 import os
-import sys
 import cmd
 import yaml
-import subprocess
 # import logging
 from loguru import logger
 # import NotImplmentedError
@@ -605,70 +603,6 @@ class PycroFlowInteractive(cmd.Cmd):
                 args=[power])
         except:
             print('There was an error. Please type "help power" for hints on usage.')
-
-    def do_monet_gui(self, microscope):
-        """Launch the MONET laser-power GUI as a separate process.
-
-        MONET runs as an external program (its own Python process), so its
-        Qt event loop owns a main thread of its own.
-
-        Micro-Manager note: your MONET config has a 'beampath' section, so
-        MONET opens its own pycromanager connection to Micro-Manager when
-        you click "Connect" in the GUI. PycroFlow's imaging system also
-        connects to Micro-Manager (port 4827), and two processes on one
-        Micro-Manager is unreliable. Use MONET and PycroFlow imaging one at
-        a time -- launch this GUI before loading PycroFlow's imaging
-        system. MONET's laser / attenuator / power-meter calibration is
-        direct serial/USB and is always safe.
-
-        Args:
-            microscope : str, optional
-                the MONET microscope/config name to preselect
-                (e.g. 'Crick'). If omitted, the 'setup' name of a loaded
-                illumination protocol
-                (protocol['illu']['parameters']['setup']) is used;
-                otherwise MONET starts with no microscope selected.
-        """
-        proc = getattr(self, '_monet_gui_proc', None)
-        if proc is not None and proc.poll() is None:
-            print(f'A MONET GUI is already running (pid {proc.pid}). '
-                  'Close it before launching another.')
-            return
-
-        if self.imaging_system is not None:
-            print('WARNING: PycroFlow\'s imaging system is loaded and is '
-                  'holding the Micro-Manager connection (pycromanager, '
-                  'port 4827).\n'
-                  '  MONET\'s beampath features open a second connection '
-                  'to the same Micro-Manager, which is unreliable.\n'
-                  '  Use MONET and PycroFlow imaging one at a time -- '
-                  'ideally launch the MONET GUI before loading PycroFlow '
-                  'imaging. MONET\'s laser / attenuator / power-meter '
-                  'calibration is always safe.')
-
-        microscope = microscope.strip()
-        if not microscope:
-            # no name given: fall back to the setup of a loaded
-            # illumination protocol, if any
-            try:
-                microscope = self.protocol['illu']['parameters']['setup']
-            except (TypeError, KeyError):
-                microscope = ''
-            if microscope:
-                print(f'No microscope given; using setup "{microscope}" '
-                      'from the loaded protocol.')
-
-        cmd_args = [sys.executable, '-m', 'monet', 'gui']
-        if microscope:
-            cmd_args.append(microscope)
-
-        try:
-            self._monet_gui_proc = subprocess.Popen(cmd_args)
-        except (FileNotFoundError, OSError) as e:
-            print('Could not start the MONET GUI. Is the "monet" package '
-                  f'installed in this environment? ({e})')
-            return
-        print(f'Launched MONET GUI (pid {self._monet_gui_proc.pid}).')
 
     # ######################### Shut down
 
