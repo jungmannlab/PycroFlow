@@ -1,20 +1,20 @@
 pycromanager==0.29.5  # 0.27.2 for nightly build 20230312 | or 0.27.5 with 20230601 | or 0.28.2 with 20230830 | or 0.29.5 with 20230928
 arduino-python3==0.6
-icecream==2.1.3
+icecream>=2.1
 inputimeout==1.0.4
-matplotlib==3.7.1
+matplotlib>=3.10
 PyHamiltonPSD==1.1.0
 numpy==1.24.4
-pandas==2.0.3
-openpyxl==3.1.2
-pyvisa
-https://github.com/MSLNZ/msl-equipment/archive/main.zip
-ThorlabsPM100==1.2.2
-pyserial>=3.4
-microscope==0.6.0
-lmfit==1.0.3
-pyyaml==6.0
-coverage==6.3
+pandas>=2.3
+openpyxl>=3.1
+pyvisa>=1.15
+https://github.com/MSLNZ/msl-equipment/releases/download/v0.2.0/msl_equipment-0.2.0-py3-none-any.whl #git+https://github.com/MSLNZ/msl-equipment.git
+ThorlabsPM100>=1.2.2
+pyserial>=3.5
+microscope>=0.7
+lmfit>=1.3
+pyyaml>=6.0
+coverage>=7.10
 git+https://github.com/cobolt-lasers/pycobolt.git
-nidaqmx==0.7.0
+nidaqmx>=1.2
 loguru
