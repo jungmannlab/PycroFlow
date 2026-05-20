@@ -58,8 +58,20 @@ import threading
 import queue
 import time
 import abc
-# import logging
 from loguru import logger
+
+
+# Default timeout for inter-subsystem 'wait for signal' steps. Four hours
+# covers the longest single Exchange-PAINT acquisition we run today; protocol
+# entries may override per-step via a 'timeout' key. Raising
+# WaitForSignalTimeout makes orchestration fail fast on YAML typos instead of
+# hanging indefinitely (the old behavior).
+WAIT_FOR_SIGNAL_TIMEOUT_DEFAULT = 4 * 60 * 60  # seconds
+WAIT_POLL_INTERVAL = 0.05
+
+
+class WaitForSignalTimeout(RuntimeError):
+    """Raised when a 'wait for signal' step exceeds its timeout."""
 
 
 # logger = logging.getLogger(__name__)
@@ -140,8 +152,9 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
     target = ''
 
     def __init__(self, protocol, threadexchange):
-        # super(threading.Thread, self).__init__()
-        super().__init__()
+        # daemon=True so Ctrl-C or interpreter exit reliably terminates the
+        # handler threads instead of leaving zombies that block the process.
+        super().__init__(daemon=True)
         self.protocol = protocol
         logger.debug('starting {:s} system handler with protocol {:s}'.format(self.target, str(self.protocol)))
         self.txchange = threadexchange
@@ -187,7 +200,9 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
             if step['$type'].lower() == 'signal':
                 self.send_message(step['value'])
             elif step['$type'].lower() == 'wait for signal':
-                self.wait_xchange(step['target'], step['value'])
+                self.wait_xchange(
+                    step['target'], step['value'],
+                    timeout=step.get('timeout'))
             elif step['$type'].lower() == 'incubate':
                 tic = time.time()
                 while time.time() < tic + float(step['duration']):
@@ -260,22 +275,44 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         self.protocol_iter += delta_iter
 
 
-    def wait_xchange(self, target, message):
-        busy = True
+    def wait_xchange(self, target, message, timeout=None):
+        """Block until ``message`` appears on ``target``'s exchange list.
+
+        Args:
+            target : str
+                The subsystem identifier ('fluid', 'img', 'illu') whose
+                signal we're waiting for.
+            message : str
+                The signal value to look for.
+            timeout : float or None
+                Per-step deadline in seconds; falls back to
+                :data:`WAIT_FOR_SIGNAL_TIMEOUT_DEFAULT` when None. On expiry,
+                :class:`WaitForSignalTimeout` is raised — previously a typo'd
+                YAML hung the orchestrator forever.
+
+        Returns silently on abort/protocol-iter change to preserve the
+        existing cancellation semantics.
+        """
         protocol_iter_begin = self.protocol_iter
-        while (
-            busy
-            and not self.txchange['abort_flag'].is_set()
-            and not self.txchange['abort_protocol_flag'].is_set()
-            # and not self.txchange['pause_protocol_flag'].is_set()
-            and (protocol_iter_begin == self.protocol_iter)  # abort the wait if i was changed
-        ):
+        if timeout is None:
+            timeout = WAIT_FOR_SIGNAL_TIMEOUT_DEFAULT
+        deadline = time.monotonic() + float(timeout)
+
+        while True:
+            if (self.txchange['abort_flag'].is_set()
+                    or self.txchange['abort_protocol_flag'].is_set()
+                    or protocol_iter_begin != self.protocol_iter):
+                return
             with self.txchange[target + '_lock']:
-                if ((message in self.txchange[target]
-                     or (target + ' ' + message) in self.txchange[target])):
-                    busy = False
-                    break
-            time.sleep(.05)
+                msgs = self.txchange[target]
+                if message in msgs or (target + ' ' + message) in msgs:
+                    return
+            if time.monotonic() >= deadline:
+                raise WaitForSignalTimeout(
+                    "{:s} timed out after {:.1f}s waiting for {!r} from "
+                    "{!r}".format(self.target, float(timeout), message, target)
+                )
+            time.sleep(WAIT_POLL_INTERVAL)
 
     def send_message(self, message):
         with self.txchange[self.target + '_lock']:
@@ -529,7 +566,13 @@ class ProtocolOrchestrator():
         return result
 
     def __del__(self):
+        # __del__ runs during interpreter shutdown; swallow but log so we can
+        # diagnose failed abort paths from the log without crashing GC.
         try:
             self.abort_orchestration()
-        except:
-            pass
+        except Exception as e:
+            try:
+                logger.warning(
+                    "ProtocolOrchestrator.__del__ failed to abort cleanly: {!r}".format(e))
+            except Exception:
+                pass

@@ -25,9 +25,7 @@ import time
 
 class IlluminationSystem(AbstractSystem):
     def __init__(self):
-        """
-        """
-        pass
+        self._paused = False
 
     def set_laser(self, laser):
         """set current laser and activate
@@ -52,8 +50,10 @@ class IlluminationSystem(AbstractSystem):
             try:
                 self.do_power(self.power_setvalues[
                     self.instrument.curr_laser])
-            except Exception:
-                pass
+            except (KeyError, AttributeError, ValueError) as exc:
+                logger.warning(
+                    "could not restore power for laser {!r}: {!r}".format(
+                        self.instrument.curr_laser, exc))
 
             # activate
             self.set_laser_enabled(laser, True)
@@ -97,8 +97,8 @@ class IlluminationSystem(AbstractSystem):
         try:
             self.instrument.beampath.positions = self.mprotocol[
                 'beampath'][self.instrument.curr_laser]
-        except Exception as e:
-            print(str(e))
+        except (KeyError, AttributeError, TypeError) as exc:
+            logger.warning("beampath_open failed: {!r}".format(exc))
             return
 
     def beampath_close(self):
@@ -106,8 +106,8 @@ class IlluminationSystem(AbstractSystem):
         try:
             self.instrument.beampath.positions = self.mprotocol[
                 'beampath']['end']
-        except Exception as e:
-            print(str(e))
+        except (KeyError, AttributeError, TypeError) as exc:
+            logger.warning("beampath_close failed: {!r}".format(exc))
             return
 
     def log_status(self):
@@ -123,16 +123,16 @@ class IlluminationSystem(AbstractSystem):
         try:
             logger.debug(
                 f'Current attenuator position: {self.instrument.attenuator.curr_pos()}')
-        except Exception:
-            pass
+        except (AttributeError, RuntimeError) as exc:
+            logger.warning("attenuator status query failed: {!r}".format(exc))
         try:
             logger.debug(f'Beam path positions: {self.instrument.beampath.positions}')
-        except Exception:
-            pass
+        except (AttributeError, RuntimeError) as exc:
+            logger.warning("beampath positions query failed: {!r}".format(exc))
         try:
             print(f"Autoshutter: {self.instrument.beampath.objects['shutter'].autoshutter}")
-        except Exception:
-            pass
+        except (AttributeError, KeyError, RuntimeError) as exc:
+            logger.warning("autoshutter query failed: {!r}".format(exc))
 
     def _assign_protocol(self, protocol):
         self.protocol = protocol
@@ -172,14 +172,17 @@ class IlluminationSystem(AbstractSystem):
                 mconfig, auto_enable_lasers=False)
             try:
                 self.instrument.beampath.objects['shutter'].autoshutter = True
-            except:
-                pass
+            except (AttributeError, KeyError) as exc:
+                logger.warning(
+                    "could not enable autoshutter on initialization: {!r}".format(exc))
         try:
             self.instrument.load_calibration_database()
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "load_calibration_database failed: {!r}".format(exc))
             raise KeyError(
                 'Microscope illumination probably not calibrated yet. '
-                + 'Monet Set only works with an existing calibration.')
+                + 'Monet Set only works with an existing calibration.') from exc
 
         # set the power set values
         self.power_setvalues = {}
@@ -222,18 +225,29 @@ class IlluminationSystem(AbstractSystem):
                     self.set_laser_enabled(laser, pentry['state'])
 
     def pause_execution(self):
-        """Pause protocol execution
+        """Pause protocol execution.
+
+        The illumination subsystem has no long-running operation to suspend —
+        commands are short and atomic — so pause is recorded as a flag only.
+        Future work (Stage 4) can use this to e.g. close the shutter while
+        paused.
         """
-        # print("Illu system does nothing for pausing")
-        pass
+        logger.debug("Illumination system pause flag set")
+        self._paused = True
 
     def resume_execution(self):
-        """Resume protocol execution after pausing
+        """Resume protocol execution after pausing.
+
+        Returns True so :meth:`AbstractSystemHandler.housekeeping` exits the
+        pause loop. Returning None (the previous behavior) was a bug: the
+        loop treats falsy returns as "still paused" and re-enters forever.
         """
-        # print("Illu system does nothing for resuming")
-        pass
+        logger.debug("Illumination system pause flag cleared")
+        self._paused = False
+        return True
 
     def abort_execution(self):
         """Abort protocol execution
         """
-        pass
+        logger.debug("Illumination system abort requested")
+        self._paused = False

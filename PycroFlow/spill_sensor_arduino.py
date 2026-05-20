@@ -4,6 +4,7 @@ Arduino Sensor Communication Interface
 State-of-the-art Python script for communicating with Arduino sensor system
 """
 
+import os
 import serial
 import serial.tools.list_ports
 import time
@@ -11,10 +12,12 @@ import threading
 import sys
 import signal
 from datetime import datetime
-# import logging
 from loguru import logger
-import threading
 from functools import wraps
+
+
+SPILL_PORT_ENV = 'PYCROFLOW_SPILL_PORT'
+DEFAULT_SPILL_PORT = 'COM9'
 
 
 # logger = logging.getLogger(__name__)
@@ -167,7 +170,10 @@ class ArduinoSensorInterface:
             except Exception as e:
                 logger.debug(f"Poll error: {e}")
                 # return None
-            time.sleep(.02)
+            # Wait via Event so stop_monitoring() returns promptly instead of
+            # waiting the full sleep interval.
+            if self.monitor_abort_flag.wait(timeout=0.02):
+                break
 
     def stop_monitoring(self):
         self.monitor_abort_flag.set()
@@ -263,12 +269,22 @@ def signal_handler(signum, frame):
     sys.exit(0)
 
 
-def main():
+def main(port=None, baud_rate=9600):
+    """Run the interactive sensor CLI.
+
+    Args:
+        port: serial port name. Falls back to env var ``PYCROFLOW_SPILL_PORT``,
+            then to the documented default ``COM9``. Hardcoding the port in
+            source was the previous behavior — env var lets a lab restart pick
+            up a new wiring without code changes.
+    """
     global interface
     signal.signal(signal.SIGINT, signal_handler)
     logger.debug("Arduino Sensor Interface")
     logger.debug("=" * 40)
-    interface = ArduinoSensorInterface(port="COM9", baud_rate=9600)
+    if port is None:
+        port = os.environ.get(SPILL_PORT_ENV, DEFAULT_SPILL_PORT)
+    interface = ArduinoSensorInterface(port=port, baud_rate=baud_rate)
     if not interface.connect():
         logger.debug("Failed to establish connection. Exiting.")
         return

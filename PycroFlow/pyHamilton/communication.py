@@ -1,20 +1,32 @@
-import serial
-import time
-# import logging
-from loguru import logger
+"""Serial communication with Hamilton PSD / MVP devices.
+
+The Hamilton wire-protocol implementation lives in :class:`SerialBus`.
+Module-level functions (``initializeSerial``, ``sendCommand`` etc.) are
+preserved as thin shims so existing call sites continue to work; new code
+should prefer ``SerialBus`` directly.
+
+The module-level name ``abort_wait_response_flag`` remains an external
+attachment point — :mod:`PycroFlow.hamilton_architecture` and
+:mod:`PycroFlow.hamilton_components` assign a :class:`threading.Event` to
+it to cancel ``waitForResponse`` mid-poll. ``SerialBus`` reads this name
+at call time so external assignments stay effective.
+"""
+import sys
 import threading
+import time
+
+import serial
+from loguru import logger
 
 
-# logger = logging.getLogger('pyHamilton.communication')
-
-# Global Variables
-ser = 0
-ComPort = 'COM'
+# External cancellation hook. Set this to a threading.Event so a long-running
+# waitForResponse() can be cancelled by setting the event from another
+# thread. Left as None by default for back-compat.
 abort_wait_response_flag = None
-hamilton_comm_lock = threading.Lock()
 
-
-statusBytesInfo = {
+# Pump-status bytes returned in the second position of a Hamilton response.
+# Used by waitForResponse to log human-readable status and to detect 'ready'.
+STATUS_BYTES_INFO = {
     '@': "Pump is busy - no error",
     '`': "Pump is ready - no error",
     'a': "Initialization error – occurs when the pump fails to initialize",
@@ -29,84 +41,152 @@ statusBytesInfo = {
     'o': "Pump is busy – occurs when the command buffer is full"
 }
 
-def initializeSerial(commPort: int, baudrate: int):
+# Back-compat alias for code that previously imported statusBytesInfo.
+statusBytesInfo = STATUS_BYTES_INFO
+
+
+class SerialBus:
+    """Owns a single Hamilton serial connection and serializes access to it.
+
+    Replaces the previous module-level globals (``ser``, ``ComPort``,
+    ``hamilton_comm_lock``). The instance is created lazily on first
+    ``initialize`` and exposed via :func:`get_bus` for tests / advanced
+    consumers.
+    """
+
+    def __init__(self, com_port_prefix='COM'):
+        self.ser = None
+        self.com_port_prefix = com_port_prefix
+        self.lock = threading.Lock()
+
+    def initialize(self, comm_port, baudrate):
+        self.ser = serial.Serial()
+        self.ser.port = self.com_port_prefix + str(comm_port)
+        self.ser.baudrate = baudrate
+        self.ser.bytesize = 8
+        self.ser.parity = 'N'
+        self.ser.stopbits = 1
+        self.ser.xonxoff = False
+        self.ser.rtscts = False
+        self.ser.dsrdtr = False
+        self.ser.timeout = 10
+        self.ser.open()
+        if self.ser.isOpen():
+            logger.debug('Open: ' + self.ser.portstr)
+
+    def disconnect(self):
+        if self.ser is not None and self.ser.isOpen():
+            self.ser.close()
+
+    def encode_command(self, message):
+        """Send ``message`` followed by CRLF, log the response. Does NOT
+        serialize through the lock — call from contexts where you already
+        hold it."""
+        encoded = (message + '\r\n').encode()
+        self.ser.write(encoded)
+        respond_bytes = self.ser.readline()
+        logger.debug('Response :' + respond_bytes.decode())
+
+    def send_command(self, pump_address, message, wait_for_pump=False):
+        command_header = '/' + pump_address
+        command_footer = '\r\n'
+        command = command_header + message + command_footer
+        logger.debug("Sending command " + command)
+        encoded_command = command.encode()
+
+        with self.lock:
+            self.ser.write(encoded_command)
+            response_bytes = self.ser.readline()
+            try:
+                response = response_bytes.decode()
+            except UnicodeDecodeError as exc:
+                logger.exception(str(exc))
+                response = ''
+
+        if wait_for_pump:
+            self.wait_for_response(command_header, command_footer)
+
+        logger.debug('Response :' + response)
+        return response
+
+    def wait_for_response(self, header, footer):
+        """Poll the pump until it reports 'ready' or the abort flag fires.
+
+        The cancellation flag is read via the module-level name
+        ``abort_wait_response_flag`` (assigned by
+        ``hamilton_architecture._assign_multiprocess_events``), so external
+        ``.set()`` calls take effect immediately.
+        """
+        logger.debug("Waiting for pump status ..")
+        # Resolve the cancellation flag by module attribute so external
+        # reassignments are seen each iteration.
+        comm_module = sys.modules[__name__]
+        while True:
+            time.sleep(0.02)
+            query = header + 'QR' + footer
+            with self.lock:
+                self.ser.write(query.encode())
+                respond_bytes = self.ser.readline()
+            decoded = respond_bytes.decode()
+            time.sleep(0.02)
+            response_bit = decoded[2:3]
+            if response_bit in STATUS_BYTES_INFO:
+                logger.debug(
+                    "Pump status: " + response_bit + ' - '
+                    + STATUS_BYTES_INFO[response_bit])
+                if response_bit == '`':
+                    return
+            flag = getattr(comm_module, 'abort_wait_response_flag', None)
+            if flag is not None and flag.is_set():
+                logger.debug("waitForResponse aborted by external flag")
+                return
+
+
+# Module-level singleton. Lazily initialized; tests can substitute via
+# ``set_bus(SerialBus())`` if needed.
+_BUS = SerialBus()
+
+
+def get_bus():
+    """Return the module-level SerialBus singleton."""
+    return _BUS
+
+
+def set_bus(bus):
+    """Replace the singleton (mainly for tests)."""
+    global _BUS, ser, hamilton_comm_lock
+    _BUS = bus
+    ser = bus.ser
+    hamilton_comm_lock = bus.lock
+
+
+# Back-compat aliases for code that imported the old module globals.
+# These mirror SerialBus internals after each operation that mutates them.
+ser = _BUS.ser
+ComPort = _BUS.com_port_prefix
+hamilton_comm_lock = _BUS.lock
+
+
+# --- Module-level shim functions preserved for back-compat ---------------
+
+def initializeSerial(commPort, baudrate):
+    _BUS.initialize(commPort, baudrate)
+    # keep the legacy module global in sync for callers that read it
     global ser
-    ser = serial.Serial()
-    ser.port = ComPort + str(commPort)
-    ser.baudrate = baudrate
-    ser.bytesize = 8
-    ser.parity = 'N'
-    ser.stopbits = 1
-    ser.xonxoff = False  # disable software flow control
-    ser.rtscts = False  # disable hardware (RTS/CTS) flow control
-    ser.dsrdtr = False  # disable hardware (DSR/DTR) flow control
+    ser = _BUS.ser
 
-    # Specify the TimeOut in seconds, so that SerialPort doesn't hangs
-    ser.timeout = 10
-    ser.open()  # Opens SerialPort
-
-    # print port open or closed
-    if ser.isOpen():
-        logger.debug('Open: ' + ser.portstr)
 
 def disconnectSerial():
-    if ser.isOpen():
-        ser.close()
+    _BUS.disconnect()
 
-def encodeCommand(message: str):
-    temp = message + '\r\n'
-    encoded_temp = str.encode(temp)
-    ser.write(encoded_temp)
 
-    respondbytes = ser.readline()  # Read from Serial Port
-    decoded_temp = respondbytes.decode()
-    logger.debug('Response :' + decoded_temp)
+def encodeCommand(message):
+    _BUS.encode_command(message)
 
-def waitForResponse(header: str, footer: str):
-    logger.debug("Waiting for pump status ..")
-    while True:
-        time.sleep(0.02)
-        temp = header + "QR" + footer
-        encoded_temp = str.encode(temp)
-        with hamilton_comm_lock:
-            ser.write(encoded_temp)
-            respond_bytes = ser.readline()
-        decoded_temp = respond_bytes.decode()
-        time.sleep(0.02)
-        responseBit = decoded_temp[2:3]
-        try:
-            logger.debug("Pump status: " + responseBit + ' - ' + statusBytesInfo[responseBit])
-            if responseBit == '`':
-                break
-        except KeyError:
-            pass
-        if abort_wait_response_flag is not None:
-            logger.debug(f"flag is not None: {abort_wait_response_flag}")
-            if abort_wait_response_flag.is_set():
-                logger.debug("flag is set")
-                return
-        # if pause_flag is not None:
-        #     if pause_flag.is_set():
-        #         break
 
-def sendCommand(pumpAddress: str, message: str, waitForPump=False):
-    commandHeader = '/' + pumpAddress
-    commandFooter = '\r\n'
+def sendCommand(pumpAddress, message, waitForPump=False):
+    return _BUS.send_command(pumpAddress, message, wait_for_pump=waitForPump)
 
-    command = commandHeader + message + commandFooter
-    logger.debug("Sending command " + command)
-    encoded_command = str.encode(command)
-    with hamilton_comm_lock:
-        ser.write(encoded_command)
-        responseBytes = ser.readline()  # Read from Serial Port
-        # response = responseBytes.decode()
-        try:
-            response = responseBytes.decode()
-        except UnicodeDecodeError as e:
-            logger.exception(str(e))
 
-    if waitForPump:
-        waitForResponse(commandHeader, commandFooter)
-
-    logger.debug('Response :' + response)
-    return response
+def waitForResponse(header, footer):
+    _BUS.wait_for_response(header, footer)

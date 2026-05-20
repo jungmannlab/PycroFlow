@@ -38,6 +38,47 @@ import pandas as pd
 
 from PycroFlow.orchestration import AbstractSystem
 from PycroFlow.util import ProgressBar, PyMgrSingleton
+from PycroFlow.mm_lock import MmCoreLock
+
+
+# Nikon PFS statuses that mean focus is lost or unrecoverable. Comparison is
+# case-insensitive. If the vendor returns a status not in either set we fall
+# back to a substring 'fail' check and emit a WARNING so the new string gets
+# noticed.
+_PFS_BAD_STATUSES = frozenset(s.lower() for s in (
+    'Failed Focus',
+    'Out of Range',
+    'Searching',
+    'No IR Signal',
+    'Defocus',
+))
+_PFS_OK_STATUSES = frozenset(s.lower() for s in (
+    'Locked in Focus',
+    'Within Range',
+    'Focusing',
+    'Stationary',
+))
+
+
+def _pfs_is_unhealthy(pfs_status):
+    """Return True iff ``pfs_status`` indicates focus is lost.
+
+    Replaces the previous ``"failed" in pfs_status.lower()`` substring check
+    that misses other bad states. Unknown statuses fall back to the substring
+    rule + WARNING so the situation surfaces in logs.
+    """
+    if not pfs_status:
+        return False
+    s = pfs_status.lower()
+    if s in _PFS_BAD_STATUSES:
+        return True
+    if s in _PFS_OK_STATUSES:
+        return False
+    logger.warning(
+        "PFS returned an unrecognized status {!r}; falling back to "
+        "'fail' substring check. Consider adding it to _PFS_BAD_STATUSES "
+        "or _PFS_OK_STATUSES.".format(pfs_status))
+    return 'fail' in s
 
 
 # logger = logging.getLogger(__name__)
@@ -47,6 +88,16 @@ from PycroFlow.util import ProgressBar, PyMgrSingleton
 class ImagingSystem(AbstractSystem):
     def __init__(self, config):
         self.config = config
+
+        # Acquire the single-process MM Core lock BEFORE touching Core/Studio.
+        # If a separately-run monet GUI (or another PycroFlow instance) is
+        # already attached, MmLockHeld is raised here with a clear message
+        # instead of producing a silently broken second connection. Stage 5's
+        # in-process Qt GUI removes the need for this guard by sharing the
+        # Core within one process; the lock is still useful in the two-
+        # process world.
+        self._mm_lock = MmCoreLock()
+        self._mm_lock.acquire()
 
         self.core = PyMgrSingleton.get_core()
         self.studio = PyMgrSingleton.get_studio()
@@ -168,22 +219,45 @@ class ImagingSystem(AbstractSystem):
                 self.record_movie(acq_name_p, acquisition_config)
 
     def pause_execution(self):
-        """Pause protocol execution
+        """Pause protocol execution.
+
+        Sets the shared ``acq_pause`` event consumed by the per-frame callback
+        ``image_process_fn`` so the next frame loop iteration parks until the
+        flag clears.
         """
         logger.debug("Imaging system sets its own pause flag")
         self.acq_pause.set()
 
     def resume_execution(self):
-        """Resume protocol execution after pausing
+        """Resume protocol execution after pausing.
+
+        Returns True so :meth:`AbstractSystemHandler.housekeeping` exits the
+        pause loop. Returning None (the previous behavior) was a bug: the
+        housekeeping loop treats falsy returns as "still paused" and re-enters
+        the pause branch forever.
         """
         logger.debug("Imaging system clears its own pause flag")
         self.acq_pause.clear()
+        return True
 
     def abort_execution(self):
         """Abort protocol execution
         """
         logger.debug("setting abort flag")
         self.acq_abort.set()
+
+    def close(self):
+        """Release the MM Core lock and any other process-level resources.
+
+        Call this when the imaging system is no longer needed (e.g. on CLI
+        exit) so a subsequent monet session can attach. The lock also
+        releases on GC via :meth:`MmCoreLock.__del__`, but explicit cleanup
+        is preferred.
+        """
+        try:
+            self._mm_lock.release()
+        except Exception as exc:
+            logger.warning("MM Core lock release failed: {!r}".format(exc))
 
     def check_finished(self):
         pass
@@ -276,7 +350,7 @@ class ImagingSystem(AbstractSystem):
                 'state': pfs_state,
                 'status': pfs_status,
             }
-            if (("failed" in pfs_status.lower())
+            if (_pfs_is_unhealthy(pfs_status)
                 and (self.handler_ref is not None)
                 and (not self.is_out_of_focus)
             ):
