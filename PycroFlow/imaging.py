@@ -37,8 +37,12 @@ from pycromanager import Acquisition, multi_d_acquisition_events
 import pandas as pd
 
 from PycroFlow.orchestration import AbstractSystem
-from PycroFlow.util import ProgressBar, PyMgrSingleton
+from PycroFlow.util import ProgressBar, PyMgrSingleton  # PyMgrSingleton kept for back-compat
 from PycroFlow.mm_lock import MmCoreLock
+# services.mm_core supersedes PyMgrSingleton — Stage 5's in-process Qt GUI
+# needs a single shared Core that monet can also see. Use the new accessor
+# transparently here so the old singleton stays valid as a fallback.
+from PycroFlow.services import mm_core as _mm_core
 
 
 # Nikon PFS statuses that mean focus is lost or unrecoverable. Comparison is
@@ -99,8 +103,8 @@ class ImagingSystem(AbstractSystem):
         self._mm_lock = MmCoreLock()
         self._mm_lock.acquire()
 
-        self.core = PyMgrSingleton.get_core()
-        self.studio = PyMgrSingleton.get_studio()
+        self.core = _mm_core.get_core()
+        self.studio = _mm_core.get_studio()
 
         self.handler_ref = None
 

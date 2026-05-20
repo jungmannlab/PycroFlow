@@ -135,6 +135,18 @@ class ProtocolBuilder:
 
         return fname, steps
 
+    # Registry mapping the user-facing experiment type (case-insensitive)
+    # to the ProtocolBuilder method that knows how to expand it. New
+    # experiment types add an entry here instead of editing the dispatcher,
+    # and external code can extend the registry from outside (Stage 4's
+    # plugin path).
+    EXPERIMENT_TYPES = {
+        'exchange':  'create_steps_exchange',
+        'merpaint':  'create_steps_MERPAINT',
+        'flushtest': 'create_steps_flushtest',
+        'sph-resi':  'create_steps_sph_resi',
+    }
+
     def create_steps(self, config):
         """Creates the protocol steps one after another
 
@@ -154,18 +166,12 @@ class ProtocolBuilder:
         self.reservoir_vols = {
             id: 0 for id in config['fluid']['settings']['reservoir_names']}
         exptype = config['fluid']['settings']['experiment']['type']
-        if exptype.lower() == 'exchange':
-            steps, reservoir_vols = self.create_steps_exchange(config)
-        elif exptype.lower() == 'merpaint':
-            steps, reservoir_vols = self.create_steps_MERPAINT(config)
-        elif exptype.lower() == 'flushtest':
-            steps, reservoir_vols = self.create_steps_flushtest(config)
-        elif exptype.lower() == 'sph-resi':
-            steps, reservoir_vols = self.create_steps_sph_resi(config)
-        else:
+        method_name = self.EXPERIMENT_TYPES.get(exptype.lower())
+        if method_name is None:
             raise KeyError(
-                'Experiment type {:s} not implemented.'.format(exptype))
-        return steps, reservoir_vols
+                'Experiment type {!r} not implemented. Known types: {}'.format(
+                    exptype, sorted(self.EXPERIMENT_TYPES)))
+        return getattr(self, method_name)(config)
 
     def create_stepset_acquisition(
         self, illusttg, imgsttg, unique_name, readable_name,

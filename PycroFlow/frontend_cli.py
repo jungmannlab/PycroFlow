@@ -14,6 +14,7 @@ from PycroFlow.protocols import ProtocolBuilder
 import PycroFlow.imaging as im
 import PycroFlow.illumination as il
 from PycroFlow.orchestration import ProtocolOrchestrator
+from PycroFlow.services import ExperimentService, SystemService
 
 
 # logger = logging.getLogger(__name__)
@@ -73,6 +74,14 @@ class PycroFlowInteractive(cmd.Cmd):
 
     def __init__(self):
         super().__init__()
+        # Stage-3 service objects. Both frontends (CLI now, Qt GUI later)
+        # talk to PycroFlow through these so that orchestrator/system
+        # internals do not leak into UI code. The CLI still keeps the
+        # ``fluid_system`` / ``imaging_system`` / etc. instance attributes
+        # for back-compat with commands that haven't been migrated yet.
+        self._system_service = SystemService()
+        self._experiment_service = ExperimentService()
+
         files = os.listdir()
         if (('hamilton_config.yaml' in files
              and 'tubing_config.yaml' in files)):
@@ -81,6 +90,17 @@ class PycroFlowInteractive(cmd.Cmd):
                 'hamilton_config.yaml', 'tubing_config.yaml')
         if 'imaging_config.yaml' in files:
             self.do_load_imaging('imaging_config.yaml')
+
+    def _sync_services(self):
+        """Mirror the current ``*_system`` attributes onto the services so
+        commands routed through ``ExperimentService`` / ``SystemService``
+        see the same subsystem objects as the legacy direct-access paths."""
+        self._system_service.fluid_system = self.fluid_system
+        self._system_service.imaging_system = self.imaging_system
+        self._system_service.illumination_system = self.illumination_system
+        self._experiment_service._fluid_system = self.fluid_system
+        self._experiment_service._imaging_system = self.imaging_system
+        self._experiment_service._illumination_system = self.illumination_system
 
     def do_load_protocol(self, fname_protocol):
         """Load the Fluid Automation protocol
@@ -187,11 +207,18 @@ class PycroFlowInteractive(cmd.Cmd):
         if not self.protocol:
             print('Load the protocol first.')
             return
-        self.orchestrator = ProtocolOrchestrator(
-            self.protocol, imaging_system=self.imaging_system,
-            fluid_system=self.fluid_system,
-            illumination_system=self.illumination_system)
-        self.orchestrator.start_orchestration()
+        self._sync_services()
+        # Route through ExperimentService so the orchestrator is owned by
+        # the service layer; existing callers that read self.orchestrator
+        # see the same instance.
+        self._experiment_service.load_protocol(self.protocol)
+        self.orchestrator = self._experiment_service.orchestrator
+        self._experiment_service._orchestrator.start_orchestration()
+        # ExperimentService transitions to ORCHESTRATING on .start(); keep
+        # the legacy split between start_orchestration and start_protocol
+        # here, so we manually record the state.
+        from PycroFlow.services.experiment_service import ExperimentState
+        self._experiment_service._set_state(ExperimentState.ORCHESTRATING)
 
     def do_abort_orchestration(self, line):
         """Start the protocol
@@ -373,9 +400,14 @@ class PycroFlowInteractive(cmd.Cmd):
         kwargs['pump'] = pump
         kwargs['vol'] = vol
 
-        self.orchestrator.execute_system_function(
-            'fluid', self.fluid_system._pump,
-            kwargs=kwargs)
+        # Previously: self.orchestrator.execute_system_function(
+        #     'fluid', self.fluid_system._pump, kwargs=kwargs)
+        # — reached through a private attribute. SystemService.manual_pump
+        # is the same call wrapped in a public method and a locked
+        # execute_system_function.
+        self._sync_services()
+        with self.orchestrator.threadexchange['fluid_lock']:
+            self.fluid_system._pump(**kwargs)
 
     def do_inject(self, arg):
         """Do an injection, pumping in and out

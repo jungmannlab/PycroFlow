@@ -339,8 +339,13 @@ class ImagingHandler(AbstractSystemHandler):
     def __init__(self, imaging_system, protocol, threadexchange):
         super().__init__(protocol, threadexchange)
         self.system = imaging_system
-        self.system.handler_ref = self
+        # Guard against None before touching attributes — previously
+        # ``self.system.handler_ref = self`` ran unconditionally and
+        # AttributeError'd on a None imaging system. The headless /
+        # services-layer / GUI test paths legitimately construct
+        # ProtocolOrchestrator without an imaging system.
         if self.system is not None:
+            self.system.handler_ref = self
             self.system._assign_protocol(protocol)
 
     def execute_protocol_entry(self, i):
