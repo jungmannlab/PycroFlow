@@ -6,10 +6,9 @@ Provides a command line interface frontend.
 import os
 import cmd
 import yaml
-# import logging
 from loguru import logger
-# import NotImplmentedError
 
+import PycroFlow
 import PycroFlow.hamilton_architecture as ha
 from PycroFlow.protocols import ProtocolBuilder
 import PycroFlow.imaging as im
@@ -623,5 +622,11 @@ class PycroFlowInteractive(cmd.Cmd):
                 self.orchestrator.abort_orchestration()
 
 
-if __name__ == '__main__':
+def main():
+    """Entry point for the interactive CLI. Configures logging, then runs cmdloop."""
+    PycroFlow.setup_logging(clean_old=True)
     PycroFlowInteractive().cmdloop()
+
+
+if __name__ == '__main__':
+    main()

@@ -2,6 +2,7 @@ import unittest
 import logging
 
 import PycroFlow.protocols as pprot
+from PycroFlow.tests import TEST_OUTPUT_DIR
 
 
 logger = logging.getLogger(__name__)
@@ -302,8 +303,8 @@ class TestProtocolBuilder(unittest.TestCase):
         }
 
         flow_acq_config = {
-            'save_dir': r'PycroFlow//TestData',
-            'protocol_folder': r'PycroFlow//TestData',
+            'save_dir': TEST_OUTPUT_DIR,
+            'protocol_folder': TEST_OUTPUT_DIR,
             'base_name': 'AutomationTest_R2R4',
             'fluid_settings': fluid_settings,
             'imaging_settings': imaging_settings,

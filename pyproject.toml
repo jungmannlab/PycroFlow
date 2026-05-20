@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "PycroFlow"
+version = "0.0.1"
+description = "Microscopy and Fluid automation coordination"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = ["pycromanager", "microscopy", "fluid-automation", "exchange-paint"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: Microsoft :: Windows :: Windows 10",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+]
+
+# Runtime deps that are needed even for basic library use.
+# Heavy hardware-specific deps live in the [hardware] extra so test/dev
+# environments don't have to install them.
+dependencies = [
+    "pyserial>=3.5",
+    "loguru",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Everything required to actually drive the microscope and fluid handler.
+# Installed on the lab Windows box.
+hardware = [
+    "pycromanager==0.29.5",
+    "ndtiff==2.2.1",
+    "PyHamiltonPSD==1.1.0",
+    "ThorlabsPM100>=1.2.2",
+    "pyvisa>=1.15",
+    "nidaqmx>=1.2",
+    "microscope>=0.7",
+    "arduino-python3==0.6",
+    "msl-equipment @ https://github.com/MSLNZ/msl-equipment/releases/download/v0.2.0/msl_equipment-0.2.0-py3-none-any.whl",
+    "pycobolt @ git+https://github.com/cobolt-lasers/pycobolt.git",
+    "numpy==1.24.4",
+    "pandas>=2.3",
+    "openpyxl>=3.1",
+    "matplotlib>=3.10",
+    "lmfit>=1.3",
+    "icecream>=2.1",
+    "inputimeout==1.0.4",
+]
+
+# Stage 5: Qt GUI frontend that embeds monet's MonetMainWindow as a tab.
+# PyQt5 matches monet's binding to avoid a compatibility shim.
+gui = [
+    "PyQt5",
+]
+
+# Test and dev tooling. Sufficient to run the unit tests under CI without
+# any hardware libs (the conftest.py mocks pycromanager, monet, pycobolt,
+# and nidaqmx).
+dev = [
+    "pytest>=7",
+    "coverage>=7.10",
+    "ruff",
+    "mypy",
+]
+
+[project.scripts]
+pycroflow = "PycroFlow.frontend_cli:main"
+
+[tool.setuptools.packages.find]
+include = ["PycroFlow*"]
+
+[tool.setuptools.package-data]
+PycroFlow = ["TestData/*.yaml"]

@@ -1,26 +1,4 @@
-from setuptools import setup, find_packages
- 
-classifiers = [
-  'Development Status :: 3 - Alpha',
-  'Intended Audience :: Education',
-  'Operating System :: Microsoft :: Windows :: Windows 10',
-  'License :: OSI Approved :: MIT License',
-  'Programming Language :: Python :: 3',
-  'Programming Language :: Python :: 3.10'
-]
- 
-setup(
-  name='PycroFlow',
-  version='0.0.1',
-  description='Microscopy and Fluid automation coordination',
-  long_description=open('README.md').read() + '\n\n' + open('CHANGELOG.txt').read(),
-  url='',  
-  # author='MPG - Heinrich Grabmayr',
-  # author_email='hgrabmayr@biochem.mpg.de',
-  license='MIT', 
-  classifiers=classifiers,
-  keywords='pycromanager',
-  packages=find_packages(),
-  python_requires='>=3.10',
-  install_requires=['pyserial']
-)
+"""Legacy shim. All metadata and dependencies live in pyproject.toml."""
+from setuptools import setup
+
+setup()

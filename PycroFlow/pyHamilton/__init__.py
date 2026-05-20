@@ -7,61 +7,53 @@ from .commandPSD4SmoothFlow import *
 from .commandPSD6 import *
 from .commandPSD6SmoothFlow import *
 
-# import logging
-# from logging import handlers
 from loguru import logger
 import os
 import sys
 
 
-# configure logger
-def config_logger():
-    # logger = logging.getLogger('pyHamilton')
-    # for handler in logger.handlers:  # don't log into the main pycroflow.log file
-    #     logger.removeHandler(handler)
-    # logger.setLevel(logging.DEBUG)
-    # formatter = logging.Formatter(
-    #     '%(asctime)s | %(threadName)s | %(name)s | %(levelname)s -> %(message)s')
-    # file_handler = handlers.RotatingFileHandler(
-    #     'pyhamilton.log', maxBytes=1e6, backupCount=5)
-    # file_handler.setFormatter(formatter)
-    # file_handler.setLevel(logging.DEBUG)
-    # stream_handler = logging.StreamHandler()
-    # stream_handler.setFormatter(formatter)
-    # stream_handler.setLevel(logging.WARNING)
-    # logger.addHandler(file_handler)
-    # # logger.addHandler(stream_handler)
+def log_filter(record):
+    return "pyHamilton" in record["name"]
 
-    # using loguru
-    logfile = "hamilton.log"
-    # logger.remove()
+
+def clean_old_logs(prefix='pyhamilton.log', directory='.'):
+    """Delete rotated pyHamilton log files. Opt-in; no longer runs at import."""
+    try:
+        files = os.listdir(directory)
+    except OSError:
+        return
+    for fil in files:
+        if prefix in fil:
+            try:
+                os.remove(os.path.join(directory, fil))
+            except OSError:
+                pass
+
+
+def setup_logging(logfile='hamilton.log', clean_old=False):
+    """Add a pyHamilton-only file sink. Safe to call multiple times."""
+    if clean_old:
+        clean_old_logs(prefix=logfile)
     logger.add(
         logfile,
         format="{time:YYYY-MM-DD HH:mm:ss:SSS} | PID:{process} | {thread} | {name} | {function} | {level} -> {message}",
         filter=log_filter,
-        rotation="1 MB", retention=5, enqueue=True, serialize=False)
-    # logger.add(
-    #     sys.stderr,
-    #     format="{time:YYYY-MM-DD HH:mm:ss:SSS} | PID:{process} | {name} | {function} | {level} -> {message}",
-    #     level="ERROR")
+        rotation="1 MB",
+        retention=5,
+        enqueue=True,
+        serialize=False,
+    )
 
 
-def log_filter(record):
-    if "pyHamilton" in record["name"]:
-        return True
-    return False
+# Back-compat shims for the old names.
+def config_logger():
+    """Deprecated: use :func:`setup_logging` instead."""
+    setup_logging(clean_old=False)
 
 
 def rem_old_logfiles():
-    files = os.listdir('.')
-    files = [fil for fil in files if 'pyhamilton.log' in fil]
-    for fil in files:
-        os.remove(fil)
-
-
-rem_old_logfiles()  # comment out if old logs are relevant
-config_logger()
-# logger = logging.getLogger('pyHamilton')
+    """Deprecated: use :func:`clean_old_logs` instead."""
+    clean_old_logs()
 
 
 #List of pumps. Initially the list is empty

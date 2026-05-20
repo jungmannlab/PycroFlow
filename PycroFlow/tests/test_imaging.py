@@ -4,6 +4,7 @@ import logging
 import time
 
 import PycroFlow.imaging as pim
+from PycroFlow.tests import TEST_OUTPUT_DIR
 from pycromanager import Core, Studio
 
 
@@ -48,7 +49,7 @@ class TestImaging(unittest.TestCase):
             'ROI': [512, 512, 512, 512],
         }
         flow_acq_config = {
-            'save_dir': r'PycroFlow//TestData',
+            'save_dir': TEST_OUTPUT_DIR,
             'base_name': 'AutomationTest_R2R4',
             'imaging_settings': imaging_settings,
             'mm_parameters': {
@@ -85,7 +86,7 @@ class TestImaging(unittest.TestCase):
             'ROI': [512, 512, 512, 512],
         }
         flow_acq_config = {
-            'save_dir': r'PycroFlow//TestData',
+            'save_dir': TEST_OUTPUT_DIR,
             'base_name': 'AutomationTest_R2R4',
             'imaging_settings': imaging_settings,
             'mm_parameters': {
