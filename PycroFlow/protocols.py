@@ -79,6 +79,8 @@ import os
 import yaml
 from datetime import datetime
 
+from PycroFlow.schemas import validate_protocol
+
 
 # logger = logging.getLogger(__name__)
 # ic.configureOutput(outputFunction=logger.debug)
@@ -115,6 +117,12 @@ class ProtocolBuilder:
             protocol['illu'] = {'protocol_entries': steps['illu']}
             if 'parameters' in config['illu'].keys():
                 protocol['illu']['parameters'] = config['illu']['parameters']
+
+        # Pin the wire format: catch malformed entries (unknown $type, missing
+        # required fields, typos in field names) here before the orchestrator
+        # picks them up mid-run. Schema-validation only — protocol dict is
+        # unchanged.
+        validate_protocol(protocol)
 
         # save protocol
         fname = config['base_name'] + datetime.now().strftime('_%y%m%d-%H%M') + '.yaml'

@@ -26,6 +26,7 @@ dependencies = [
     "pyserial>=3.5",
     "loguru",
     "pyyaml>=6.0",
+    "pydantic>=2,<3",
 ]
 
 [project.optional-dependencies]
@@ -74,4 +75,9 @@ pycroflow = "PycroFlow.frontend_cli:main"
 include = ["PycroFlow*"]
 
 [tool.setuptools.package-data]
-PycroFlow = ["TestData/*.yaml"]
+PycroFlow = [
+    "TestData/*.yaml",
+    "configs/*.yaml",
+    "tests/fixtures/configs/*.py",
+    "tests/fixtures/snapshots/*.json",
+]

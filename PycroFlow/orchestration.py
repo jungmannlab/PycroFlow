@@ -1,58 +1,30 @@
 #!/usr/bin/env python
-"""
-    PycroFlow/hamilton_upperlevel.py
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+"""Orchestration framework for PycroFlow.
 
-    Concertation between Fluid automation, image acquisition, and illumination
+Coordinates fluid handling, image acquisition, and illumination subsystems
+via per-subsystem handler threads synchronized through a shared
+``threadexchange`` dict and a signal/wait-for-signal protocol.
 
-------
-# Test of fluid-only orchestration:
-import PycroFlow.orchestration as por
-import PycroFlow.hamilton_architecture as ha
+Runnable REPL examples (using the demo protocols, no real hardware needed)::
 
-prot = {'fluid': por.protocol['fluid']}
-ha.connect('18', 9600)
-la = ha.LegacyArchitecture(ha.legacy_system_config, ha.legacy_tubing_config, '18', 9600)
-po = por.ProtocolOrchestrator(prot, fluid_system=la)
-po.start_orchestration()
-po.start_protocol()
-po.abort_protocol()
-po.abort_orchestration()
-------
-# Test of imaging-only orchestration:
-import PycroFlow.orchestration as por
-import PycroFlow.imaging as pi
-prot = {'img': por.protocol['img']}
-prot['img']['protocol_entries'] = prot['img']['protocol_entries'][1:]  # skip first wait
-imaging_config = {'save_dir': r'.', 'base_name': 'test', 'imaging_settings': {'frames': 50, 't_exp': 100}, 'mm_parameters': {'channel_group': 'Filter turret', 'filter': '2-G561',},}
+    # Fluid-only orchestration
+    from PycroFlow.examples.demo_protocols import protocol
+    import PycroFlow.orchestration as por
+    import PycroFlow.hamilton_architecture as ha
 
-isy = pi.ImagingSystem(imaging_config)
-po = por.ProtocolOrchestrator(prot, imaging_system=isy)
-# po.imaging_handler.run_protocol()  # non-threaded execution
-# or threaded execution
-po.start_orchestration()
-po.start_protocol()
-------
-# Test of fluid-and-imaging orchestration:
-import PycroFlow.orchestration as por
-import PycroFlow.hamilton_architecture as ha
-import PycroFlow.imaging as pi
+    prot = {'fluid': protocol['fluid']}
+    ha.connect('18', 9600)
+    la = ha.LegacyArchitecture(
+        ha.legacy_system_config, ha.legacy_tubing_config, '18', 9600)
+    po = por.ProtocolOrchestrator(prot, fluid_system=la)
+    po.start_orchestration()
+    po.start_protocol()
 
-prot = {'img': por.protocol['img'], 'fluid': por.protocol['fluid']}
-imaging_config = {'save_dir': r'.', 'base_name': 'test', 'imaging_settings': {'frames': 50, 't_exp': 100}, 'mm_parameters': {'channel_group': 'Filter turret', 'filter': '2-G561',},}
+The matching imaging-only and combined fluid+imaging snippets live in
+``PycroFlow/examples/demo_protocols.py``.
 
-ha.connect('18', 9600)
-la = ha.LegacyArchitecture(ha.legacy_system_config, ha.legacy_tubing_config, '18', 9600)
-isy = pi.ImagingSystem(imaging_config)
-po = por.ProtocolOrchestrator(prot, imaging_system=isy, fluid_system=la)
-po.start_orchestration()
-po.start_protocol()
-#po.abort_protocol()
-#po.abort_orchestration()
-------
-
-    :authors: Heinrich Grabmayr, 2023
-    :copyright: Copyright (c) 2023 Jungmann Lab, MPI of Biochemistry
+:authors: Heinrich Grabmayr, 2023
+:copyright: Copyright (c) 2023 Jungmann Lab, MPI of Biochemistry
 """
 import threading
 import queue
@@ -72,50 +44,6 @@ WAIT_POLL_INTERVAL = 0.05
 
 class WaitForSignalTimeout(RuntimeError):
     """Raised when a 'wait for signal' step exceeds its timeout."""
-
-
-# logger = logging.getLogger(__name__)
-
-
-protocol_fluid = [
-    {'$type': 'inject', 'reservoir_id': 0, 'volume': 500, 'wait_time': 1},
-    {'$type': 'incubate', 'duration': 120},
-    {'$type': 'inject', 'reservoir_id': 1, 'volume': 500, 'velocity': 600, 'wait_time': 1},
-    {'target': 'fluid', '$type': 'signal', 'value': 'fluid round 1 done'},
-    {'$type': 'flush', 'flushfactor': 1},
-    {'$type': 'wait for signal', 'target': 'img', 'value': 'round 1 done'},
-    {'$type': 'inject', 'reservoir_id': 14, 'volume': 500, 'wait_time': 1},
-]
-
-protocol_imaging = [
-    {'$type': 'wait for signal', 'target': 'fluid', 'value': 'round 1 done'},
-    {'$type': 'acquire', 'frames': 100, 't_exp': 100, 'round': 1, 'message': 'R3'},
-    {'$type': 'signal', 'value': 'imaging round 1 done'},
-]
-
-protocol_illumination = [
-    {'$type': 'power', 'value': 1},
-    {'$type': 'wait for signal', 'target': 'fluid', 'value': 'round 1 done'},
-    {'$type': 'power', 'value': 50},
-    {'$type': 'wait for signal', 'target': 'img', 'value': 'round 1 done'},
-]
-
-protocol = {
-    'fluid': {
-        'parameters': {
-            'start_velocity': 50,
-            'max_velocity': 1000,
-            'stop_velocity': 500,
-            'mode': 'tubing_stack',  # or 'tubing_flush'
-            'extractionfactor': 1},
-        'protocol_entries': protocol_fluid},
-    'img': {
-        'protocol_entries': protocol_imaging},
-    'illu': {
-        'protocol_entries': protocol_illumination}
-}
-
-
 
 
 class AbstractSystem(abc.ABC):

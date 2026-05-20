@@ -1,0 +1,92 @@
+# Legacy system architecture:
+#   * N valves for N*6+1 reservoirs ('valve_a')
+#   * 1 syringe pump ('pump_a')
+#   * sample
+#   * 1 syringe pump ('pump_out')
+#   * waste
+#
+# Previously: PycroFlow/hamilton_architecture.py legacy_system_config (lines 47-89).
+# Moved here so the same wiring topology can be checked in / branched /
+# diffed independently of the framework code.
+
+system_type: legacy
+
+valve_a:
+  - address: 2
+    instrument_type: MVP
+    valve_type: 8-5
+  - address: 3
+    instrument_type: MVP
+    valve_type: 8-5
+  - address: 4
+    instrument_type: MVP
+    valve_type: 8-5
+
+valve_flush:    # optional
+  address: 5
+  instrument_type: MVP
+  valve_type: 4-2
+
+# If there is no flush valve: the position of pump_a outlet.
+# Otherwise:
+#   1: flush / waste / pump-to-blue
+#   2: pump sealed
+#   3: pump sealed
+#   4: inject / sample / pump-to-red
+flush_pos:
+  inject: 4
+  flush: 1
+
+pump_a:
+  address: 1
+  instrument_type: '4'
+  valve_type: Y
+  syringe: 500u
+
+pump_out:
+  address: 0
+  instrument_type: '4'
+  valve_type: Y
+  syringe: 5.0m
+
+# Reservoir routing. Each entry's valve_pos is a mapping valve_address -> position.
+reservoir_a:
+  - id: 0
+    valve_pos: {4: 2}
+  - id: 1
+    valve_pos: {4: 3}
+  # - id: 2
+  #   valve_pos: {4: 4}
+  # - id: 3
+  #   valve_pos: {4: 5}
+  # - id: 4
+  #   valve_pos: {4: 6}
+  # - id: 5
+  #   valve_pos: {4: 7}
+  # - id: 6
+  #   valve_pos: {4: 8}
+  - id: 7
+    valve_pos: {4: 1, 3: 2}
+  - id: 8
+    valve_pos: {4: 1, 3: 3}
+  # - id: 9
+  #   valve_pos: {4: 1, 3: 4}
+  # - id: 10
+  #   valve_pos: {4: 1, 3: 5}
+  # - id: 11
+  #   valve_pos: {4: 1, 3: 6}
+  # - id: 12
+  #   valve_pos: {4: 1, 3: 7}
+  # - id: 13
+  #   valve_pos: {4: 1, 3: 8}
+  - id: 14
+    valve_pos: {4: 1, 3: 1, 2: 1}
+  - id: 15
+    valve_pos: {4: 1, 3: 1, 2: 2}
+  - id: 16
+    valve_pos: {4: 1, 3: 1, 2: 3}
+
+special_names:
+  # Reservoir id with the buffer that can be used for flushing.
+  # Should be at the end of multiple MVPs.
+  flushbuffer_a: 14

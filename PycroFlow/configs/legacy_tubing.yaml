@@ -1,0 +1,33 @@
+# Tubing volumes (µL) for the legacy fluid path.
+# Path: reservoirs -> confluxes (if present) -> pumps -> valve_flush -> sample.
+# Fixed for each system architecture.
+#
+# Previously: PycroFlow/hamilton_architecture.py legacy_tubing_config (lines 94-119).
+# The on-disk format is list-of-records because YAML cannot represent the
+# original (from, to) tuple keys natively. The loader rebuilds the
+# tuple-keyed dict.
+
+- {from: R21, to: pump_a, volume: 365}
+- {from: R20, to: pump_a, volume: 365}
+- {from: R19, to: pump_a, volume: 365}
+- {from: R18, to: pump_a, volume: 365}
+- {from: R17, to: pump_a, volume: 365}
+- {from: R16, to: pump_a, volume: 365}
+- {from: R15, to: pump_a, volume: 365}
+- {from: R14, to: pump_a, volume: 365}
+- {from: R13, to: pump_a, volume: 260}
+- {from: R12, to: pump_a, volume: 260}
+- {from: R11, to: pump_a, volume: 260}
+- {from: R10, to: pump_a, volume: 260}
+- {from: R9,  to: pump_a, volume: 260}
+- {from: R8,  to: pump_a, volume: 260}
+- {from: R7,  to: pump_a, volume: 260}
+- {from: R6,  to: pump_a, volume: 215}
+- {from: R5,  to: pump_a, volume: 215}
+- {from: R4,  to: pump_a, volume: 215}
+- {from: R3,  to: pump_a, volume: 215}
+- {from: R2,  to: pump_a, volume: 215}
+- {from: R1,  to: pump_a, volume: 215}
+- {from: R0,  to: pump_a, volume: 215}
+- {from: pump_a,      to: valve_flush, volume: 156}
+- {from: valve_flush, to: sample,      volume: 256}
