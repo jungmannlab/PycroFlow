@@ -30,7 +30,24 @@ import threading
 import queue
 import time
 import abc
+from functools import singledispatch
+
 from loguru import logger
+
+# Stage 4 typed-dispatch infrastructure. Import lazily-friendly names so a
+# missing pydantic install during partial dev environments doesn't break
+# the whole module — orchestration must remain importable for tests.
+try:
+    from PycroFlow.protocol_entries import (
+        AcquireEntry,
+        IncubateEntry,
+        SignalEntry,
+        WaitForSignalEntry,
+        parse_entry,
+    )
+    _TYPED_ENTRIES_AVAILABLE = True
+except Exception:
+    _TYPED_ENTRIES_AVAILABLE = False
 
 
 # Default timeout for inter-subsystem 'wait for signal' steps. Four hours
@@ -44,6 +61,43 @@ WAIT_POLL_INTERVAL = 0.05
 
 class WaitForSignalTimeout(RuntimeError):
     """Raised when a 'wait for signal' step exceeds its timeout."""
+
+
+# Stage-4 typed dispatch table. ``functools.singledispatch`` selects a
+# handler by the type of its first argument. Each ``register``ed function
+# expects the typed entry plus the active ``AbstractSystemHandler`` and
+# performs the side effect previously implemented inline in
+# ``run_protocol`` as an if/elif on ``step['$type'].lower()``.
+#
+# The default (untyped raw dict) falls back to the subsystem's own
+# ``execute_protocol_entry`` — same behaviour as the previous ``else``
+# branch. This keeps any subsystem-specific entries that pydantic doesn't
+# know about working without further changes.
+@singledispatch
+def dispatch_entry(entry, handler):
+    """Default dispatcher: delegate to the subsystem's execute_protocol_entry."""
+    handler.execute_protocol_entry(handler.protocol_iter)
+
+
+if _TYPED_ENTRIES_AVAILABLE:
+
+    @dispatch_entry.register
+    def _(entry: SignalEntry, handler):
+        handler.send_message(entry.value)
+
+    @dispatch_entry.register
+    def _(entry: WaitForSignalEntry, handler):
+        handler.wait_xchange(entry.target, entry.value, timeout=entry.timeout)
+
+    @dispatch_entry.register
+    def _(entry: IncubateEntry, handler):
+        tic = time.time()
+        duration = float(entry.duration)
+        while time.time() < tic + duration:
+            if (handler.txchange['abort_flag'].is_set()
+                    or handler.txchange['abort_protocol_flag'].is_set()):
+                return
+            time.sleep(0.05)
 
 
 class AbstractSystem(abc.ABC):
@@ -125,19 +179,22 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
             step = self.protocol['protocol_entries'][self.protocol_iter]
             logger.debug('System {:s} performing step {:d}/{:d}: {:s}'.format(self.target, self.protocol_iter+1, nsteps, str(step)))
             print('System ', self.target, ' performing step', self.protocol_iter+1, '/', nsteps, ':', step)
-            if step['$type'].lower() == 'signal':
-                self.send_message(step['value'])
-            elif step['$type'].lower() == 'wait for signal':
-                self.wait_xchange(
-                    step['target'], step['value'],
-                    timeout=step.get('timeout'))
-            elif step['$type'].lower() == 'incubate':
-                tic = time.time()
-                while time.time() < tic + float(step['duration']):
-                    if ((self.txchange['abort_flag'].is_set()
-                         or self.txchange['abort_protocol_flag'].is_set())):
-                        return
-                    time.sleep(.05)
+            # Stage-4 typed dispatch: try to parse the raw dict into the
+            # matching pydantic model, then dispatch on its type via
+            # ``functools.singledispatch``. If parsing fails (unknown $type,
+            # malformed entry, or pydantic missing), fall back to the
+            # legacy ``execute_protocol_entry`` path so subsystem-specific
+            # entry types not enumerated in the schema still run.
+            typed = None
+            if _TYPED_ENTRIES_AVAILABLE:
+                try:
+                    typed = parse_entry(step)
+                except Exception as exc:
+                    logger.debug(
+                        "typed-entry parse failed for step {!r}: {!r}; "
+                        "falling back to execute_protocol_entry".format(step, exc))
+            if typed is not None:
+                dispatch_entry(typed, self)
             else:
                 self.execute_protocol_entry(self.protocol_iter)
 
@@ -220,17 +277,34 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
 
         Returns silently on abort/protocol-iter change to preserve the
         existing cancellation semantics.
+
+        Stage 4: the wait is now driven by
+        :class:`PycroFlow.orchestration.signal_registry.SignalRegistry` —
+        an ``Event``-backed lookup that returns the instant the matching
+        signal fires. The legacy list-of-strings scan stays in the loop
+        body as a fallback so callers that bypass ``send_message`` (e.g.
+        ``start_protocol`` appending ``'start entry: 3'`` directly)
+        continue to wake the waiter.
         """
         protocol_iter_begin = self.protocol_iter
         if timeout is None:
             timeout = WAIT_FOR_SIGNAL_TIMEOUT_DEFAULT
         deadline = time.monotonic() + float(timeout)
 
+        # SignalRegistry may not exist on a hand-built threadexchange
+        # (test stubs). Guard so the legacy path is used as a fallback.
+        registry = self.txchange.get('signal_registry') if hasattr(self.txchange, 'get') else None
+
         while True:
             if (self.txchange['abort_flag'].is_set()
                     or self.txchange['abort_protocol_flag'].is_set()
                     or protocol_iter_begin != self.protocol_iter):
                 return
+            # Fast path: the registry fires the instant send_message runs.
+            if registry is not None and registry.is_set(target, message):
+                return
+            # Legacy path: substring matches for 'target message' prefixed
+            # entries that bypass send_message.
             with self.txchange[target + '_lock']:
                 msgs = self.txchange[target]
                 if message in msgs or (target + ' ' + message) in msgs:
@@ -240,11 +314,31 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
                     "{:s} timed out after {:.1f}s waiting for {!r} from "
                     "{!r}".format(self.target, float(timeout), message, target)
                 )
-            time.sleep(WAIT_POLL_INTERVAL)
+            # Wait on the Event so we wake the instant a producer fires;
+            # the per-poll deadline check above bounds the wait by
+            # ``WAIT_POLL_INTERVAL`` so abort flags stay responsive.
+            remaining = deadline - time.monotonic()
+            block = min(WAIT_POLL_INTERVAL, max(remaining, 0.0))
+            if registry is not None:
+                registry.wait(target, message, timeout=block)
+            else:
+                time.sleep(block)
 
     def send_message(self, message):
         with self.txchange[self.target + '_lock']:
             self.txchange[self.target].append(message)
+        # Stage 4: also fire the signal-registry event so any handler
+        # waiting via SignalRegistry wakes the instant we publish. We fire
+        # under (self.target, message) — and, if the message carries the
+        # legacy 'fluid round 1 done' / 'img round 1 done' prefix, also
+        # under the stripped value — so the existing wait-for-signal
+        # callers that look for either form pick it up.
+        registry = self.txchange.get('signal_registry') if hasattr(self.txchange, 'get') else None
+        if registry is not None:
+            registry.fire(self.target, message)
+            prefix = self.target + ' '
+            if message.startswith(prefix):
+                registry.fire(self.target, message[len(prefix):])
 
     def search_message(self, substring):
         with self.txchange[self.target + '_lock']:
@@ -374,29 +468,19 @@ class IlluminationHandler(AbstractSystemHandler):
 
 class ProtocolOrchestrator():
     """Takes a protocol and distributes the tasks to the different systems,
-    waiting at
+    waiting at signal boundaries via the per-instance
+    :class:`PycroFlow.orchestration.threadexchange.ThreadExchange`.
     """
-    threadexchange = {
-        'fluid_lock': threading.Lock(),
-        'fluid': [],
-        'fluid_finished': threading.Event(),
-        'fluid_queue': queue.Queue(),
-        'img_lock': threading.Lock(),
-        'img': [],
-        'img_finished': threading.Event(),
-        'illu_lock': threading.Lock(),
-        'illu': [],
-        'illu_finished': threading.Event(),
-        'start_protocol_flag': threading.Event(),
-        'pause_protocol_flag': threading.Event(),
-        'abort_protocol_flag': threading.Event(),
-        'abort_flag': threading.Event(),
-        'graceful_stop_flag': threading.Event(),
-    }
 
     def __init__(self, protocol,
                  imaging_system=None, fluid_system=None,
                  illumination_system=None):
+        # Per-instance ThreadExchange — previously a class attribute, which
+        # meant two ProtocolOrchestrator instances in the same process
+        # aliased their locks and shared message lists. Stage 4 fixes that.
+        from PycroFlow.orchestration.threadexchange import ThreadExchange
+        self.threadexchange = ThreadExchange.create()
+
         self.fluid_system = fluid_system
         self.fluid_handler = FluidHandler(
             fluid_system, protocol.get('fluid', []),
