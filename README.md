@@ -22,6 +22,9 @@ pip install -e .[hardware]
 
 # Developer machine / CI (mocked hardware)
 pip install -e .[dev]
+
+# Qt GUI frontend
+pip install -e .[gui]
 ```
 
 Python 3.10+. All dependencies live in `pyproject.toml`.
@@ -32,9 +35,16 @@ Python 3.10+. All dependencies live in `pyproject.toml`.
 # Interactive CLI
 pycroflow
 
+# Tabbed Qt GUI (Experiment / Fluid / Imaging / Monet)
+pycroflow-gui
+
 # or, programmatically
 python example_experiment/start_experiment_240301.py
 ```
+
+The GUI's Monet tab embeds monet's own window in-process, so PycroFlow
+imaging and monet share one Micro-Manager connection (no two-process
+conflict).
 
 ## Tests
 
@@ -48,22 +58,12 @@ SDKs are preferred when present.
 
 ## Layout
 
-```
-PycroFlow/
-├── orchestration.py        # ProtocolOrchestrator + handler threads
-├── protocols.py            # ProtocolBuilder (high-level → per-subsystem steps)
-├── hamilton_architecture.py    # Legacy fluid system
-├── imaging.py              # ImagingSystem (pycromanager wrapper)
-├── illumination.py         # IlluminationSystem (monet wrapper)
-├── frontend_cli.py         # `pycroflow` interactive CLI
-├── mm_lock.py              # MM-Core single-process guard
-├── pyHamilton/             # In-house Hamilton serial driver
-├── configs/                # YAML instrument configs
-├── schemas/                # Pydantic protocol-wire-format schema
-├── examples/               # Demo protocols + REPL snippets
-└── tests/                  # unittest suite + fixtures + snapshots
-```
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full package map (the code is
+organized into `orchestration/`, `protocols/`, `fluid/`, `hal/`, `services/`,
+`gui/`, `schemas/`, `configs/`, and `examples/`, with back-compat shims at the
+old `orchestration.py` / `protocols.py` / `hamilton_architecture.py` import
+paths).
 
 ## License
 
-MIT (see `setup.py`).
+MIT (declared in `pyproject.toml`).

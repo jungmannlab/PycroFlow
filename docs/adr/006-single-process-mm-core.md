@@ -1,7 +1,8 @@
 # 006 — Single-process Micro-Manager Core sharing
 
-- Status: accepted (guard); proposed (in-process GUI)
-- Stage: 1 (guard) / 5 (in-process GUI, deferred)
+- Status: accepted (both the guard and the in-process GUI are implemented;
+  the GUI's real hardware behavior is pending verification on the rig)
+- Stage: 1 (guard) / 5 (in-process GUI)
 
 ## Context
 
@@ -18,12 +19,13 @@ Two-part:
    `~/.cache/PycroFlow/mm.lock` on POSIX) acquired in
    `ImagingSystem.__init__`. If monet's GUI already holds it, raise
    `MmLockHeld` with a clear message instead of corrupting the connection.
-2. **Later (Stage 5, deferred):** an in-process Qt GUI embeds monet's
-   `MonetMainWindow` as a tab. `services.mm_core.get_core()` becomes the one
-   owner; `share_with_monet()` patches monet's `beampath.pycrocore` to the
-   same instance so both packages share one Core inside one process —
-   removing the conflict structurally. The lockfile then only matters for
-   users still running the CLI alongside a standalone monet process.
+2. **In-process GUI (Stage 5):** the `pycroflow-gui` Qt frontend embeds
+   monet's `MonetMainWindow` as a tab. `services.mm_core.get_core()` is the
+   one owner; `app.build_main_window()` calls `share_with_monet()`, which
+   patches monet's `beampath.pycrocore` to the same instance so both
+   packages share one Core inside one process — removing the conflict
+   structurally. The lockfile then only matters for users still running the
+   CLI alongside a standalone monet process.
 
 ## Consequences
 

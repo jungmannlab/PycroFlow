@@ -14,10 +14,16 @@ pip install -e .[hardware]
 pip install -e .[dev]
 ```
 
+For the Qt GUI, add the `[gui]` extra:
+
+```bash
+pip install -e .[gui]
+```
+
 `pyproject.toml` is authoritative — `setup.py` is a thin shim. `pip` will
 pick up `monet` and `pycobolt` from the URLs declared there.
 
-To put monet alongside (Stage 5 will embed its GUI in-process):
+To put monet alongside (the GUI embeds its window in-process):
 
 ```bash
 git clone git@github.com:.../monet.git ../monet
@@ -35,11 +41,25 @@ PycroFlow.setup_logging(clean_old=True)
 
 The `pycroflow` CLI does this for you.
 
-## 3. Run the interactive CLI
+## 3. Run a frontend
+
+Interactive CLI:
 
 ```bash
 pycroflow
 ```
+
+Tabbed Qt GUI (needs the `[gui]` extra):
+
+```bash
+pycroflow-gui
+```
+
+The GUI has Experiment / Fluid / Imaging / Monet tabs, all sitting on the
+same `services/` layer as the CLI. The Monet tab embeds monet's own window
+in-process; if monet isn't installed the tab shows a placeholder instead of
+failing. The GUI is import-safe without PyQt5 — only launching it needs the
+`[gui]` extra.
 
 You'll get a `cmd.Cmd`-style prompt. The typical workflow:
 
@@ -74,11 +94,14 @@ po.start_protocol()
 
 ## 5. Single-process MM Core
 
-Only one process at a time may attach to the Micro-Manager Core. Until
-the in-process Qt GUI (Stage 5) ships, PycroFlow takes a file lock at
-`%LOCALAPPDATA%\PycroFlow\mm.lock` when `ImagingSystem` initializes. If
-monet's standalone GUI is already running, `MmLockHeld` is raised with a
-clear message instead of producing a silently broken second connection.
+Only one process at a time may attach to the Micro-Manager Core. Two paths:
+
+- **`pycroflow-gui`** embeds monet in-process and shares one Core
+  (`mm_core.share_with_monet()`), so there's no conflict to begin with.
+- **CLI alongside a standalone monet GUI**: PycroFlow takes a file lock at
+  `%LOCALAPPDATA%\PycroFlow\mm.lock` when `ImagingSystem` initializes. If
+  monet's standalone GUI is already running, `MmLockHeld` is raised with a
+  clear message instead of producing a silently broken second connection.
 
 Release the lock explicitly when done:
 

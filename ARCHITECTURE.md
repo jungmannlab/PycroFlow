@@ -31,6 +31,11 @@ PycroFlow/
 ├── illumination.py       # IlluminationSystem (monet)
 ├── mm_lock.py            # MM-Core single-process guard
 ├── frontend_cli.py       # `pycroflow` interactive CLI
+├── gui/                  # `pycroflow-gui` PyQt5 frontend
+│   ├── app.py            #   entry point + monet Core sharing
+│   ├── main_window.py    #   PycroFlowMainWindow (tabbed)
+│   ├── qt_bridge.py      #   service observer -> Qt signals
+│   └── tabs/             #   experiment / fluid / imaging / monet tabs
 ├── configs/              # YAML instrument configs
 ├── examples/             # demo protocols
 ├── pyHamilton/           # in-house Hamilton serial driver

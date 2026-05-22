@@ -79,6 +79,7 @@ dev = [
 
 [project.scripts]
 pycroflow = "PycroFlow.frontend_cli:main"
+pycroflow-gui = "PycroFlow.gui.app:main"
 
 [tool.setuptools.packages.find]
 include = ["PycroFlow*"]

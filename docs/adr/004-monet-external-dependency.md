@@ -22,5 +22,5 @@ Remove the stale `PycroFlow/monet/...` references from docs.
 - No vendoring; monet evolves independently and is version-pinned at the
   install boundary.
 - Dev/CI environments don't need monet installed — it's mocked.
-- Stage 5 (deferred Qt GUI) will embed monet's `MonetMainWindow` in-process;
-  see ADR 006 for the Core-sharing implication.
+- The Stage 5 Qt GUI embeds monet's `MonetMainWindow` in-process; see ADR
+  006 for the Core-sharing implication and ADR 007 for the GUI itself.

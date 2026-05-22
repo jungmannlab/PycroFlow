@@ -30,6 +30,6 @@ access and can be migrated incrementally.
 
 ## Consequences
 
-- Both CLI and the future GUI sit on one API.
+- Both the CLI and the Qt GUI (ADR 007) sit on one API.
 - Orchestrator stays focused on threading/signaling.
 - Observer hooks decouple UI updates from orchestration internals.

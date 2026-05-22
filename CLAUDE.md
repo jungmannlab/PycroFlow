@@ -14,7 +14,9 @@ See `ARCHITECTURE.md` for the package map, `docs/architecture.md` for detail, an
 ```bash
 pip install -e ".[dev]"        # dev / CI (hardware libs mocked in tests)
 pip install -e ".[hardware]"   # lab Windows box (real instruments)
+pip install -e ".[gui]"        # PyQt5 for the `pycroflow-gui` frontend
 ```
+Console scripts: `pycroflow` (CLI), `pycroflow-gui` (Qt GUI).
 All metadata and dependencies live in `pyproject.toml`; `setup.py` is a thin shim. `requirements.txt` is retained only for reference.
 
 ### Run all tests
@@ -56,13 +58,13 @@ CI runs `python -m unittest discover -v` on Windows / Python 3.10 (`.github/work
 `IlluminationSystem` manages laser power/wavelength via **monet**, which is an external sibling repository (not vendored — see `docs/adr/004`). Tests mock it.
 
 ### Services (`services/`)
-Frontend-agnostic layer both the CLI and the future Qt GUI consume: `ExperimentService` (lifecycle + observer hooks), `SystemService` (manual hardware control), `mm_core` (Core ownership).
+Frontend-agnostic layer both the CLI and the Qt GUI consume: `ExperimentService` (lifecycle + observer hooks), `SystemService` (manual hardware control), `mm_core` (Core ownership).
 
 ### Spill sensor (`spill_sensor_arduino.py`)
 `ArduinoSensorInterface` polls an Arduino over serial for wetness/spill detection in a background thread. Port via the `PYCROFLOW_SPILL_PORT` env var.
 
-### Frontend (`frontend_cli.py`)
-`PycroFlowInteractive` (`cmd.Cmd`) is the `pycroflow` console entry point. Lifecycle commands route through `services/`.
+### Frontends (`frontend_cli.py`, `gui/`)
+`PycroFlowInteractive` (`cmd.Cmd`) is the `pycroflow` console entry point; lifecycle commands route through `services/`. `gui/` is the `pycroflow-gui` PyQt5 frontend (`[gui]` extra): a tabbed `PycroFlowMainWindow` (Experiment / Fluid / Imaging / Monet) sitting on the same `services/` layer. The Monet tab embeds monet's `MonetMainWindow` in-process (sharing one MM Core via `mm_core.share_with_monet()`); `gui/qt_bridge.py` marshals service observer callbacks onto the GUI thread as Qt signals. The package is import-safe without PyQt5 — Qt is imported lazily so `import PycroFlow.gui` and the test suite work without the `[gui]` extra.
 
 ### Logging
 loguru, configured by `PycroFlow.setup_logging(clean_old=False)`. **Importing the package no longer touches the filesystem** — frontends call `setup_logging` explicitly (the CLI does, with `clean_old=True`). `pyHamilton` and `monet` logs are filtered out of the main log.

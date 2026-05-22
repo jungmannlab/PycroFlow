@@ -1,33 +1,43 @@
 # Architecture
 
-This document maps the PycroFlow package as it stands after Stages 0–2 of
-the restructuring (see `/Users/hgrabmayr/.claude/plans/please-deeply-
-investigate-the-soft-waffle.md` for the full multi-stage plan).
+This document maps the PycroFlow package as it stands after the
+restructuring (Stages 0–5, see `/Users/hgrabmayr/.claude/plans/please-
+deeply-investigate-the-soft-waffle.md` for the full plan).
 
 ## Layers
 
 ```
-                     ┌──────────────────────┐
-                     │   frontend_cli.py    │   (pycroflow command)
-                     │   (future: GUI)      │
-                     └──────────┬───────────┘
-                                │
-                 ┌──────────────▼──────────────┐
-                 │       orchestration.py      │   ProtocolOrchestrator,
-                 │   - signal/wait registry    │   AbstractSystem,
+        ┌──────────────────────┐   ┌──────────────────────┐
+        │   frontend_cli.py    │   │   gui/ (PyQt5)       │  Monet tab
+        │   (pycroflow)        │   │   (pycroflow-gui)    │  embeds monet
+        └──────────┬───────────┘   └──────────┬───────────┘
+                   └────────────┬──────────────┘
+                                ▼
+                 ┌─────────────────────────────┐
+                 │          services/          │   ExperimentService,
+                 │   (frontend-agnostic API)   │   SystemService, mm_core
+                 └──────────────┬──────────────┘
+                                ▼
+                 ┌─────────────────────────────┐
+                 │       orchestration/        │   ProtocolOrchestrator,
+                 │   - SignalRegistry          │   AbstractSystem,
                  │   - per-subsystem handlers  │   AbstractSystemHandler
-                 │   - threadexchange state    │
+                 │   - ThreadExchange state    │
                  └─┬───────────┬──────────────┬┘
                    │           │              │
        ┌───────────▼──┐ ┌──────▼─────┐ ┌──────▼──────┐
-       │ hamilton_    │ │ imaging.py │ │ illumination│
-       │ architecture │ │   (MM)     │ │ .py (monet) │
+       │ fluid/legacy │ │ imaging.py │ │ illumination│
+       │              │ │   (MM)     │ │ .py (monet) │
        └──┬───────────┘ └──┬─────────┘ └─────────────┘
           │                │
        pyHamilton/      pycromanager
        (in-house        (vendor)
        serial driver)
 ```
+
+Both frontends sit on the `services/` layer. The GUI's Monet tab embeds
+monet's `MonetMainWindow` in-process so the two share one Micro-Manager
+Core (see the MM-Core section below and ADR 006).
 
 ## Subsystems
 
@@ -53,14 +63,15 @@ Cross-subsystem synchronization uses protocol entries:
 - {$type: wait for signal, target: fluid, value: "round 2 done", timeout: 600}
 ```
 
-`signal` appends a message to `threadexchange[target_name]`. `wait for
-signal` polls that list and returns when the message appears, raises
-`WaitForSignalTimeout` if the deadline expires, or returns silently on
-abort / protocol-iter change.
+`signal` appends a message to `threadexchange[target_name]` and fires the
+matching `SignalRegistry` event; `wait for signal` waits on that event
+(`Event.wait(timeout)`), falling back to a list scan for legacy
+substring-prefixed entries. It raises `WaitForSignalTimeout` if the
+deadline expires, or returns silently on abort / protocol-iter change.
 
-Stage 4 of the restructuring replaces this list-based mechanism with a
-proper `SignalRegistry` of `threading.Event`s and adds discriminated-union
-parsing of the typed entries via pydantic.
+The `SignalRegistry` of `threading.Event`s (Stage 4) replaced the original
+busy-poll, and protocol entries are parsed into a pydantic
+discriminated-union and dispatched via `functools.singledispatch`.
 
 ## Configuration
 
@@ -109,19 +120,27 @@ caught at construction, not mid-run.
   `graceful_stop_flag` fires.
 - **All handlers are daemons.** `Ctrl-C` or interpreter exit reliably
   terminates them; the previous non-daemon flag could leave zombies.
-- **State lives in `threadexchange`.** A dict containing `threading.Lock`,
-  `threading.Event`, `queue.Queue`, and per-subsystem message `list`s.
-  Stage 4 replaces this with a typed `ThreadExchange` dataclass.
+- **State lives in `ThreadExchange`.** A per-instance object (Stage 4,
+  replacing a shared class-level dict) holding `threading.Lock`,
+  `threading.Event`, `queue.Queue`, per-subsystem message `list`s, and the
+  `SignalRegistry`. It subclasses `dict`, so `txchange['fluid_lock']` and
+  the typed `txchange.fluid_lock` both work.
 
 ## Single-process MM Core
 
-Today PycroFlow's `ImagingSystem` and a separately-run monet GUI cannot
-share Micro-Manager — the second connection silently breaks the first.
-Until Stage 5 ships the in-process Qt GUI that embeds monet's
-`MonetMainWindow` as a tab, an `MmCoreLock` filesystem mutex
-(`%LOCALAPPDATA%\PycroFlow\mm.lock` on Windows, `~/.cache/PycroFlow/mm.lock`
-on POSIX) catches the conflict at `ImagingSystem.__init__` and raises
-`MmLockHeld` with a clear error.
+PycroFlow's `ImagingSystem` and a separately-run monet GUI cannot share
+Micro-Manager across two processes — the second connection silently breaks
+the first. Two mechanisms address this:
+
+1. **In-process GUI (Stage 5).** The `pycroflow-gui` Qt frontend embeds
+   monet's `MonetMainWindow` as a tab and calls
+   `services.mm_core.share_with_monet()`, so PycroFlow imaging and monet use
+   one Core inside one process — the conflict is gone structurally.
+2. **Lockfile guard (Stage 1).** For users still running the CLI alongside a
+   standalone monet GUI, an `MmCoreLock` filesystem mutex
+   (`%LOCALAPPDATA%\PycroFlow\mm.lock` on Windows, `~/.cache/PycroFlow/mm.lock`
+   on POSIX) catches the conflict at `ImagingSystem.__init__` and raises
+   `MmLockHeld` with a clear error.
 
 ## Logging
 
@@ -137,7 +156,13 @@ rotated logs (`clean_old=True`).
 | 0     | Safety net (CI, snapshot, packaging) | ✅ shipped |
 | 1     | Reliability fixes                    | ✅ shipped |
 | 2     | Decouple config & data from code     | ✅ shipped |
-| 3     | Break up monoliths + introduce HAL   | next       |
-| 4     | Protocol / signal redesign           | upcoming   |
-| 5     | Qt GUI + embedded monet              | upcoming   |
-| 6     | Packaging & documentation polish     | upcoming   |
+| 3     | Break up monoliths + introduce HAL   | ✅ shipped |
+| 4     | Protocol / signal redesign           | ✅ shipped |
+| 5     | Qt GUI + embedded monet              | ✅ shipped |
+| 6     | Packaging & documentation polish     | ✅ shipped |
+
+Deferred follow-ups (tracked in module docstrings): full extraction of
+`fluid/calibration.py` / `fluid/protocol_exec.py` and the per-experiment
+`protocols/*.py` step builders from their host classes; migrating the
+remaining `frontend_cli` commands onto `services/`; harmonizing
+`create_steps_flushtest` to the nested config schema.
