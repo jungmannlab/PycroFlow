@@ -42,8 +42,17 @@ hardware = [
     "microscope>=0.7",
     "arduino-python3==0.6",
     "msl-equipment @ https://github.com/MSLNZ/msl-equipment/releases/download/v0.2.0/msl_equipment-0.2.0-py3-none-any.whl",
+    # TODO: pin to a commit SHA for reproducible builds, e.g.
+    #   pycobolt @ git+https://github.com/cobolt-lasers/pycobolt.git@<sha>
+    # Floating HEAD means a fresh install can pull breaking upstream changes.
+    # Left unpinned here only because the SHA must be resolved against GitHub
+    # (no network access during this edit).
     "pycobolt @ git+https://github.com/cobolt-lasers/pycobolt.git",
-    "numpy==1.24.4",
+    # numpy was pinned to ==1.24.4; loosened to the 1.x line so bugfix
+    # releases are allowed. Capped below 2.0 because pycromanager 0.29.5 /
+    # ndtiff 2.2.1 predate numpy 2's ABI break and are not validated against
+    # it. Revisit when bumping pycromanager.
+    "numpy>=1.24,<2",
     "pandas>=2.3",
     "openpyxl>=3.1",
     "matplotlib>=3.10",

@@ -4,71 +4,73 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PycroFlow is a Python framework for coordinating microscopy image acquisition, fluid handling (Hamilton liquid handlers), and illumination control in automated fluorescence microscopy experiments (Exchange-PAINT, MERPAINT, Z-PAINT). It targets Windows 10 with hardware serial communication.
+PycroFlow is a Python framework for coordinating microscopy image acquisition, fluid handling (Hamilton liquid handlers), and illumination control in automated fluorescence microscopy experiments (Exchange-PAINT, MERPAINT, Z-PAINT). It targets Windows 10 with hardware serial communication. Python 3.10+.
+
+See `ARCHITECTURE.md` for the package map, `docs/architecture.md` for detail, and `docs/adr/` for the rationale behind major decisions.
 
 ## Commands
 
 ### Install
 ```bash
-pip install -e .
-pip install -r requirements.txt
+pip install -e ".[dev]"        # dev / CI (hardware libs mocked in tests)
+pip install -e ".[hardware]"   # lab Windows box (real instruments)
 ```
+All metadata and dependencies live in `pyproject.toml`; `setup.py` is a thin shim. `requirements.txt` is retained only for reference.
 
 ### Run all tests
 ```bash
 cd /Users/hgrabmayr/GitHub/PycroFlow
-python -m unittest -v
+python -m unittest discover -v
 ```
+The suite runs without vendor SDKs: `PycroFlow/tests/_mock_hardware.py` installs `sys.modules` mocks for pycromanager / monet / pycobolt / nidaqmx when they're not importable. Real SDKs are preferred when present.
 
-### Run a single test file
+### Run a single test file / case
 ```bash
 python -m unittest PycroFlow.tests.test_protocols -v
+python -m unittest PycroFlow.tests.test_protocols.TestProtocolBuilder.test_05 -v
 ```
 
-### Run a single test case
+### Regenerate protocol regression snapshots (after an intended wire change)
 ```bash
-python -m unittest PycroFlow.tests.test_protocols.TestProtocolBuilder.test_method_name -v
+PYCROFLOW_UPDATE_SNAPSHOTS=1 python -m unittest PycroFlow.tests.test_regression_protocols -v
 ```
+Commit the updated JSON in `PycroFlow/tests/fixtures/snapshots/`.
 
-### Run monet subsystem tests
-```bash
-python -m unittest discover -s PycroFlow/monet/tests -v
-```
-
-There are no configured linters or formatters.
+CI runs `python -m unittest discover -v` on Windows / Python 3.10 (`.github/workflows/tests.yml`). There are no configured linters/formatters yet (`ruff`/`mypy` are in the `[dev]` extra).
 
 ## Architecture
 
-### Orchestration Layer (`orchestration.py`)
-The central coordinator. `ProtocolOrchestrator` manages multiple `AbstractSystemHandler` subclasses (FluidHandler, ImagingHandler, IlluminationHandler) running in separate threads. Handlers communicate via thread-safe queues and locks using a signal protocol — protocol entries with `$type: 'signal'` and `$type: 'wait for signal'` synchronize across subsystems. Supports pause/resume/abort.
+### Orchestration (`orchestration/`)
+`ProtocolOrchestrator` (in `orchestration/core.py`) manages `FluidHandler` / `ImagingHandler` / `IlluminationHandler` daemon threads. Cross-subsystem sync uses a signal protocol (`$type: 'signal'` / `'wait for signal'`). `orchestration/signal_registry.py` provides an `Event`-backed `SignalRegistry` (no busy-poll, hard timeout); `orchestration/threadexchange.py` provides a per-instance `ThreadExchange` (locks/events/lists/registry). Supports pause/resume/abort. Typed-entry dispatch via `functools.singledispatch`.
 
-### Protocol System (`protocols.py`)
-`ProtocolBuilder` transforms high-level experiment descriptions (exchange type, imaging rounds, reagents) into per-subsystem protocol entry lists. Each entry is a dict with a `$type` field:
-- **Fluid:** `inject`, `incubate`, `flush`, `wait for signal`, `signal`
-- **Imaging:** `acquire`, `wait for signal`, `signal`
-- **Illumination:** power adjustments, signal-based coordination
+### Protocol system (`protocols/` + `protocol_entries.py` + `schemas/`)
+`ProtocolBuilder` (`protocols/builder.py`) transforms high-level experiment descriptions into per-subsystem entry lists. Experiment types dispatch through the `EXPERIMENT_TYPES` registry (`exchange`, `merpaint`, `flushtest`, `sph-resi`). Each entry is a dict with a `$type` field; `schemas/protocol_schema.py` validates them (pydantic discriminated union, `extra='allow'`), and `protocol_entries.py` exposes the typed models + `parse_entry` / `parse_protocol`.
 
-### Fluid Automation (`hamilton_architecture.py` + `pyHamilton/`)
-`LegacyArchitecture` drives Hamilton MVP valves and PSD syringe pumps over serial (pyserial). Configured via `legacy_system_config` and `legacy_tubing_config` dicts. The `pyHamilton/` subpackage is a custom serial driver (`command.py` for command interface, `communication.py` for serial I/O, `mvp.py`/`psd.py` for device-specific commands).
+### Fluid automation (`fluid/` + `pyHamilton/` + `hal/`)
+`LegacyArchitecture` (`fluid/legacy.py`) drives Hamilton MVP valves and PSD syringe pumps over serial. Instrument topology lives in `configs/legacy_system.yaml` and `configs/legacy_tubing.yaml`, loaded by `configs/__init__.py` and re-exported as `legacy_system_config` / `legacy_tubing_config`. `pyHamilton/` is the in-house serial driver (`SerialBus` in `communication.py`, `command.py`, `mvp.py`, `psd.py`). `hal/` defines vendor-neutral `Pump` / `Valve` / `SpillSensor` ABCs.
 
-### Imaging (`imaging.py`)
-`ImagingSystem` wraps pycromanager (Micro-Manager) for frame acquisition, multi-dimensional acquisition, and PFS (Perfect Focus System) monitoring. Uses `PyMgrSingleton` for Micro-Manager Core/Studio instances.
+### Imaging (`imaging.py` + `services/mm_core.py` + `mm_lock.py`)
+`ImagingSystem` wraps pycromanager for acquisition and PFS monitoring. The MM Core/Studio singletons are owned by `services/mm_core.py` (supersedes `util.PyMgrSingleton`). `mm_lock.MmCoreLock` is a filesystem mutex that prevents PycroFlow imaging and a standalone monet GUI from attaching to MM simultaneously (raises `MmLockHeld`).
 
-### Illumination (`illumination.py` + `monet/`)
-`IlluminationSystem` manages laser power/wavelength via the MONET subsystem. MONET handles laser control, attenuation (Kinesis devices), beam path switching, power measurement (Thorlabs), and calibration.
+### Illumination (`illumination.py`)
+`IlluminationSystem` manages laser power/wavelength via **monet**, which is an external sibling repository (not vendored — see `docs/adr/004`). Tests mock it.
 
-### Spill Sensor (`spill_sensor_arduino.py`)
-`ArduinoSensorInterface` communicates with Arduino over serial for wetness/spill detection. Runs monitoring in a background thread with `@run_threaded` decorator.
+### Services (`services/`)
+Frontend-agnostic layer both the CLI and the future Qt GUI consume: `ExperimentService` (lifecycle + observer hooks), `SystemService` (manual hardware control), `mm_core` (Core ownership).
+
+### Spill sensor (`spill_sensor_arduino.py`)
+`ArduinoSensorInterface` polls an Arduino over serial for wetness/spill detection in a background thread. Port via the `PYCROFLOW_SPILL_PORT` env var.
 
 ### Frontend (`frontend_cli.py`)
-`PycroFlowInteractive` is a `cmd.Cmd`-based interactive CLI for loading protocols, filling tubings, starting/stopping orchestration, and system cleanup.
+`PycroFlowInteractive` (`cmd.Cmd`) is the `pycroflow` console entry point. Lifecycle commands route through `services/`.
 
 ### Logging
-Uses loguru (configured in `__init__.py`). Logs rotate at 1MB with 5 backups. The `pyHamilton` and `monet` subpackages are filtered out of the main log. Old log files are deleted on import.
+loguru, configured by `PycroFlow.setup_logging(clean_old=False)`. **Importing the package no longer touches the filesystem** — frontends call `setup_logging` explicitly (the CLI does, with `clean_old=True`). `pyHamilton` and `monet` logs are filtered out of the main log.
 
 ## Key Patterns
 
-- **Abstract base classes:** `AbstractSystem` and `AbstractSystemHandler` (in `orchestration.py`) define the contract for all subsystems.
-- **Threading model:** Each subsystem handler runs its protocol in a dedicated thread. Inter-thread sync uses `threading.Event`, `queue.Queue`, and `threading.Lock`.
-- **Configuration:** System and tubing configs are Python dicts (not files). Protocol configs can be loaded from YAML.
-- **Tests use `unittest`** with `unittest.mock` for hardware mocking. The test `__init__.py` creates/clears a `PycroFlow/TestData/` directory on test suite init.
+- **Abstract base classes:** `AbstractSystem` / `AbstractSystemHandler` (`orchestration/core.py`) define the subsystem contract; `hal/` defines the hardware contract.
+- **Threading:** one daemon thread per subsystem handler; sync via `threading.Event`, `queue.Queue`, `threading.Lock`, and `SignalRegistry`.
+- **Configuration:** instrument configs are YAML (`configs/`); protocol configs load from YAML and validate against the pydantic schema.
+- **Back-compat shims:** `PycroFlow.hamilton_architecture`, `PycroFlow.protocols`, and `PycroFlow.orchestration` re-export from their new submodule homes so old import paths keep working.
+- **Tests use `unittest`** with `unittest.mock`. `tests/__init__.py` installs hardware mocks and uses a tempdir for outputs (it does NOT clear `PycroFlow/TestData/`). Protocol output is pinned by snapshot regression.

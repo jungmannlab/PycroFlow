@@ -1,6 +1,20 @@
 .smbdelete*
 .DS_Store
+Thumbs.db
 __pycache__
-PycroFlow.egg-info/*
-PycroFlow/TestData/*
+*.pyc
 *.log
+
+# Packaging / build artifacts
+PycroFlow.egg-info/*
+*.egg-info/
+build/
+dist/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local test data (fixtures live under PycroFlow/tests/fixtures/)
+PycroFlow/TestData/*
