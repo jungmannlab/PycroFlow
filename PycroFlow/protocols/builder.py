@@ -88,7 +88,12 @@ from PycroFlow.schemas import validate_protocol
 
 class ProtocolBuilder:
     def __init__(self):
-        self.steps = {'fluid': {}, 'img': {}, 'illu': {}}
+        # Each subsystem's step list. create_step_X methods .append() into
+        # these; create_steps() reinitializes them to lists too. Initializing
+        # as dicts (the pre-Stage-2 bug) made every test that called
+        # create_step_X directly without going through create_steps fail
+        # with "dict has no attribute append".
+        self.steps = {'fluid': [], 'img': [], 'illu': []}
         self.reservoir_vols = {}
 
     def create_protocol(self, config):

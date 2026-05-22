@@ -250,6 +250,11 @@ class LegacyArchitecture(AbstractSystem):
         for k, vlv in self.valve_a.items():
             vlv.pause_flag = pause_flag
             vlv.abort_flag = abort_flag
+        # valve_flush is optional; assign events too so its set_valve() does
+        # not dereference a None pause_flag during injection.
+        if self.valve_flush is not None:
+            self.valve_flush.pause_flag = pause_flag
+            self.valve_flush.abort_flag = abort_flag
         # creat the flag in hamilton communication for aborting the wait loop
         self.abort_hamilton_wait_response_flag = abort_hamilton_wait_response_flag
         ham.communication.abort_wait_response_flag = abort_hamilton_wait_response_flag
