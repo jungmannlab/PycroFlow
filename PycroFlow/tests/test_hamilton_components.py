@@ -116,6 +116,17 @@ class HamiltonDeviceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             pump.decode_response('/0`12000')  # no ETX
 
+    def test_set_velocity_sends_command(self):
+        # Regression: set_velocity used to raise TypeError from a stray unary
+        # '+' on the first command string. It must now build and send the
+        # start/max/stop velocity command. Values chosen to convert in-range.
+        pump = self._pump()
+        before = len(self.fake.command_log)
+        pump.set_velocity(100, 1000, 100)  # µL/min
+        sent = self.fake.command_log[before:]
+        self.assertTrue(any('V' in msg for _, msg in sent),
+                        "set_velocity issued no max-velocity command")
+
     def test_velocity_conversion_round_trips(self):
         pump = self._pump()
         sps = pump.velocity_upm2sps(600)

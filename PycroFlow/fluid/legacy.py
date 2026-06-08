@@ -1302,12 +1302,13 @@ class LegacyArchitecture(AbstractSystem):
             tubing_vol = (
                 self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
                 + self.tubing_config.get('pump_a', 'valve_flush'))
-            self._pump(tubing_vol * flushfactor)
+            self._pump(self.pump_a, tubing_vol * flushfactor)
         else:
             tubing_vol = (
                 self.tubing_config.get_reservoir_to_pump('flushbuffer_a', 'a')
                 + self.tubing_config.get('pump_a', 'valve_flush'))
-            self._pump(tubing_vol * flushfactor, dispense_dir=self.flush_pos['flush'])
+            self._pump(self.pump_a, tubing_vol * flushfactor,
+                       dispense_dir=self.flush_pos['flush'])
 
     def _set_flush_valve(self, to_flush=True):
         """Set the flush valve position
@@ -1453,10 +1454,14 @@ class LegacyArchitecture(AbstractSystem):
         curr_pumpa_vol = self.pump_a.get_current_volume()
         curr_pumpout_vol = curr_pumpa_vol * extractionfactor
         curr_pumpout_vol += pumpout_extravol
-        t_dispense = curr_pumpa_vol / velocity
-        t_pickup = delay_in_to_out + t_dispense + delay_out_to_in
-        velocity_out = int(curr_pumpout_vol / t_pickup)
         if curr_pumpa_vol > 0:
+            # t_pickup (hence velocity_out) is only meaningful when there is
+            # syringe content to dispense. Computing it unconditionally caused
+            # a ZeroDivisionError when the pump started empty and the
+            # equilibration delays were zero (t_dispense = 0 -> t_pickup = 0).
+            t_dispense = curr_pumpa_vol / velocity
+            t_pickup = delay_in_to_out + t_dispense + delay_out_to_in
+            velocity_out = int(curr_pumpout_vol / t_pickup)
             self.pump_a.set_valve('out')
             self.pump_out.wait_until_done()
             self.pump_out.set_valve('in')

@@ -630,9 +630,9 @@ class Pump():
                 + f'{stop_velocity}steps/s out of range (50-2700 steps/s)')
         ham.communication.sendCommand(
             self.psd.asciiAddress,
-            + self.psd.command.setStartVelocity(int(start_velocity * self.speed_factor))
+            self.psd.command.setStartVelocity(int(start_velocity * self.speed_factor))
             + self.psd.command.setMaximumVelocity(int(max_velocity * self.speed_factor))
-            + self.psd.command.setStopVelocity(int(stop_velocity * self.speed_factor))
+            + self.psd.command.stopVelocity(int(stop_velocity * self.speed_factor))
             + self.psd.command.executeCommandBuffer(),
             waitForPump=False)
 

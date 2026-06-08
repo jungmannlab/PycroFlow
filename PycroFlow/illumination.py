@@ -48,7 +48,7 @@ class IlluminationSystem(AbstractSystem):
 
             # set laser power back to the value for that laser
             try:
-                self.do_power(self.power_setvalues[
+                self.set_sample_power(self.power_setvalues[
                     self.instrument.curr_laser])
             except (KeyError, AttributeError, ValueError) as exc:
                 logger.warning(

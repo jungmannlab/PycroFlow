@@ -85,6 +85,15 @@ class LaserControlTest(unittest.TestCase):
         self.assertEqual(isy.instrument.attenuator.wavelength, 561)
         self.assertTrue(isy.instrument.lasers[561].enabled)
 
+    def test_set_laser_restores_saved_power(self):
+        # Regression: set_laser called a nonexistent self.do_power(); it now
+        # restores the saved sample power for the newly selected laser
+        # (power_setvalues[561] == 20).
+        isy = _make_system()
+        isy.instrument.power = 0
+        isy.set_laser(561)
+        self.assertEqual(isy.instrument.power, 20)
+
     def test_set_laser_enabled_toggles(self):
         isy = _make_system()
         isy.set_laser_enabled(488, True)
