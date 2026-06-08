@@ -1,0 +1,7 @@
+[flake8]
+# Match CLAUDE.md / Black. E203 (whitespace before ':') and W503 (line
+# break before binary operator) are disabled per Black's documented
+# flake8 compatibility settings — Black formats these in ways pycodestyle
+# would otherwise flag.
+max-line-length = 79
+extend-ignore = E203, W503

@@ -5,19 +5,19 @@ State-of-the-art Python script for communicating with Arduino sensor system
 """
 
 import os
-import serial
-import serial.tools.list_ports
-import time
-import threading
-import sys
 import signal
+import sys
+import threading
+import time
 from datetime import datetime
-from loguru import logger
 from functools import wraps
 
+import serial
+import serial.tools.list_ports
+from loguru import logger
 
-SPILL_PORT_ENV = 'PYCROFLOW_SPILL_PORT'
-DEFAULT_SPILL_PORT = 'COM9'
+SPILL_PORT_ENV = "PYCROFLOW_SPILL_PORT"
+DEFAULT_SPILL_PORT = "COM9"
 
 
 # logger = logging.getLogger(__name__)
@@ -27,10 +27,14 @@ def run_threaded(attr_name="_last_thread"):
     def decorator(fn):
         @wraps(fn)
         def wrapper(self, *args, **kwargs):
-            thread = threading.Thread(target=fn, args=(self, *args), kwargs=kwargs)
+            thread = threading.Thread(
+                target=fn, args=(self, *args), kwargs=kwargs
+            )
             setattr(self, attr_name, thread)
             thread.start()
+
         return wrapper
+
     return decorator
 
 
@@ -43,23 +47,31 @@ class ArduinoSensorInterface:
         self.is_connected = False
         self.logging_active = False
         self.log_thread = None
-        self.HANDSHAKE_CMD = b'H'
-        self.POLL_CMD = b'P'
-        self.RESET_CMD = b'R'
-        self.START_BROADCAST_CMD = b'B'
-        self.STOP_BROADCAST_CMD = b'S'
+        self.HANDSHAKE_CMD = b"H"
+        self.POLL_CMD = b"P"
+        self.RESET_CMD = b"R"
+        self.START_BROADCAST_CMD = b"B"
+        self.STOP_BROADCAST_CMD = b"S"
 
         # self.sensor_wet_flag = threading.Event()
         self.monitor_abort_flag = threading.Event()
-        
+
     def find_arduino_port(self):
         arduino_ports = []
         ports = serial.tools.list_ports.comports()
         for port in ports:
             print(port)
             print(port.description.lower())
-            if any(identifier in port.description.lower() for identifier in 
-                   ['arduino', 'uno', 'ch340', 'ftdi', 'usb serial']):
+            if any(
+                identifier in port.description.lower()
+                for identifier in [
+                    "arduino",
+                    "uno",
+                    "ch340",
+                    "ftdi",
+                    "usb serial",
+                ]
+            ):
                 arduino_ports.append(port.device)
         if arduino_ports:
             logger.debug(f"Found potential Arduino ports: {arduino_ports}")
@@ -70,7 +82,7 @@ class ArduinoSensorInterface:
             for port in ports:
                 logger.debug(f"  {port.device}: {port.description}")
             return None
-    
+
     def connect(self):
         if not self.port:
             self.port = self.find_arduino_port()
@@ -78,12 +90,14 @@ class ArduinoSensorInterface:
                 logger.debug("Please specify port manually")
                 return False
         try:
-            logger.debug(f"Connecting to {self.port} at {self.baud_rate} baud...")
+            logger.debug(
+                f"Connecting to {self.port} at {self.baud_rate} baud..."
+            )
             self.serial_conn = serial.Serial(
                 port=self.port,
                 baudrate=self.baud_rate,
                 timeout=self.timeout,
-                write_timeout=self.timeout
+                write_timeout=self.timeout,
             )
             logger.debug("Waiting for Arduino to initialize...")
             time.sleep(2)
@@ -103,7 +117,7 @@ class ArduinoSensorInterface:
         except Exception as e:
             logger.debug(f"✗ Unexpected error: {e}")
             return False
-    
+
     def handshake(self, max_attempts=3):
         for attempt in range(max_attempts):
             try:
@@ -116,13 +130,15 @@ class ArduinoSensorInterface:
                     logger.debug("✓ Handshake successful")
                     return True
                 else:
-                    logger.debug(f"Unexpected handshake response: '{response}'")
+                    logger.debug(
+                        f"Unexpected handshake response: '{response}'"
+                    )
                     time.sleep(0.5)
             except Exception as e:
                 logger.debug(f"Handshake error: {e}")
                 time.sleep(0.5)
         return False
-    
+
     def poll_sensor(self):
         if not self.is_connected:
             logger.debug("Not connected to Arduino")
@@ -179,7 +195,7 @@ class ArduinoSensorInterface:
         self.monitor_abort_flag.set()
         try:
             self._monitor_thread.join()
-        except:
+        except Exception:
             pass
         self.monitor_abort_flag.clear()
 
@@ -200,7 +216,7 @@ class ArduinoSensorInterface:
         except Exception as e:
             print(f"Poll error: {e}")
             return None
-    
+
     def stop_broadcast(self):
         if not self.is_connected:
             print("Not connected to Arduino")
@@ -218,29 +234,33 @@ class ArduinoSensorInterface:
         except Exception as e:
             print(f"Poll error: {e}")
             return None
-    
+
     def start_logging(self):
         if self.logging_active:
             logger.debug("Logging already active")
             return
         self.logging_active = True
-        self.log_thread = threading.Thread(target=self._logging_worker, daemon=True)
+        self.log_thread = threading.Thread(
+            target=self._logging_worker, daemon=True
+        )
         self.log_thread.start()
         print("✓ Continuous logging started (Ctrl+C to stop)")
-    
+
     def stop_logging(self):
         self.logging_active = False
         if self.log_thread:
             self.log_thread.join(timeout=1)
         print("✓ Logging stopped")
-    
+
     def _logging_worker(self):
         while self.logging_active and self.is_connected:
             try:
                 if self.serial_conn.in_waiting > 0:
                     line = self.serial_conn.readline().decode().strip()
                     if line and line.startswith("LOG:"):
-                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        timestamp = datetime.now().strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        )
                         logger.debug(f"[{timestamp}] {line}")
                         print(f"[{timestamp}] {line}")
                 else:
@@ -249,14 +269,14 @@ class ArduinoSensorInterface:
                 if self.logging_active:
                     logger.debug(f"Logging error: {e}")
                 break
-    
+
     def disconnect(self):
         self.stop_logging()
         if self.serial_conn and self.serial_conn.is_open:
             try:
                 self.serial_conn.close()
                 logger.debug("✓ Disconnected from Arduino")
-            except:
+            except Exception:
                 pass
         self.is_connected = False
         self.serial_conn = None
@@ -264,7 +284,7 @@ class ArduinoSensorInterface:
 
 def signal_handler(signum, frame):
     logger.debug("\n\nShutting down...")
-    if 'interface' in globals():
+    if "interface" in globals():
         interface.disconnect()
     sys.exit(0)
 
@@ -272,11 +292,13 @@ def signal_handler(signum, frame):
 def main(port=None, baud_rate=9600):
     """Run the interactive sensor CLI.
 
-    Args:
-        port: serial port name. Falls back to env var ``PYCROFLOW_SPILL_PORT``,
-            then to the documented default ``COM9``. Hardcoding the port in
-            source was the previous behavior — env var lets a lab restart pick
-            up a new wiring without code changes.
+    Parameters
+    ----------
+    port : str, optional
+        Serial port name. Falls back to env var ``PYCROFLOW_SPILL_PORT``,
+        then to the documented default ``COM9``. Hardcoding the port in
+        source was the previous behavior — env var lets a lab restart pick
+        up a new wiring without code changes.
     """
     global interface
     signal.signal(signal.SIGINT, signal_handler)
@@ -300,7 +322,7 @@ def main(port=None, baud_rate=9600):
     try:
         while interface.is_connected:
             command = input("\n> ").strip().lower()
-            if command in ['p', 'poll']:
+            if command in ["p", "poll"]:
                 state = interface.poll_sensor()
                 if state is not None:
                     status = "WET" if state else "DRY"
@@ -308,26 +330,31 @@ def main(port=None, baud_rate=9600):
                     print(f"[{timestamp}] Sensor state: {status}")
                 else:
                     print("Failed to poll sensor")
-            elif command in ['l', 'log']:
+            elif command in ["l", "log"]:
                 interface.start_logging()
-            elif command in ['b', 'broadcast']:
+            elif command in ["b", "broadcast"]:
                 interface.start_broadcast()
-            elif command in ['s', 'stop']:
+            elif command in ["s", "stop"]:
                 interface.stop_logging()
                 interface.stop_broadcast()
-            elif command in ['q', 'quit']:
+            elif command in ["q", "quit"]:
                 break
-            elif command in ['h', 'help']:
+            elif command in ["h", "help"]:
                 print("\nCommands:")
                 print("  'p' or 'poll'      - Poll sensor state once")
                 print("  'l' or 'log'       - Start continuous logging")
                 print("  'b' or 'broadcast' - Start continuous broadcast")
-                print("  's' or 'stop'      - Stop continuous logging and broadcast")
+                print(
+                    "  's' or 'stop'      - Stop continuous logging "
+                    "and broadcast"
+                )
                 print("  'q' or 'quit'      - Quit program")
-            elif command == '':
+            elif command == "":
                 continue
             else:
-                logger.debug(f"Unknown command: '{command}'. Type 'h' for help.")
+                logger.debug(
+                    f"Unknown command: '{command}'. Type 'h' for help."
+                )
     except KeyboardInterrupt:
         pass
     finally:
