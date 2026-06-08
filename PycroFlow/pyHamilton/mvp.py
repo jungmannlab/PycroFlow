@@ -13,9 +13,10 @@ class MVP:
 
     def setCommandObj(self):
         if self.type == 'MVP':
-            self.command = MVPCommand(type)
+            self.command = MVPCommand(self.type)
         else:
-            raise NotImplementedError('Type {:s} not implemented.'.format(type))
+            raise NotImplementedError(
+                'Type {:s} not implemented.'.format(self.type))
 
     def setAddress(self, address):
         translateAddress = {

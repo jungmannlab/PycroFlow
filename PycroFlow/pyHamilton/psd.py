@@ -80,15 +80,15 @@ class PSD:
 
     def setCommandObj(self):
         if self.type == PSDTypes.psd6.value:
-            self.command = CommandPSD6(type)
+            self.command = CommandPSD6(self.type)
         elif self.type == PSDTypes.psd4.value:
-            self.command = CommandPSD4(type)
+            self.command = CommandPSD4(self.type)
         elif self.type == PSDTypes.psd4SmoothFlow.value:
-            self.command = CommandPSD4SmoothFlow(type)
+            self.command = CommandPSD4SmoothFlow(self.type)
         elif self.type == PSDTypes.psd6SmoothFlow.value:
-            self.command = CommandPSD6SmoothFlow(type)
+            self.command = CommandPSD6SmoothFlow(self.type)
         else:
-            self.command = Command(type)
+            self.command = Command(self.type)
 
     def setAddress(self, address):
         translateAddress = {
