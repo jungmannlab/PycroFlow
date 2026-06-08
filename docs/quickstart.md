@@ -56,10 +56,10 @@ pycroflow-gui
 ```
 
 The GUI has Experiment / Fluid / Imaging / Monet tabs, all sitting on the
-same `services/` layer as the CLI. The Monet tab embeds monet's own window
-in-process; if monet isn't installed (or is built against PyQt5 rather than
-PyQt6) the tab shows a placeholder instead of failing. The GUI is import-safe
-without PyQt6 — only launching it needs the `[gui]` extra.
+same `services/` layer as the CLI. Both the GUI and monet are on PyQt6, so the
+Monet tab embeds monet's own window in-process; if monet isn't installed the tab
+shows a placeholder instead of failing. The GUI is import-safe without PyQt6 —
+only launching it needs the `[gui]` extra.
 
 You'll get a `cmd.Cmd`-style prompt. The typical workflow:
 

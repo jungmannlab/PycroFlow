@@ -9,12 +9,11 @@ and ADR 006), eliminating the two-process MM connection conflict.
 monet is an external sibling dependency (ADR 004); when it isn't installed
 the tab degrades to an explanatory placeholder instead of crashing the GUI.
 
-Binding caveat: PycroFlow's GUI is on PyQt6. A PyQt5 build of monet cannot be
-embedded — PyQt5 and PyQt6 are distinct Qt libraries and their widgets are not
-interchangeable in one process. When monet is still on PyQt5 its
-``MonetMainWindow`` is not a PyQt6 ``QWidget``, so the ``isinstance`` guard in
-:meth:`_make_monet_window` rejects it and the tab shows the placeholder
-(no crash). The embed re-enables automatically once monet ships PyQt6.
+Binding: both PycroFlow's GUI and monet are on PyQt6, so monet's
+``MonetMainWindow`` is a PyQt6 ``QWidget`` and embeds directly. The
+``isinstance`` guard in :meth:`_make_monet_window` still protects against a
+mocked or otherwise non-``QWidget`` monet (e.g. under the test hardware mocks),
+falling back to the placeholder rather than crashing.
 """
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
 

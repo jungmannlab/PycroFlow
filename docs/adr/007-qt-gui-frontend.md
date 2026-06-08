@@ -53,11 +53,11 @@ The `gui/` package and its tests were migrated from PyQt5 to **PyQt6**
 needed changing. The `QtBridge` thread-safety design and import-safety
 guarantee are unchanged (now phrased against PyQt6).
 
-**Trade-off accepted:** this breaks the original "match monet's binding"
-rationale for the in-process embed. PyQt5 and PyQt6 are separate Qt libraries
-whose widgets cannot coexist in one process, so while monet remains on PyQt5
-its `MonetMainWindow` is not a PyQt6 `QWidget` and the existing graceful-
-degradation guard shows the placeholder (no crash). The embed re-enables once
-monet itself moves to PyQt6; until then the Monet tab is non-functional and
-laser control must use a standalone monet process (reintroducing the ADR 006
-MM-Core conflict only if that standalone process is run concurrently).
+**Binding alignment restored:** the migration was done while monet was still on
+PyQt5, which temporarily broke the in-process embed (PyQt5 and PyQt6 widgets
+cannot coexist in one process, so the `isinstance` guard fell back to the
+placeholder). **monet has since moved to PyQt6**, so both packages are on the
+same binding again and `MonetMainWindow` embeds directly — the original ADR-006
+single-process MM-Core design is intact. The graceful-degradation guard remains
+for the cases it always covered: monet not installed, or a mocked/non-`QWidget`
+monet (e.g. under the test hardware mocks).

@@ -18,3 +18,7 @@ htmlcov/
 
 # Local test data (fixtures live under PycroFlow/tests/fixtures/)
 PycroFlow/TestData/*
+
+# Claude Code (project instructions + local settings; kept out of version control)
+CLAUDE.md
+.claude/

@@ -62,9 +62,7 @@ hardware = [
 ]
 
 # Stage 5: Qt GUI frontend that embeds monet's MonetMainWindow as a tab.
-# PyQt6 binding. NOTE: embedding monet's window in-process requires monet to
-# also be on PyQt6 — PyQt5 and PyQt6 widgets cannot share one process. While
-# monet is still on PyQt5 the Monet tab degrades to a placeholder (no crash).
+# PyQt6 binding, matching monet (also on PyQt6) so its window embeds in-process.
 gui = [
     "PyQt6",
 ]
