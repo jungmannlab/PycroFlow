@@ -62,16 +62,20 @@ hardware = [
 ]
 
 # Stage 5: Qt GUI frontend that embeds monet's MonetMainWindow as a tab.
-# PyQt5 matches monet's binding to avoid a compatibility shim.
+# PyQt6 binding. NOTE: embedding monet's window in-process requires monet to
+# also be on PyQt6 — PyQt5 and PyQt6 widgets cannot share one process. While
+# monet is still on PyQt5 the Monet tab degrades to a placeholder (no crash).
 gui = [
-    "PyQt5",
+    "PyQt6",
 ]
 
 # Test and dev tooling. Sufficient to run the unit tests under CI without
-# any hardware libs (the conftest.py mocks pycromanager, monet, pycobolt,
-# and nidaqmx).
+# any hardware libs (tests/__init__.py + the top-level conftest.py mock
+# pycromanager, monet, pycobolt, and nidaqmx). The suite is unittest-style;
+# pytest is supported as an alternate runner via conftest.py.
 dev = [
     "pytest>=7",
+    "pytest-cov>=5",
     "coverage>=7.10",
     "ruff",
     "mypy",
@@ -90,4 +94,27 @@ PycroFlow = [
     "configs/*.yaml",
     "tests/fixtures/configs/*.py",
     "tests/fixtures/snapshots/*.json",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["PycroFlow/tests"]
+addopts = "--cov=PycroFlow"
+
+# Coverage config so `coverage run -m unittest discover` (or `-m pytest`) is
+# scoped to the package without any CLI flags. Run:
+#   coverage run -m unittest discover && coverage report
+#   coverage html        # browsable report in htmlcov/
+[tool.coverage.run]
+source = ["PycroFlow"]
+branch = true
+# Don't measure coverage of the test code / hardware emulators themselves.
+omit = ["PycroFlow/tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
 ]

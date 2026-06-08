@@ -31,7 +31,7 @@ PycroFlow/
 ├── illumination.py       # IlluminationSystem (monet)
 ├── mm_lock.py            # MM-Core single-process guard
 ├── frontend_cli.py       # `pycroflow` interactive CLI
-├── gui/                  # `pycroflow-gui` PyQt5 frontend
+├── gui/                  # `pycroflow-gui` PyQt6 frontend
 │   ├── app.py            #   entry point + monet Core sharing
 │   ├── main_window.py    #   PycroFlowMainWindow (tabbed)
 │   ├── qt_bridge.py      #   service observer -> Qt signals

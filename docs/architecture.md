@@ -8,7 +8,7 @@ deeply-investigate-the-soft-waffle.md` for the full plan).
 
 ```
         ┌──────────────────────┐   ┌──────────────────────┐
-        │   frontend_cli.py    │   │   gui/ (PyQt5)       │  Monet tab
+        │   frontend_cli.py    │   │   gui/ (PyQt6)       │  Monet tab
         │   (pycroflow)        │   │   (pycroflow-gui)    │  embeds monet
         └──────────┬───────────┘   └──────────┬───────────┘
                    └────────────┬──────────────┘

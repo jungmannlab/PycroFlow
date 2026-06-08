@@ -4,9 +4,11 @@ Holds a toolbar of global actions and a tab widget with the experiment,
 fluid, imaging, and monet tabs. Owns the :class:`QtBridge` that marshals
 ExperimentService observer callbacks onto the GUI thread.
 """
-from PyQt5.QtWidgets import (
-    QMainWindow, QTabWidget, QToolBar, QFileDialog, QAction,
+from PyQt6.QtWidgets import (
+    QMainWindow, QTabWidget, QToolBar, QFileDialog,
 )
+# Qt6 moved QAction out of QtWidgets into QtGui.
+from PyQt6.QtGui import QAction
 
 from PycroFlow.gui.qt_bridge import QtBridge
 from PycroFlow.gui.tabs.experiment_tab import ExperimentTab

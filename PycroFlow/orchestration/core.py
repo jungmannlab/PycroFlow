@@ -538,12 +538,26 @@ class ProtocolOrchestrator():
         else:
             logger.debug("Paused again during resuming. not clearing pause flag.")
 
+    def _join_handlers(self):
+        """Join only handlers that were actually started.
+
+        The handler threads are created in ``__init__`` but not started until
+        :meth:`start_orchestration`. ``Thread.join()`` raises
+        ``RuntimeError('cannot join thread before it is started')`` on a
+        never-started thread, so abort/end (incl. the ``__del__`` path) on an
+        orchestrator that was constructed but never run would otherwise raise.
+        ``is_alive()`` is False for both never-started and already-finished
+        threads; joining a finished thread is a no-op, so skipping it is safe.
+        """
+        for handler in (self.fluid_handler, self.imaging_handler,
+                        self.illumination_handler):
+            if handler.is_alive():
+                handler.join()
+
     def abort_orchestration(self):
         logger.debug("setting abort flag")
         self.threadexchange['abort_flag'].set()
-        self.fluid_handler.join()
-        self.imaging_handler.join()
-        self.illumination_handler.join()
+        self._join_handlers()
 
     def poll_protocol_finished(self):
         events = [
@@ -555,9 +569,7 @@ class ProtocolOrchestrator():
     def end_orchestration(self):
         logger.debug("setting graceful stop flag")
         self.threadexchange['graceful_stop_flag'].set()
-        self.fluid_handler.join()
-        self.imaging_handler.join()
-        self.illumination_handler.join()
+        self._join_handlers()
 
     def enqueue_fluid_function(self, function, args, kwargs):
         self.threadexchange['fluid_queue'].put(

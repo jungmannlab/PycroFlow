@@ -4,7 +4,7 @@ Drives :class:`PycroFlow.services.experiment_service.ExperimentService` and
 subscribes to a :class:`PycroFlow.gui.qt_bridge.QtBridge` for thread-safe
 state/log updates.
 """
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QListWidget,
     QPlainTextEdit, QFileDialog, QGroupBox,
 )

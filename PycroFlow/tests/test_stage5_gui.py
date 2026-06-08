@@ -1,9 +1,9 @@
 """Headless tests for the Stage 5 Qt GUI.
 
 Run with the offscreen Qt platform so no display is needed. Skipped
-entirely when PyQt5 is not installed (e.g. a minimal CI job without the
+entirely when PyQt6 is not installed (e.g. a minimal CI job without the
 [gui] extra). These cover the wiring we can verify without a human: the
-package is import-safe without PyQt5, the qt_bridge translates service
+package is import-safe without PyQt6, the qt_bridge translates service
 observer callbacks into Qt signals, the main window builds with all four
 tabs, and the monet tab degrades to a placeholder when monet is absent and
 embeds a window when it's present.
@@ -21,38 +21,38 @@ import unittest
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 try:
-    import PyQt5  # noqa: F401
-    _HAVE_PYQT5 = True
+    import PyQt6  # noqa: F401
+    _HAVE_PYQT6 = True
 except ImportError:
-    _HAVE_PYQT5 = False
+    _HAVE_PYQT6 = False
 
 
-def _import_safe_without_pyqt5():
-    """import PycroFlow.gui must not import PyQt5 at package level."""
+def _import_safe_without_pyqt6():
+    """import PycroFlow.gui must not import PyQt6 at package level."""
     mod = importlib.import_module('PycroFlow.gui')
     return mod
 
 
 class TestGuiImportSafety(unittest.TestCase):
 
-    def test_package_import_does_not_require_pyqt5(self):
-        # Importing the package should succeed and must not pull PyQt5 in by
+    def test_package_import_does_not_require_pyqt6(self):
+        # Importing the package should succeed and must not pull PyQt6 in by
         # itself (the Qt-dependent modules import it lazily).
-        before = 'PyQt5' in sys.modules
-        _import_safe_without_pyqt5()
-        # If PyQt5 wasn't already loaded, importing the package shouldn't
+        before = 'PyQt6' in sys.modules
+        _import_safe_without_pyqt6()
+        # If PyQt6 wasn't already loaded, importing the package shouldn't
         # have loaded it. (When it was already loaded by another test, we
         # can't assert much — just that the import works.)
         if not before:
-            self.assertNotIn('PyQt5', sys.modules)
+            self.assertNotIn('PyQt6', sys.modules)
 
 
-@unittest.skipUnless(_HAVE_PYQT5, "PyQt5 not installed")
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
 class TestQtBridge(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from PyQt5.QtWidgets import QApplication
+        from PyQt6.QtWidgets import QApplication
         cls.app = QApplication.instance() or QApplication([])
 
     def test_state_observer_emits_signal(self):
@@ -86,12 +86,12 @@ class TestQtBridge(unittest.TestCase):
         self.assertTrue(any('loaded' in m for m in lines))
 
 
-@unittest.skipUnless(_HAVE_PYQT5, "PyQt5 not installed")
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
 class TestMainWindow(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from PyQt5.QtWidgets import QApplication
+        from PyQt6.QtWidgets import QApplication
         cls.app = QApplication.instance() or QApplication([])
 
     def _build(self):
@@ -116,18 +116,18 @@ class TestMainWindow(unittest.TestCase):
         self.assertGreater(w.experiment_tab.step_list.count(), 0)
 
     def test_close_event_is_safe(self):
-        from PyQt5.QtGui import QCloseEvent
+        from PyQt6.QtGui import QCloseEvent
         w = self._build()
         # Should not raise even with no protocol / no hardware.
         w.closeEvent(QCloseEvent())
 
 
-@unittest.skipUnless(_HAVE_PYQT5, "PyQt5 not installed")
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
 class TestMonetTab(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from PyQt5.QtWidgets import QApplication
+        from PyQt6.QtWidgets import QApplication
         cls.app = QApplication.instance() or QApplication([])
 
     def tearDown(self):
@@ -147,7 +147,7 @@ class TestMonetTab(unittest.TestCase):
         tab.shutdown()
 
     def test_embeds_when_monet_present(self):
-        from PyQt5.QtWidgets import QWidget
+        from PyQt6.QtWidgets import QWidget
         # Inject a fake monet.gui.MonetMainWindow that is a real QWidget.
         fake_monet = types.ModuleType('monet')
         fake_gui = types.ModuleType('monet.gui')

@@ -1,110 +1,99 @@
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 import logging
-import time
 
 import PycroFlow.imaging as pim
 from PycroFlow.tests import TEST_OUTPUT_DIR
-from pycromanager import Core, Studio
 
 
 logger = logging.getLogger(__name__)
 
 
+def _make_config():
+    return {
+        'save_dir': TEST_OUTPUT_DIR,
+        'base_name': 'AutomationTest_R2R4',
+        # ImagingSystem.__init__ seeds a PFS log from these tags via the
+        # (mocked) Core; values are irrelevant, only the keys must exist.
+        'pfs_pars': {
+            'tag_zdrive': 'ZDrive',
+            'tag_status': 'PFS',
+            'prop_status': 'PFS Status',
+            'prop_state': 'PFS in Range',
+        },
+    }
+
+
+def _make_protocol():
+    return {
+        'parameters': {
+            'show_progress': False,
+            'show_display': True,
+            'close_display_after_acquisition': True,
+        },
+        'protocol_entries': [
+            {'$type': 'acquire', 'frames': 10, 't_exp': 100,
+             'message': 'round_1'},
+        ],
+    }
+
+
 class TestImaging(unittest.TestCase):
+    """Exercise ImagingSystem with the pycromanager / MM Core surface mocked.
+
+    ``imaging.py`` binds ``Acquisition`` / ``multi_d_acquisition_events`` at
+    import time (``from pycromanager import ...``) and pulls Core/Studio from
+    ``services.mm_core``. We therefore patch those names *where they are used*
+    rather than reaching into ``pycromanager`` submodules (whose layout is a
+    vendor detail — the old ``pycromanager.acquisitions`` path no longer
+    exists, which is what made this test error in setUp).
+    """
 
     def setUp(self):
-        patch_acquisition = patch('pycromanager.acquisitions.Acquisition', create=True)
-        patch_acquisition.start()
-        self.addCleanup(patch_acquisition.stop)
-        patch_bridge = patch('pycromanager.acquisitions.Bridge', create=True)
-        patch_bridge.start()
-        self.addCleanup(patch_bridge.stop)
-        patch_mud = patch('pycromanager.acq_util.multi_d_acquisition_events', create=True)
-        patch_mud.start()
-        self.addCleanup(patch_mud.stop)
-        patch_zmq = patch('pycromanager.zmq_bridge', create=True)
-        patch_zmq.start()
-        self.addCleanup(patch_zmq.stop)
-        patch_acqs = patch('pycromanager.acquisitions', create=True)
-        patch_acqs.start()
-        self.addCleanup(patch_acqs.stop)
+        # Acquisition is used as a context manager; MagicMock supports the
+        # protocol out of the box (__enter__/__exit__ return MagicMocks).
+        self.mock_acquisition = patch(
+            'PycroFlow.imaging.Acquisition').start()
+        self.addCleanup(patch.stopall)
+        patch('PycroFlow.imaging.multi_d_acquisition_events',
+              return_value=[None]).start()
 
-    def tearDown(self):
-        pass
+        # Avoid touching a real Micro-Manager: hand back mock Core/Studio and
+        # neutralize the filesystem MM-Core lock.
+        self.mock_core = MagicMock(name='core')
+        self.mock_studio = MagicMock(name='studio')
+        patch('PycroFlow.services.mm_core.get_core',
+              return_value=self.mock_core).start()
+        patch('PycroFlow.services.mm_core.get_studio',
+              return_value=self.mock_studio).start()
+        patch('PycroFlow.imaging.MmCoreLock').start()
 
-    def test_01(self):
-        try:
-            core = Core()
-            studio = Studio(convert_camel_case=True)
-            studio.live().is_live_mode_on()
-            time.sleep(10)
-        except:
-            core = MagicMock()
-            studio = MagicMock()
-
-        imaging_settings = {
-            'frames': 10,
-            't_exp': 100,  # in ms
-            'ROI': [512, 512, 512, 512],
-        }
-        flow_acq_config = {
-            'save_dir': TEST_OUTPUT_DIR,
-            'base_name': 'AutomationTest_R2R4',
-            'imaging_settings': imaging_settings,
-            'mm_parameters': {
-                'channel_group': 'Filter turret',
-                'filter': '2-G561',
-            },
-        }
-
-        protocol_imaging = [
-            {'type': 'acquire', 'frames': 100,
-             't_exp': 100, 'message': 'round_1'},
-        ]
-
-        try:
-            del core
-            del studio
-            pim.ImagingSystem(
-                flow_acq_config, protocol_imaging)
-        except:
-            print('skipping test as mm is not connected')
+    def test_01_construction(self):
+        """ImagingSystem constructs and runs its self-test acquisition."""
+        isy = pim.ImagingSystem(_make_config())
+        isy._assign_protocol(_make_protocol())
+        # __init__ runs test_acquisition(), which opens one Acquisition.
+        self.assertTrue(self.mock_acquisition.called)
+        self.assertTrue(os.path.isdir(isy.config['save_dir']))
 
     def test_02(self):
-        try:
-            core = Core()
-            studio = Studio(convert_camel_case=True)
-            studio.live().is_live_mode_on()
-        except:
-            core = unittest.mock.Mock()
-            studio = unittest.mock.Mock()
+        """Executing an 'acquire' entry drives a pycromanager Acquisition."""
+        isy = pim.ImagingSystem(_make_config())
+        isy._assign_protocol(_make_protocol())
 
-        imaging_settings = {
-            'frames': 10,
-            't_exp': 100,  # in ms
-            'ROI': [512, 512, 512, 512],
-        }
-        flow_acq_config = {
-            'save_dir': TEST_OUTPUT_DIR,
-            'base_name': 'AutomationTest_R2R4',
-            'imaging_settings': imaging_settings,
-            'mm_parameters': {
-                'channel_group': 'Filter turret',
-                'filter': '2-G561',
-            },
-        }
+        calls_before = self.mock_acquisition.call_count
+        isy.execute_protocol_entry(0)
 
-        protocol_imaging = [
-            {'type': 'acquire', 'frames': 100,
-             't_exp': 100, 'message': 'round_1'},
-        ]
+        # The acquire entry opened a further Acquisition and set the exposure
+        # to the entry's t_exp.
+        self.assertGreater(self.mock_acquisition.call_count, calls_before)
+        self.mock_core.set_exposure.assert_any_call(100)
+        # A PFS log was written next to the acquisition.
+        pfs_log = os.path.join(
+            isy.config['save_dir'], 'prtclstep0_round_1_pfs.xlsx')
+        self.assertTrue(os.path.isfile(pfs_log))
 
-        try:
-            del core
-            del studio
-            isy = pim.ImagingSystem(
-                flow_acq_config, protocol_imaging)
-            isy.execute_protocol_entry(0)
-        except:
-            print('skipping test as mm is not connected')
+
+if __name__ == '__main__':
+    unittest.main()

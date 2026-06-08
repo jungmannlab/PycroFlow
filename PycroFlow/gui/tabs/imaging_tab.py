@@ -3,7 +3,7 @@
 Read-only view for now — live preview and a graphical acquisition editor are
 explicitly out of scope for the initial GUI (see the plan's Stage 5 notes).
 """
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QGroupBox, QFormLayout,
 )
 

@@ -3,7 +3,7 @@
 Manual commands go through :class:`PycroFlow.services.system_service.SystemService`
 so the tab never reaches into private attributes of the fluid system.
 """
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
     QGroupBox, QFormLayout,
 )

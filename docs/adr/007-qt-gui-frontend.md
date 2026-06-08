@@ -1,6 +1,7 @@
 # 007 — Qt GUI frontend (PyQt5, in-process monet embed)
 
-- Status: accepted (code + headless tests; on-rig behavior pending)
+- Status: accepted (code + headless tests; on-rig behavior pending);
+  **amended — binding migrated to PyQt6 (see Amendment below)**
 - Stage: 5
 
 ## Context
@@ -42,3 +43,21 @@ script:
   and real monet laser control still require on-rig verification.
 - Out of scope for the initial GUI (deferred): live camera preview, plot
   widgets, a graphical protocol editor.
+
+## Amendment — migrate binding to PyQt6
+
+The `gui/` package and its tests were migrated from PyQt5 to **PyQt6**
+(`[gui]` extra now requires `PyQt6`). The changes were mechanical: `PyQt5.*`
+→ `PyQt6.*` imports, `QAction` moved from `QtWidgets` to `QtGui`, and
+`QApplication.exec_()` → `exec()`. No scoped-enum or other API call sites
+needed changing. The `QtBridge` thread-safety design and import-safety
+guarantee are unchanged (now phrased against PyQt6).
+
+**Trade-off accepted:** this breaks the original "match monet's binding"
+rationale for the in-process embed. PyQt5 and PyQt6 are separate Qt libraries
+whose widgets cannot coexist in one process, so while monet remains on PyQt5
+its `MonetMainWindow` is not a PyQt6 `QWidget` and the existing graceful-
+degradation guard shows the placeholder (no crash). The embed re-enables once
+monet itself moves to PyQt6; until then the Monet tab is non-functional and
+laser control must use a standalone monet process (reintroducing the ADR 006
+MM-Core conflict only if that standalone process is run concurrently).

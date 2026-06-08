@@ -9,13 +9,13 @@ import sys
 import PycroFlow
 
 
-def _require_pyqt5():
-    """Import PyQt5, or exit with an actionable message."""
+def _require_pyqt6():
+    """Import PyQt6, or exit with an actionable message."""
     try:
-        from PyQt5.QtWidgets import QApplication  # noqa: F401
+        from PyQt6.QtWidgets import QApplication  # noqa: F401
     except ImportError:
         sys.stderr.write(
-            "PyQt5 is required for the PycroFlow GUI but is not installed.\n"
+            "PyQt6 is required for the PycroFlow GUI but is not installed.\n"
             "Install it with:  pip install -e \".[gui]\"\n")
         raise SystemExit(2)
 
@@ -37,15 +37,16 @@ def build_main_window():
 
 
 def main(argv=None):
-    _require_pyqt5()
-    from PyQt5.QtWidgets import QApplication
+    _require_pyqt6()
+    from PyQt6.QtWidgets import QApplication
 
     PycroFlow.setup_logging(clean_old=True)
 
     app = QApplication(argv if argv is not None else sys.argv)
     window = build_main_window()
     window.show()
-    return app.exec_()
+    # PyQt6 renamed QApplication.exec_() to exec() (exec_ is gone).
+    return app.exec()
 
 
 if __name__ == '__main__':
