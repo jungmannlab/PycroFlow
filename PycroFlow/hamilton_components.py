@@ -4,6 +4,7 @@ address are unique to the whole system (same as serial address)
 
 """
 
+import threading
 import time
 
 # import logging
@@ -305,8 +306,13 @@ class Valve:
         )
         valve_type = map_valve_type(valve_type)
 
-        self.pause_flag = None
-        self.abort_flag = None
+        # Default to private, never-set Events so direct hardware use
+        # (fill_tubings, calibration, manual control) before orchestration
+        # starts does not dereference a None flag. The orchestrator later
+        # replaces these with its shared events via
+        # ``_assign_multiprocess_events``.
+        self.pause_flag = threading.Event()
+        self.abort_flag = threading.Event()
 
     def set_valve(self, pos, move_now=True):
         """Set the valve position of the PSD.
@@ -457,6 +463,15 @@ class Pump:
         assert instrument_type in [member.value for member in PSDTypes]
         assert syringe in [member.value for member in SyrTypes]
 
+        # Default to private, never-set Events so direct hardware use
+        # (fill_tubings, calibration, manual control) before orchestration
+        # starts does not dereference a None flag. The orchestrator later
+        # replaces these with its shared events via
+        # ``_assign_multiprocess_events``.
+        if pause_flag is None:
+            pause_flag = threading.Event()
+        if abort_flag is None:
+            abort_flag = threading.Event()
         ham.communication.pause_flag = pause_flag
         ham.communication.abort_flag = abort_flag
         self.pause_flag = pause_flag

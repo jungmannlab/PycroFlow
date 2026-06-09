@@ -60,7 +60,8 @@ class TestWaitXchangeTimeout(unittest.TestCase):
     def test_raises_on_timeout(self):
         """Typo'd signal value used to hang forever — now raises promptly."""
         txch = _make_txchange()
-        handler = _StubHandler(protocol={'protocol_entries': []}, threadexchange=txch)
+        handler = _StubHandler(
+            protocol={'protocol_entries': []}, threadexchange=txch)
         t0 = time.monotonic()
         with self.assertRaises(WaitForSignalTimeout) as ctx:
             handler.wait_xchange('img', 'never-arrives', timeout=0.2)
@@ -71,7 +72,8 @@ class TestWaitXchangeTimeout(unittest.TestCase):
     def test_signal_arrival_returns_silently(self):
         """When the signal arrives, the call returns without raising."""
         txch = _make_txchange()
-        handler = _StubHandler(protocol={'protocol_entries': []}, threadexchange=txch)
+        handler = _StubHandler(
+            protocol={'protocol_entries': []}, threadexchange=txch)
 
         def deliver():
             time.sleep(0.05)
@@ -84,7 +86,8 @@ class TestWaitXchangeTimeout(unittest.TestCase):
     def test_abort_flag_returns_silently(self):
         """Abort flag short-circuits the wait — no exception, no hang."""
         txch = _make_txchange()
-        handler = _StubHandler(protocol={'protocol_entries': []}, threadexchange=txch)
+        handler = _StubHandler(
+            protocol={'protocol_entries': []}, threadexchange=txch)
 
         def abort():
             time.sleep(0.05)
@@ -94,7 +97,7 @@ class TestWaitXchangeTimeout(unittest.TestCase):
         handler.wait_xchange('img', 'never-arrives', timeout=10.0)
 
     def test_default_timeout_is_sane(self):
-        """Sanity-check the default — 4 hours covers our longest acquisition."""
+        """Default (4 hours) covers our longest acquisition."""
         self.assertGreaterEqual(WAIT_FOR_SIGNAL_TIMEOUT_DEFAULT, 3600)
         self.assertLessEqual(WAIT_FOR_SIGNAL_TIMEOUT_DEFAULT, 24 * 3600)
 
@@ -143,6 +146,42 @@ class TestMmCoreLock(unittest.TestCase):
             self.assertEqual(contents, str(os.getpid()))
         finally:
             lock.release()
+
+    def test_stale_lock_is_reclaimed(self):
+        # A crashed process leaves a lockfile with a now-dead PID. acquire()
+        # must reclaim it instead of forcing a manual delete.
+        import subprocess
+        import sys
+        proc = subprocess.Popen([sys.executable, '-c', 'pass'])
+        proc.wait()
+        with open(self.path, 'w') as f:
+            f.write(str(proc.pid))   # PID guaranteed no longer running
+        lock = MmCoreLock(path=self.path)
+        lock.acquire()               # reclaims, does not raise
+        try:
+            with open(self.path) as f:
+                self.assertEqual(f.read().strip(), str(os.getpid()))
+        finally:
+            lock.release()
+
+    def test_corrupt_lock_is_reclaimed(self):
+        # A garbage/empty lockfile (no readable PID) is treated as stale.
+        with open(self.path, 'w') as f:
+            f.write('not-a-pid')
+        lock = MmCoreLock(path=self.path)
+        lock.acquire()
+        try:
+            self.assertTrue(os.path.exists(self.path))
+        finally:
+            lock.release()
+
+    def test_live_holder_is_refused(self):
+        # A lockfile owned by a live process (here, ourselves) must refuse.
+        with open(self.path, 'w') as f:
+            f.write(str(os.getpid()))
+        lock = MmCoreLock(path=self.path)
+        with self.assertRaises(MmLockHeld):
+            lock.acquire()
 
 
 class TestPfsHealthCheck(unittest.TestCase):

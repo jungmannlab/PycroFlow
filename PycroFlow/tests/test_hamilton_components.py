@@ -155,6 +155,26 @@ class HamiltonDeviceTest(unittest.TestCase):
         valve.wait_until_done()
         self.assertIn('`', valve.get_status())
 
+    def test_pump_flags_default_to_events(self):
+        # Regression: building a Pump without orchestration (e.g. to run
+        # fill_tubings directly) left pause_flag/abort_flag as None, so the
+        # flag-checking loops raised AttributeError. They must default to
+        # unset Events so direct hardware use works.
+        pump = Pump('2', '500u', instrument_type='4', valve_type='Y',
+                    output_pos='out', input_pos='in', waste_pos=1)
+        self.assertIsInstance(pump.pause_flag, threading.Event)
+        self.assertIsInstance(pump.abort_flag, threading.Event)
+        self.assertFalse(pump.pause_flag.is_set())
+        pump.set_valve('in')  # exercises the flag loop; must not raise
+
+    def test_valve_flags_default_to_events(self):
+        # Same regression for valves: set_valve hits the
+        # `while self.pause_flag.is_set()` loop that crashed with None.
+        valve = Valve('1', 'MVP', '8-5')
+        self.assertIsInstance(valve.pause_flag, threading.Event)
+        self.assertIsInstance(valve.abort_flag, threading.Event)
+        valve.set_valve(3, move_now=False)  # must not raise
+
 
 if __name__ == '__main__':
     unittest.main()
