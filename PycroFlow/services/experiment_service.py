@@ -27,7 +27,8 @@ class ExperimentState(enum.Enum):
     """Lifecycle states observable by frontends."""
     IDLE = "idle"
     LOADED = "loaded"           # protocol parsed, orchestrator not started
-    ORCHESTRATING = "orchestrating"  # handler threads running, protocol not started
+    # handler threads running, protocol not started
+    ORCHESTRATING = "orchestrating"
     RUNNING = "running"
     PAUSED = "paused"
     FINISHED = "finished"
@@ -71,10 +72,43 @@ class ExperimentService:
         self._state_observers: List[StateObserver] = []
         self._log_observers: List[LogObserver] = []
 
+    # --- Subsystem wiring ---------------------------------------------
+
+    def attach_systems(
+        self,
+        fluid_system=None,
+        imaging_system=None,
+        illumination_system=None,
+    ) -> None:
+        """Set the subsystem objects used to build the orchestrator.
+
+        Frontends call this after connecting hardware (e.g. the GUI System
+        tab) so a subsequent :meth:`load_protocol` / :meth:`start` includes
+        them. Refused while an orchestrator is active — abort first, since
+        the running orchestrator already captured the previous systems.
+
+        Parameters
+        ----------
+        fluid_system, imaging_system, illumination_system : object or None
+            The subsystem instances (or None when not connected).
+        """
+        if self._state in (
+            ExperimentState.ORCHESTRATING,
+            ExperimentState.RUNNING,
+            ExperimentState.PAUSED,
+        ):
+            raise RuntimeError(
+                "cannot change systems while an experiment is active "
+                "(state={!r}); abort first".format(self._state)
+            )
+        self._fluid_system = fluid_system
+        self._imaging_system = imaging_system
+        self._illumination_system = illumination_system
+
     # --- Protocol loading ---------------------------------------------
 
     def load_protocol(self, protocol: Dict) -> None:
-        """Accept an already-parsed protocol dict and prepare an orchestrator."""
+        """Accept a parsed protocol dict and prepare an orchestrator."""
         if self._state in (
             ExperimentState.ORCHESTRATING,
             ExperimentState.RUNNING,
@@ -187,7 +221,9 @@ class ExperimentService:
             old, self._state = self._state, new_state
         if old is new_state:
             return
-        logger.debug("ExperimentService: {} -> {}".format(old.value, new_state.value))
+        logger.debug(
+            "ExperimentService: {} -> {}".format(
+                old.value, new_state.value))
         for fn in list(self._state_observers):
             try:
                 fn(old, new_state)

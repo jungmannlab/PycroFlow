@@ -1,7 +1,8 @@
 """Fluid tab: subsystem status + manual pump control.
 
-Manual commands go through :class:`PycroFlow.services.system_service.SystemService`
-so the tab never reaches into private attributes of the fluid system.
+Manual commands go through
+:class:`PycroFlow.services.system_service.SystemService` so the tab never
+reaches into private attributes of the fluid system.
 """
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
@@ -46,6 +47,15 @@ class FluidTab(QWidget):
         self.fill_btn.clicked.connect(self._on_fill)
         self.clean_btn.clicked.connect(self._on_clean)
         self.stop_btn.clicked.connect(self._on_stop)
+
+    def refresh(self):
+        """Update the connection label from the fluid system.
+
+        Called when the System tab connects/disconnects hardware.
+        """
+        connected = self._svc.fluid_system is not None
+        self.status_label.setText(
+            "connected" if connected else "not connected")
 
     def _on_fill(self):
         self._svc.fill_tubings()

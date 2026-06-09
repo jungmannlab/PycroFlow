@@ -7,9 +7,27 @@ sort of leakage this service eliminates.
 """
 from __future__ import annotations
 
-from typing import Optional
-
 from loguru import logger
+
+
+def _load_yaml_or_dict(config):
+    """Return ``config`` as a dict: load YAML if a path, else pass through.
+
+    Parameters
+    ----------
+    config : str or dict
+        A path to a YAML config file, or an already-parsed config dict.
+
+    Returns
+    -------
+    dict
+        The configuration dictionary.
+    """
+    if isinstance(config, str):
+        import yaml
+        with open(config) as f:
+            return yaml.full_load(f)
+    return config
 
 
 class SystemService:
@@ -30,6 +48,87 @@ class SystemService:
         self.fluid_system = fluid_system
         self.imaging_system = imaging_system
         self.illumination_system = illumination_system
+
+    # --- Connection ----------------------------------------------------
+
+    def connection_states(self) -> dict:
+        """Return which subsystems are currently connected.
+
+        Returns
+        -------
+        dict
+            Maps ``'fluid'`` / ``'imaging'`` / ``'illumination'`` to a bool
+            (True when that subsystem object has been built/connected).
+        """
+        return {
+            'fluid': self.fluid_system is not None,
+            'imaging': self.imaging_system is not None,
+            'illumination': self.illumination_system is not None,
+        }
+
+    def connect_fluid(self, hamilton_config, tubing_config):
+        """Build and connect the Hamilton (legacy) fluid system.
+
+        Parameters
+        ----------
+        hamilton_config : str or dict
+            Hamilton system config (path to YAML or parsed dict). Must
+            carry an ``interface`` (COM/baud) and ``system_type == 'legacy'``.
+        tubing_config : str or dict
+            Tubing config (path to YAML or parsed dict).
+
+        Returns
+        -------
+        object
+            The constructed fluid system.
+        """
+        import PycroFlow.hamilton_architecture as ha
+
+        hcfg = _load_yaml_or_dict(hamilton_config)
+        tcfg = _load_yaml_or_dict(tubing_config)
+        if hcfg.get('system_type') != 'legacy':
+            raise NotImplementedError(
+                "system_type {!r} is not implemented".format(
+                    hcfg.get('system_type')))
+        interface = hcfg['interface']
+        ha.connect(interface['COM'], interface['baud'])
+        self.fluid_system = ha.LegacyArchitecture(hcfg, tcfg)
+        return self.fluid_system
+
+    def connect_imaging(self, imaging_config):
+        """Build and connect the imaging system.
+
+        Parameters
+        ----------
+        imaging_config : str or dict
+            Imaging config (path to YAML or parsed dict).
+
+        Returns
+        -------
+        object
+            The constructed imaging system.
+        """
+        import PycroFlow.imaging as im
+
+        self.imaging_system = im.ImagingSystem(
+            _load_yaml_or_dict(imaging_config))
+        return self.imaging_system
+
+    def connect_illumination(self):
+        """Build the illumination system.
+
+        No config is needed at construction; the monet laser control loads
+        when a protocol carrying an illumination ``setup`` is assigned.
+
+        Returns
+        -------
+        object
+            The constructed illumination system.
+        """
+        import PycroFlow.illumination as il
+
+        self.illumination_system = il.IlluminationSystem()
+        return self.illumination_system
 
     # --- Fluid ---------------------------------------------------------
 
@@ -67,7 +166,8 @@ class SystemService:
             raise RuntimeError("fluid_system has no _pump method")
         pump_obj = getattr(self.fluid_system, pump_name, None)
         if pump_obj is None:
-            raise KeyError("no such pump on fluid_system: {!r}".format(pump_name))
+            raise KeyError(
+                "no such pump on fluid_system: {!r}".format(pump_name))
         return pump_method(pump_obj, *args, **kwargs)
 
     # --- Imaging -------------------------------------------------------

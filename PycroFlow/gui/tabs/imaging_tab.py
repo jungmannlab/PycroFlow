@@ -20,7 +20,8 @@ class ImagingTab(QWidget):
         status_box = QGroupBox("Imaging system")
         form = QFormLayout(status_box)
         connected = self._svc.imaging_system is not None
-        self.status_label = QLabel("connected" if connected else "not connected")
+        self.status_label = QLabel(
+            "connected" if connected else "not connected")
         form.addRow("Status", self.status_label)
         self.pfs_label = QLabel("—")
         form.addRow("PFS", self.pfs_label)
@@ -30,9 +31,15 @@ class ImagingTab(QWidget):
         layout.addStretch()
 
     def refresh(self):
-        """Pull current status from the imaging system (called by a timer or
-        on tab activation). No-op when no imaging system is configured."""
+        """Pull current status from the imaging system.
+
+        Called when the System tab connects/disconnects hardware, on a timer,
+        or on tab activation. Updates the connection label always; PFS only
+        when an imaging system is present.
+        """
         imaging = self._svc.imaging_system
+        self.status_label.setText(
+            "connected" if imaging is not None else "not connected")
         if imaging is None:
             return
         # Best-effort, defensive: hardware attributes may be absent under

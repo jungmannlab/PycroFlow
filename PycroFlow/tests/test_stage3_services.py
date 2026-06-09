@@ -1,5 +1,4 @@
 """Tests for the Stage-3 HAL + services layer."""
-import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -44,7 +43,8 @@ class TestMmCore(unittest.TestCase):
     def test_get_core_caches(self):
         # When real pycromanager is installed it tries an actual connection;
         # patch the Core constructor so the test is portable.
-        with patch('pycromanager.Core', return_value=MagicMock(name='Core')) as core_cls:
+        with patch('pycromanager.Core',
+                   return_value=MagicMock(name='Core')) as core_cls:
             a = get_core()
             b = get_core()
         self.assertIs(a, b)
@@ -90,7 +90,8 @@ class TestExperimentService(unittest.TestCase):
     def test_observer_exception_does_not_break_service(self):
         from PycroFlow.examples.demo_protocols import protocol
         svc = ExperimentService()
-        svc.add_state_observer(lambda o, n: (_ for _ in ()).throw(RuntimeError('boom')))
+        svc.add_state_observer(
+            lambda o, n: (_ for _ in ()).throw(RuntimeError('boom')))
         # Must not raise.
         svc.load_protocol(protocol)
         self.assertEqual(svc.state, ExperimentState.LOADED)
@@ -107,6 +108,29 @@ class TestExperimentService(unittest.TestCase):
     def test_abort_idempotent_without_orchestrator(self):
         # abort() with no protocol loaded must not raise.
         ExperimentService().abort()
+
+    def test_attach_systems_sets_refs(self):
+        svc = ExperimentService()
+        f, i, lum = object(), object(), object()
+        svc.attach_systems(
+            fluid_system=f, imaging_system=i, illumination_system=lum)
+        self.assertIs(svc._fluid_system, f)
+        self.assertIs(svc._imaging_system, i)
+        self.assertIs(svc._illumination_system, lum)
+
+    def test_attach_systems_feeds_orchestrator(self):
+        from PycroFlow.examples.demo_protocols import protocol
+        svc = ExperimentService()
+        fluid = MagicMock(name='fluid_system')
+        svc.attach_systems(fluid_system=fluid)
+        svc.load_protocol(protocol)
+        self.assertIs(svc.orchestrator.fluid_system, fluid)
+
+    def test_attach_systems_rejected_while_active(self):
+        svc = ExperimentService()
+        svc._set_state(ExperimentState.RUNNING)
+        with self.assertRaises(RuntimeError):
+            svc.attach_systems()
 
 
 class TestSystemService(unittest.TestCase):
@@ -132,6 +156,50 @@ class TestSystemService(unittest.TestCase):
         result = svc.manual_pump('pump_a', vol=100)
         self.assertEqual(result, 42)
         fluid._pump.assert_called_once_with(fluid.pump_a, vol=100)
+
+    def test_connection_states(self):
+        svc = SystemService()
+        self.assertEqual(
+            svc.connection_states(),
+            {'fluid': False, 'imaging': False, 'illumination': False})
+        svc.imaging_system = object()
+        self.assertTrue(svc.connection_states()['imaging'])
+
+    def test_connect_imaging_builds_and_stores(self):
+        sentinel = object()
+        with patch('PycroFlow.imaging.ImagingSystem', return_value=sentinel):
+            svc = SystemService()
+            result = svc.connect_imaging({'pfs_pars': {}})
+        self.assertIs(result, sentinel)
+        self.assertIs(svc.imaging_system, sentinel)
+
+    def test_connect_illumination_builds_and_stores(self):
+        sentinel = object()
+        with patch('PycroFlow.illumination.IlluminationSystem',
+                   return_value=sentinel):
+            svc = SystemService()
+            result = svc.connect_illumination()
+        self.assertIs(result, sentinel)
+        self.assertIs(svc.illumination_system, sentinel)
+
+    def test_connect_fluid_builds_and_connects(self):
+        cfg = {'system_type': 'legacy',
+               'interface': {'COM': '18', 'baud': 9600}}
+        sentinel = object()
+        with patch('PycroFlow.hamilton_architecture.connect') as conn, \
+                patch('PycroFlow.hamilton_architecture.LegacyArchitecture',
+                      return_value=sentinel):
+            svc = SystemService()
+            result = svc.connect_fluid(cfg, {'tube': 1})
+        conn.assert_called_once_with('18', 9600)
+        self.assertIs(result, sentinel)
+        self.assertIs(svc.fluid_system, sentinel)
+
+    def test_connect_fluid_rejects_non_legacy(self):
+        svc = SystemService()
+        with self.assertRaises(NotImplementedError):
+            svc.connect_fluid(
+                {'system_type': 'other', 'interface': {}}, {})
 
 
 if __name__ == '__main__':

@@ -26,6 +26,9 @@ class ExperimentTab(QWidget):
         super().__init__(parent)
         self._service = service
         self._bridge = bridge
+        # Backing store for the step list so a selection can look up the
+        # full entry dict (the list only shows index + $type).
+        self._step_entries = []
         self._build_ui()
         self._connect_signals()
         self._refresh_controls(self._service.state)
@@ -55,11 +58,21 @@ class ExperimentTab(QWidget):
         controls.addStretch()
         layout.addLayout(controls)
 
-        # --- step list
-        steps_box = QGroupBox("Protocol steps (fluid)")
-        steps_layout = QVBoxLayout(steps_box)
+        # --- step list + per-step parameters
+        steps_box = QGroupBox("Protocol steps")
+        steps_layout = QHBoxLayout(steps_box)
         self.step_list = QListWidget()
-        steps_layout.addWidget(self.step_list)
+        steps_layout.addWidget(self.step_list, 1)
+
+        params_box = QGroupBox("Step parameters")
+        params_layout = QVBoxLayout(params_box)
+        self.step_params = QPlainTextEdit()
+        self.step_params.setReadOnly(True)
+        self.step_params.setPlaceholderText(
+            "Select a step to see its parameters.")
+        params_layout.addWidget(self.step_params)
+        steps_layout.addWidget(params_box, 1)
+
         layout.addWidget(steps_box)
 
         # --- log pane
@@ -78,6 +91,7 @@ class ExperimentTab(QWidget):
         self.abort_btn.clicked.connect(self._on_abort)
         self._bridge.state_changed.connect(self._on_state_changed)
         self._bridge.log_message.connect(self._on_log)
+        self.step_list.currentRowChanged.connect(self._on_step_selected)
 
     # --- service-driven commands
 
@@ -130,8 +144,40 @@ class ExperimentTab(QWidget):
 
     def _populate_steps(self):
         self.step_list.clear()
+        self._step_entries = []
         protocol = self._service.protocol or {}
-        fluid = protocol.get('fluid', {})
-        entries = fluid.get('protocol_entries', []) if isinstance(fluid, dict) else []
-        for i, entry in enumerate(entries):
-            self.step_list.addItem("{:d}: {}".format(i, entry.get('$type', '?')))
+        # List each subsystem's steps, prefixed with the subsystem so the
+        # combined view is unambiguous. _step_entries stays aligned with the
+        # list rows so a selection can show the full entry.
+        for system in ('fluid', 'img', 'illu'):
+            sub = protocol.get(system, {})
+            entries = (
+                sub.get('protocol_entries', []) if isinstance(sub, dict)
+                else [])
+            for i, entry in enumerate(entries):
+                type_ = (
+                    entry.get('$type', '?') if isinstance(entry, dict)
+                    else '?')
+                self.step_list.addItem(
+                    "[{}] {:d}: {}".format(system, i, type_))
+                self._step_entries.append(entry)
+        self.step_params.clear()
+
+    def _on_step_selected(self, row):
+        """Show the selected step's parameters in the side box."""
+        if row < 0 or row >= len(self._step_entries):
+            self.step_params.clear()
+            return
+        entry = self._step_entries[row]
+        if not isinstance(entry, dict):
+            self.step_params.setPlainText(str(entry))
+            return
+        # '$type' first, then the remaining parameters in definition order.
+        lines = []
+        if '$type' in entry:
+            lines.append("$type: {}".format(entry['$type']))
+        for key, value in entry.items():
+            if key == '$type':
+                continue
+            lines.append("{}: {}".format(key, value))
+        self.step_params.setPlainText("\n".join(lines))

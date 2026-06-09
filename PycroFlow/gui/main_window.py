@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QAction
 
 from PycroFlow.gui.qt_bridge import QtBridge
+from PycroFlow.gui.tabs.system_tab import SystemTab
 from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
 from PycroFlow.gui.tabs.fluid_tab import FluidTab
 from PycroFlow.gui.tabs.imaging_tab import ImagingTab
@@ -36,27 +37,39 @@ class PycroFlowMainWindow(QMainWindow):
         self.act_start = QAction("Start", self)
         self.act_pause = QAction("Pause", self)
         self.act_abort = QAction("Abort", self)
-        for a in (self.act_load, self.act_start, self.act_pause, self.act_abort):
+        for a in (self.act_load, self.act_start, self.act_pause,
+                  self.act_abort):
             tb.addAction(a)
 
         self.act_load.triggered.connect(self._on_load)
-        self.act_start.triggered.connect(lambda: self._experiment_service.start())
-        self.act_pause.triggered.connect(lambda: self._experiment_service.pause())
-        self.act_abort.triggered.connect(lambda: self._experiment_service.abort())
+        self.act_start.triggered.connect(
+            lambda: self._experiment_service.start())
+        self.act_pause.triggered.connect(
+            lambda: self._experiment_service.pause())
+        self.act_abort.triggered.connect(
+            lambda: self._experiment_service.abort())
 
     def _build_tabs(self):
         self.tabs = QTabWidget()
+        self.system_tab = SystemTab(
+            self._system_service, self._experiment_service)
         self.experiment_tab = ExperimentTab(
             self._experiment_service, self._bridge)
         self.fluid_tab = FluidTab(self._system_service)
         self.imaging_tab = ImagingTab(self._system_service)
         self.monet_tab = MonetTab()
 
+        self.tabs.addTab(self.system_tab, "System")
         self.tabs.addTab(self.experiment_tab, "Experiment")
         self.tabs.addTab(self.fluid_tab, "Fluid")
         self.tabs.addTab(self.imaging_tab, "Imaging")
         self.tabs.addTab(self.monet_tab, "Monet")
         self.setCentralWidget(self.tabs)
+
+        # Keep the per-subsystem tabs' status in sync when the System tab
+        # connects hardware.
+        self.system_tab.add_connection_listener(self.fluid_tab.refresh)
+        self.system_tab.add_connection_listener(self.imaging_tab.refresh)
 
     def _on_load(self):
         path, _ = QFileDialog.getOpenFileName(
