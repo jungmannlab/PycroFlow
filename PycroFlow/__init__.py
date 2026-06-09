@@ -1,12 +1,28 @@
 """PycroFlow package entry point.
 
-Importing this package does NOT configure logging or touch the filesystem.
+Importing this package does NOT add log sinks or touch the filesystem.
 Frontends (CLI, GUI) explicitly call :func:`setup_logging` at startup. Tests
 and library users may call it too, or leave logging unconfigured.
+
+The one thing import does do is remove loguru's *default* DEBUG-to-stderr
+handler, so code that logs before :func:`setup_logging` runs (e.g. building
+a protocol in a startup script) does not flood the terminal. Until
+``setup_logging`` installs the real sinks, records simply go nowhere.
 """
 from loguru import logger
 import os
 import sys
+
+
+# loguru auto-installs a DEBUG->stderr handler (id 0) on import. Drop it so
+# nothing spams the terminal before a frontend calls setup_logging(); that
+# call installs the real sinks (log files + ERROR-level stderr). This adds no
+# sinks and writes no files. Want terminal output without the full setup?
+# Call setup_logging(stderr_level="INFO") (or "DEBUG").
+try:
+    logger.remove(0)
+except ValueError:
+    pass
 
 
 _LOG_FORMAT = (
