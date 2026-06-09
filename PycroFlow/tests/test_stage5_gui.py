@@ -143,6 +143,38 @@ class TestMainWindow(unittest.TestCase):
         # Should not raise even with no protocol / no hardware.
         w.closeEvent(QCloseEvent())
 
+    def test_progress_bars_and_step_shading(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import (
+            ExperimentTab, _FINISHED_COLOR, _ACTIVE_COLOR)
+        svc = MagicMock(name='service')
+        svc.state = ExperimentState.RUNNING
+        svc.protocol = {
+            'fluid': {'protocol_entries': [
+                {'$type': 'inject', 'reservoir_id': 1, 'volume': 10},
+                {'$type': 'signal', 'value': 'x'},
+                {'$type': 'incubate', 'duration': 1}]},
+            'img': {'protocol_entries': [
+                {'$type': 'acquire', 'frames': 1, 't_exp': 1},
+                {'$type': 'acquire', 'frames': 1, 't_exp': 1}]},
+            'illu': {'protocol_entries': []},
+        }
+        svc.progress.return_value = {
+            'fluid': (1, 3), 'img': (1, 2), 'illu': (0, 0)}
+        tab = ExperimentTab(svc, MagicMock(name='bridge'))
+        tab._populate_steps()
+        tab._poll_progress()
+        # overall: done 1+1+0=2 / total 3+2+0=5 = 40%
+        self.assertEqual(tab.overall_bar.value(), 40)
+        # rounds: 2 acquires, img cur=1 -> 1 done (idx 0) of 2 = 50%
+        self.assertEqual(tab.round_bar.value(), 50)
+        # fluid rows: 0 finished, 1 active (== cur), 2 pending
+        self.assertEqual(
+            tab.step_list.item(0).background().color(), _FINISHED_COLOR)
+        self.assertEqual(
+            tab.step_list.item(1).background().color(), _ACTIVE_COLOR)
+
     def test_subsystem_tabs_sync_via_system_tab_listeners(self):
         w = self._build()
         # Both tabs start "not connected".

@@ -264,6 +264,37 @@ class ExperimentService:
     def protocol(self) -> Optional[Dict]:
         return self._protocol
 
+    def progress(self) -> Dict:
+        """Per-subsystem execution progress for the live GUI status.
+
+        Returns
+        -------
+        dict
+            Maps ``'fluid'`` / ``'img'`` / ``'illu'`` to ``(current, total)``
+            step indices. ``current`` is the step the handler is on (== total
+            when that subsystem has no system and finished immediately).
+            Empty dict when nothing is loaded.
+        """
+        if self._orchestrator is None or self._protocol is None:
+            return {}
+        handlers = {
+            'fluid': self._orchestrator.fluid_handler,
+            'img': self._orchestrator.imaging_handler,
+            'illu': self._orchestrator.illumination_handler,
+        }
+        out = {}
+        for key, handler in handlers.items():
+            sub = self._protocol.get(key, {})
+            entries = sub.get('protocol_entries', []) if isinstance(
+                sub, dict) else []
+            total = len(entries)
+            if handler.system is None:
+                cur = total
+            else:
+                cur = handler.get_current_protocol_iter()
+            out[key] = (cur, total)
+        return out
+
     def is_finished(self) -> bool:
         if self._orchestrator is None:
             return False

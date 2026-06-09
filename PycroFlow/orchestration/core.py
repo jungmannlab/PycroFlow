@@ -449,16 +449,19 @@ class FluidHandler(AbstractSystemHandler):
                 self.deliver_fluid(*item["args"], **item("kwargs"))
 
     def pause_protocol(self, msg=None):
-        # print(f"Setting pause flag from abstract system ({self.system})")
         logger.debug("fluid handler setting protocol pausing flag")
         self.txchange["pause_protocol_flag"].set()
+        # Hamilton-specific bits only exist when a fluid system is attached.
+        if self.system is None:
+            return
         logger.debug("setting hammilton wait flag")
         self.abort_hamilton_wait_response_flag.set()
         self.system.stop_all_moves()
 
     def resume_protocol(self, msg=None):
-        # print(f"Setting pause flag from abstract system ({self.system})")
         logger.debug("fluid handler resuming protocol")
+        if self.system is None:
+            return True
         logger.debug("clearing hamilton wait flag")
         self.abort_hamilton_wait_response_flag.clear()
         resumed = self.system.resume_execution()
@@ -469,9 +472,10 @@ class FluidHandler(AbstractSystemHandler):
         return resumed
 
     def abort_protocol(self, msg=None):
-        # print(f"Setting pause flag from abstract system ({self.system})")
         logger.debug("fluid handler aborting protocol & setting abort flag")
         self.txchange["abort_protocol_flag"].set()
+        if self.system is None:
+            return
         logger.debug("setting hamilton wait flag")
         self.abort_hamilton_wait_response_flag.set()
         self.system.stop_all_moves()
@@ -513,6 +517,13 @@ class IlluminationHandler(AbstractSystemHandler):
     def __init__(self, illumination_system, protocol, threadexchange):
         super().__init__(protocol, threadexchange)
         self.system = illumination_system
+        # Assign the protocol to the system (mirrors Fluid/Imaging handlers).
+        # Without this the IlluminationSystem never gets ``self.protocol`` and
+        # execute_protocol_entry raises AttributeError. The CLI used to assign
+        # it in do_load_protocol; the orchestrator must do it for all paths.
+        if self.system is not None:
+            self.system.handler_ref = self
+            self.system._assign_protocol(protocol)
 
     def execute_protocol_entry(self, i):
         with self.txchange[self.target + "_lock"]:

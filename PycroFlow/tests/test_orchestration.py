@@ -148,6 +148,19 @@ class TestOrchestration(unittest.TestCase):
         self.assertEqual(po.threadexchange['fluid'], ['fluid round 1 done'])
         self.assertEqual(po.threadexchange['img'], ['imaging round 1 done'])
 
+    def test_illumination_handler_assigns_protocol(self):
+        # Regression: IlluminationHandler must assign the protocol to its
+        # system (like Fluid/Imaging) or execute_protocol_entry raises
+        # AttributeError('IlluminationSystem' has no attribute 'protocol').
+        from PycroFlow.tests.emulators import EmulatedIlluminationSystem
+        protocol = {'illu': _wrap([
+            {'$type': 'set power', 'laser': 1, 'power': 5}])}
+        illu = EmulatedIlluminationSystem()
+        por.ProtocolOrchestrator(protocol, illumination_system=illu)
+        self.assertIsNotNone(illu.protocol)
+        self.assertEqual(
+            illu.protocol['protocol_entries'][0]['$type'], 'set power')
+
 
 if __name__ == '__main__':
     unittest.main()

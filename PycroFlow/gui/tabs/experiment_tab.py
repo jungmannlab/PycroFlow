@@ -6,11 +6,12 @@ state/log updates.
 """
 import ast
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QListWidget,
     QPlainTextEdit, QFileDialog, QGroupBox, QTableWidget, QTableWidgetItem,
-    QMessageBox,
+    QMessageBox, QProgressBar,
 )
 
 from PycroFlow.services.experiment_service import ExperimentState
@@ -25,6 +26,14 @@ _CAN_RESUME = {ExperimentState.PAUSED}
 _CAN_ABORT = {ExperimentState.ORCHESTRATING, ExperimentState.RUNNING,
               ExperimentState.PAUSED}
 
+# States during which we poll the orchestrator for live progress.
+_ACTIVE_STATES = {ExperimentState.ORCHESTRATING, ExperimentState.RUNNING,
+                  ExperimentState.PAUSED}
+
+# Step-list shading.
+_FINISHED_COLOR = QColor("#e8f5e9")   # light green — completed
+_ACTIVE_COLOR = QColor("#fff59d")     # amber — currently executing
+
 
 class ExperimentTab(YamlDropMixin, QWidget):
     def __init__(self, service, bridge, parent=None):
@@ -37,7 +46,12 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # references into the loaded protocol, so editing them in the table
         # mutates the protocol the orchestrator runs.
         self._step_entries = []
+        # (system, index) per list row, aligned with _step_entries, for
+        # progress shading.
+        self._step_meta = []
         self._current_step = -1
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(500)
         self._build_ui()
         self._connect_signals()
         self._refresh_controls(self._service.state)
@@ -66,6 +80,25 @@ class ExperimentTab(YamlDropMixin, QWidget):
             controls.addWidget(b)
         controls.addStretch()
         layout.addLayout(controls)
+
+        # --- progress
+        prog_box = QGroupBox("Progress")
+        prog_layout = QVBoxLayout(prog_box)
+        overall_row = QHBoxLayout()
+        overall_row.addWidget(QLabel("Overall:"))
+        self.overall_bar = QProgressBar()
+        self.overall_bar.setRange(0, 100)
+        overall_row.addWidget(self.overall_bar)
+        prog_layout.addLayout(overall_row)
+        round_row = QHBoxLayout()
+        round_row.addWidget(QLabel("Rounds:"))
+        self.round_bar = QProgressBar()
+        self.round_bar.setRange(0, 100)
+        round_row.addWidget(self.round_bar)
+        prog_layout.addLayout(round_row)
+        self.step_status = QLabel("—")
+        prog_layout.addWidget(self.step_status)
+        layout.addWidget(prog_box)
 
         # --- step list + per-step parameters
         steps_box = QGroupBox("Protocol steps")
@@ -105,6 +138,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._bridge.log_message.connect(self._on_log)
         self.step_list.currentRowChanged.connect(self._on_step_selected)
         self.apply_btn.clicked.connect(self._on_apply)
+        self._poll_timer.timeout.connect(self._poll_progress)
 
     # --- service-driven commands
 
@@ -147,6 +181,14 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # so the view always reflects the active protocol.
         if new is ExperimentState.LOADED:
             self._populate_steps()
+        # Poll for live progress while the orchestrator runs; one immediate
+        # update so the bars reflect the new state right away.
+        if new in _ACTIVE_STATES:
+            if not self._poll_timer.isActive():
+                self._poll_timer.start()
+        else:
+            self._poll_timer.stop()
+        self._poll_progress()
 
     def _on_log(self, message):
         self.log_view.appendPlainText(message)
@@ -162,10 +204,11 @@ class ExperimentTab(YamlDropMixin, QWidget):
     def _populate_steps(self):
         self.step_list.clear()
         self._step_entries = []
+        self._step_meta = []
         protocol = self._service.protocol or {}
         # List each subsystem's steps, prefixed with the subsystem so the
-        # combined view is unambiguous. _step_entries stays aligned with the
-        # list rows so a selection can show the full entry.
+        # combined view is unambiguous. _step_entries / _step_meta stay
+        # aligned with the list rows (for the param view and progress shading).
         for system in ('fluid', 'img', 'illu'):
             sub = protocol.get(system, {})
             entries = (
@@ -178,9 +221,65 @@ class ExperimentTab(YamlDropMixin, QWidget):
                 self.step_list.addItem(
                     "[{}] {:d}: {}".format(system, i, type_))
                 self._step_entries.append(entry)
+                self._step_meta.append((system, i))
         self._current_step = -1
         self.step_table.setRowCount(0)
         self.apply_btn.setEnabled(False)
+
+    # --- live progress
+
+    def _poll_progress(self):
+        prog = self._service.progress()
+        if not prog:
+            return
+        done = sum(c for c, _ in prog.values())
+        total = sum(t for _, t in prog.values())
+        pct = int(100 * done / total) if total else 0
+        self.overall_bar.setValue(pct)
+        self.overall_bar.setFormat("{}/{} steps (%p%)".format(done, total))
+
+        parts = []
+        for key in ('fluid', 'img', 'illu'):
+            if key in prog:
+                cur, tot = prog[key]
+                parts.append("{} {}/{}".format(key, cur, tot))
+        self.step_status.setText("   ·   ".join(parts))
+
+        self._update_round_bar(prog.get('img'))
+        self._shade_steps(prog)
+
+    def _update_round_bar(self, img_prog):
+        protocol = self._service.protocol or {}
+        img = protocol.get('img', {})
+        entries = (
+            img.get('protocol_entries', []) if isinstance(img, dict) else [])
+        acquire_idx = [
+            i for i, e in enumerate(entries)
+            if isinstance(e, dict) and e.get('$type') == 'acquire']
+        total_rounds = len(acquire_idx)
+        if not total_rounds:
+            self.round_bar.setValue(0)
+            self.round_bar.setFormat("no imaging rounds")
+            return
+        cur = img_prog[0] if img_prog else 0
+        done_rounds = sum(1 for i in acquire_idx if i < cur)
+        self.round_bar.setValue(int(100 * done_rounds / total_rounds))
+        self.round_bar.setFormat(
+            "round {}/{}".format(done_rounds, total_rounds))
+
+    def _shade_steps(self, prog):
+        active = self._service.state in _ACTIVE_STATES
+        for row, (system, idx) in enumerate(self._step_meta):
+            item = self.step_list.item(row)
+            if item is None:
+                continue
+            cur, _ = prog.get(system, (0, 0))
+            if idx < cur:
+                item.setBackground(_FINISHED_COLOR)
+            elif idx == cur and active:
+                item.setBackground(_ACTIVE_COLOR)
+            else:
+                item.setBackground(QBrush())
 
     def _on_step_selected(self, row):
         """Show the selected step's parameters in the editable table."""
