@@ -182,24 +182,33 @@ class TestSystemService(unittest.TestCase):
         self.assertIs(result, sentinel)
         self.assertIs(svc.illumination_system, sentinel)
 
-    def test_connect_fluid_builds_and_connects(self):
-        cfg = {'system_type': 'legacy',
-               'interface': {'COM': '18', 'baud': 9600}}
-        sentinel = object()
-        with patch('PycroFlow.hamilton_architecture.connect') as conn, \
-                patch('PycroFlow.hamilton_architecture.LegacyArchitecture',
-                      return_value=sentinel):
-            svc = SystemService()
-            result = svc.connect_fluid(cfg, {'tube': 1})
-        conn.assert_called_once_with('18', 9600)
-        self.assertIs(result, sentinel)
-        self.assertIs(svc.fluid_system, sentinel)
-
-    def test_connect_fluid_rejects_non_legacy(self):
+    def test_connect_fluid_requires_setup(self):
         svc = SystemService()
-        with self.assertRaises(NotImplementedError):
-            svc.connect_fluid(
-                {'system_type': 'other', 'interface': {}}, {})
+        with self.assertRaises(RuntimeError):
+            svc.connect_fluid({'settings': {'reservoir_names': {}}})
+
+    def test_connect_fluid_emulated_builds_legacy(self):
+        # The Emulator setup connects the real LegacyArchitecture over the
+        # fake serial wire emulator; design parameters are seeded so manual
+        # ops work immediately.
+        from PycroFlow.fluid.legacy import LegacyArchitecture
+        svc = SystemService()
+        svc.load_setup('Emulator')
+        fluid = {
+            'parameters': {'max_velocity': 200, 'clean_velocity': 200},
+            'settings': {'reservoir_names': {1: 'R1', 7: 'C+'},
+                         'special_names': {'flushbuffer_a': 7}},
+        }
+        fs = svc.connect_fluid(fluid)
+        self.assertIsInstance(fs, LegacyArchitecture)
+        self.assertIs(svc.fluid_system, fs)
+        self.assertEqual(fs.parameters['max_velocity'], 200)
+
+    def test_load_setup_and_monet_name(self):
+        svc = SystemService()
+        svc.load_setup('Emulator')
+        self.assertTrue(svc.is_emulated())
+        self.assertEqual(svc.get_monet_setup(), 'Emulator')
 
 
 if __name__ == '__main__':

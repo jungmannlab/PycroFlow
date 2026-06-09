@@ -1,18 +1,18 @@
-"""System tab: per-subsystem connection state + connect actions.
+"""System tab: choose a microscope setup + connect the subsystems.
 
-The first tab in the GUI. Shows whether the fluid, imaging and illumination
-systems are connected and lets the user initiate each connection. The
-connect logic lives in :class:`PycroFlow.services.system_service.SystemService`
+The first tab in the GUI. Pick a per-microscope **setup** (which also drives
+the Monet tab), then connect the fluid / imaging / illumination systems. The
+connect logic lives in :class:`PycroFlow.services.SystemService`
 (frontend-agnostic); on success the connected systems are mirrored into the
-:class:`PycroFlow.services.experiment_service.ExperimentService` so a
-subsequent run builds the orchestrator with them.
+:class:`PycroFlow.services.ExperimentService`. Choosing the ``Emulator`` setup
+connects emulated hardware so the whole app works without instruments.
 """
-import os
-
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QGridLayout, QLabel, QPushButton, QGroupBox,
-    QFileDialog, QMessageBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
+    QGroupBox, QComboBox, QMessageBox,
 )
+
+from PycroFlow import configs
 
 
 _CONNECTED_STYLE = "color: green; font-weight: bold;"
@@ -25,9 +25,10 @@ class SystemTab(QWidget):
         self._svc = system_service
         self._experiment_service = experiment_service
         self._status_labels = {}
-        # Callbacks fired after a successful connect, so sibling tabs
-        # (Fluid, Imaging) can refresh their own status displays.
+        # Fired after a successful connect (sibling tabs refresh status).
         self._connection_listeners = []
+        # Fired after a setup is loaded, with the setup name (Monet tab).
+        self._setup_listeners = []
         self._build_ui()
         self.refresh()
 
@@ -35,15 +36,32 @@ class SystemTab(QWidget):
         """Register a no-arg callback fired after a successful connect."""
         self._connection_listeners.append(fn)
 
+    def add_setup_listener(self, fn):
+        """Register a callback fired with the setup name when one is loaded."""
+        self._setup_listeners.append(fn)
+
     def _build_ui(self):
         layout = QVBoxLayout(self)
+
+        setup_box = QGroupBox("Microscope setup")
+        srow = QHBoxLayout(setup_box)
+        srow.addWidget(QLabel("Setup:"))
+        self.setup_combo = QComboBox()
+        self.setup_combo.addItems(configs.list_setups())
+        srow.addWidget(self.setup_combo)
+        self.load_setup_btn = QPushButton("Load setup")
+        srow.addWidget(self.load_setup_btn)
+        self.setup_status = QLabel("no setup loaded")
+        srow.addWidget(self.setup_status)
+        srow.addStretch()
+        layout.addWidget(setup_box)
+        self.load_setup_btn.clicked.connect(self._on_load_setup)
 
         box = QGroupBox("System connections")
         grid = QGridLayout(box)
         grid.addWidget(QLabel("<b>System</b>"), 0, 0)
         grid.addWidget(QLabel("<b>Status</b>"), 0, 1)
         grid.addWidget(QLabel("<b>Action</b>"), 0, 2)
-
         rows = [
             ("fluid", "Fluid (Hamilton)", self._on_connect_fluid),
             ("imaging", "Imaging (Micro-Manager)", self._on_connect_imaging),
@@ -58,7 +76,6 @@ class SystemTab(QWidget):
             btn = QPushButton("Connect…")
             btn.clicked.connect(handler)
             grid.addWidget(btn, r, 2)
-
         layout.addWidget(box)
         layout.addStretch()
 
@@ -71,44 +88,70 @@ class SystemTab(QWidget):
             label.setStyleSheet(
                 _CONNECTED_STYLE if connected else _DISCONNECTED_STYLE)
 
+    # --- setup --------------------------------------------------------
+
+    def _on_load_setup(self):
+        name = self.setup_combo.currentText()
+        if not name:
+            return
+        try:
+            self._svc.load_setup(name)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Setup load failed", "{}".format(exc))
+            return
+        suffix = " (emulated)" if self._svc.is_emulated() else ""
+        self.setup_status.setText("loaded: {}{}".format(name, suffix))
+        for fn in self._setup_listeners:
+            try:
+                fn(self._svc.get_monet_setup())
+            except Exception:
+                pass
+
     # --- connect handlers ---------------------------------------------
 
+    def _fluid_section(self):
+        design = getattr(self._experiment_service, 'experiment_design', None)
+        if design:
+            return design.get('fluid')
+        return None
+
     def _on_connect_fluid(self):
-        hamilton = self._resolve_config(
-            "hamilton_config.yaml", "Select Hamilton system config")
-        if hamilton is None:
+        if self._svc.setup is None:
+            self._need_setup()
             return
-        tubing = self._resolve_config(
-            "tubing_config.yaml", "Select Hamilton tubing config")
-        if tubing is None:
+        fluid = self._fluid_section()
+        if not fluid or not fluid.get('settings'):
+            QMessageBox.warning(
+                self, "No experiment design",
+                "Load or translate an experiment design first — the fluid "
+                "system needs its reservoir list.")
             return
-        self._do_connect(
-            lambda: self._svc.connect_fluid(hamilton, tubing), "fluid")
+        self._do_connect(lambda: self._svc.connect_fluid(fluid), "fluid")
 
     def _on_connect_imaging(self):
-        imaging = self._resolve_config(
-            "imaging_config.yaml", "Select imaging config")
-        if imaging is None:
+        if self._svc.setup is None:
+            self._need_setup()
             return
-        self._do_connect(
-            lambda: self._svc.connect_imaging(imaging), "imaging")
+        if self._svc.is_emulated():
+            self._do_connect(self._svc.connect_imaging, "imaging")
+            return
+        design = getattr(
+            self._experiment_service, 'experiment_design', None) or {}
+        cfg = configs.assemble_imaging_config(self._svc.setup, design)
+        self._do_connect(lambda: self._svc.connect_imaging(cfg), "imaging")
 
     def _on_connect_illumination(self):
-        # IlluminationSystem needs no config at construction; the monet
-        # control loads when a protocol with an illumination 'setup' runs.
+        if self._svc.setup is None:
+            self._need_setup()
+            return
         self._do_connect(self._svc.connect_illumination, "illumination")
 
     # --- helpers ------------------------------------------------------
 
-    def _resolve_config(self, default_name, dialog_title):
-        """Ask for a config file, pre-selecting the cwd default if present.
-
-        Returns the chosen path, or None if the user cancels.
-        """
-        start = default_name if os.path.exists(default_name) else ""
-        path, _ = QFileDialog.getOpenFileName(
-            self, dialog_title, start, "YAML files (*.yaml *.yml)")
-        return path or None
+    def _need_setup(self):
+        QMessageBox.warning(
+            self, "No setup", "Load a microscope setup first.")
 
     def _do_connect(self, connect_call, key):
         try:
@@ -128,12 +171,6 @@ class SystemTab(QWidget):
                 pass
 
     def _mirror_to_experiment_service(self):
-        """Push the connected systems into the ExperimentService.
-
-        Best-effort: if an experiment is already active the attach is
-        refused, but the connection still stands on the SystemService for
-        manual control.
-        """
         if self._experiment_service is None:
             return
         try:

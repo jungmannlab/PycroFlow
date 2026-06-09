@@ -6,7 +6,7 @@ reaches into private attributes of the fluid system.
 """
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
-    QGroupBox, QFormLayout,
+    QGroupBox, QFormLayout, QMessageBox,
 )
 
 
@@ -61,7 +61,14 @@ class FluidTab(QWidget):
         self._svc.fill_tubings()
 
     def _on_clean(self):
-        self._svc.clean_tubings()
+        reply = QMessageBox.question(
+            self, "Clean tubings",
+            "Start the tubing cleaning procedure?\n\n"
+            "Make sure the input and output needles are in the same "
+            "container (fluidly connected) and cleaning reservoirs are "
+            "connected to their tanks.")
+        if reply == QMessageBox.StandardButton.Yes:
+            self._svc.clean_tubings()
 
     def _on_stop(self):
         # Always safe; SystemService.stop_all_moves swallows errors.

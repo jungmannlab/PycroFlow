@@ -101,35 +101,41 @@ class TestMainWindow(unittest.TestCase):
 
     def test_builds_tabs(self):
         w = self._build()
-        self.assertEqual(w.tabs.count(), 5)
+        self.assertEqual(w.tabs.count(), 6)
         self.assertEqual(
-            [w.tabs.tabText(i) for i in range(5)],
-            ['System', 'Experiment', 'Fluid', 'Imaging', 'Monet'])
+            [w.tabs.tabText(i) for i in range(6)],
+            ['System', 'Experiment Design', 'Run Sequence', 'Fluid',
+             'Imaging', 'Monet'])
 
     def test_experiment_tab_reflects_state(self):
         from PycroFlow.examples.demo_protocols import protocol
         w = self._build()
-        w.experiment_tab._service.load_protocol(protocol)
+        w.run_sequence_tab._service.load_protocol(protocol)
         # The bridge updates the label synchronously (same thread).
-        self.assertEqual(w.experiment_tab.state_label.text(), 'loaded')
+        self.assertEqual(w.run_sequence_tab.state_label.text(), 'loaded')
         # Step list populated from the fluid protocol entries.
-        self.assertGreater(w.experiment_tab.step_list.count(), 0)
+        self.assertGreater(w.run_sequence_tab.step_list.count(), 0)
+
+    @staticmethod
+    def _table_dict(tab):
+        return {
+            tab.step_table.item(r, 0).text(): tab.step_table.item(r, 1).text()
+            for r in range(tab.step_table.rowCount())
+        }
 
     def test_experiment_tab_shows_step_parameters(self):
         from PycroFlow.examples.demo_protocols import protocol
         w = self._build()
-        tab = w.experiment_tab
+        tab = w.run_sequence_tab
         tab._service.load_protocol(protocol)
         self.assertGreater(tab.step_list.count(), 0)
-        # Selecting a step shows that entry's parameters in the side box.
+        # Selecting a step shows that entry's parameters in the table.
         tab.step_list.setCurrentRow(0)
         entry = tab._step_entries[0]
-        shown = tab.step_params.toPlainText()
-        self.assertIn("$type: {}".format(entry['$type']), shown)
-        for key, value in entry.items():
-            if key == '$type':
-                continue
-            self.assertIn("{}: {}".format(key, value), shown)
+        shown = self._table_dict(tab)
+        self.assertEqual(shown.get('$type'), str(entry['$type']))
+        for key in entry:
+            self.assertIn(key, shown)
 
     def test_close_event_is_safe(self):
         from PyQt6.QtGui import QCloseEvent
@@ -162,7 +168,7 @@ class TestMainWindow(unittest.TestCase):
             'illu': {'protocol_entries': [
                 {'$type': 'set power', 'laser': 560, 'power': 30}]},
         }
-        tab = w.experiment_tab
+        tab = w.run_sequence_tab
         tab._service.load_protocol(proto)
         items = [tab.step_list.item(i).text()
                  for i in range(tab.step_list.count())]
@@ -171,12 +177,62 @@ class TestMainWindow(unittest.TestCase):
             '[img] 0: acquire',
             '[illu] 0: set power',
         ])
-        # Selecting the img step shows its parameters.
+        # Selecting the img step shows its parameters in the table.
         tab.step_list.setCurrentRow(1)
-        shown = tab.step_params.toPlainText()
-        self.assertIn('$type: acquire', shown)
-        self.assertIn('frames: 10', shown)
-        self.assertIn('t_exp: 100', shown)
+        shown = self._table_dict(tab)
+        self.assertEqual(shown['$type'], 'acquire')
+        self.assertEqual(shown['frames'], '10')
+        self.assertEqual(shown['t_exp'], '100')
+
+    def _load_inject(self, tab):
+        proto = {'fluid': {'protocol_entries': [
+            {'$type': 'inject', 'reservoir_id': 1, 'volume': 100}]}}
+        tab._service.load_protocol(proto)
+        tab.step_list.setCurrentRow(0)
+
+    def _set_cell(self, tab, key, text):
+        for r in range(tab.step_table.rowCount()):
+            if tab.step_table.item(r, 0).text() == key:
+                tab.step_table.item(r, 1).setText(text)
+                return
+        self.fail("no row for key {!r}".format(key))
+
+    def test_experiment_tab_edit_writes_back_to_protocol(self):
+        w = self._build()
+        tab = w.run_sequence_tab
+        self._load_inject(tab)
+        self._set_cell(tab, 'volume', '250')
+        tab._on_apply()
+        # _step_entries[0] is a reference into the loaded protocol, so both
+        # the cached entry and the service's protocol are updated, as int.
+        self.assertEqual(tab._step_entries[0]['volume'], 250)
+        stored = tab._service.protocol['fluid']['protocol_entries'][0]
+        self.assertEqual(stored['volume'], 250)
+        self.assertIsInstance(stored['volume'], int)
+
+    def test_experiment_tab_invalid_edit_reported_and_skipped(self):
+        from unittest.mock import patch
+        from PycroFlow.gui.tabs import experiment_tab as et
+        w = self._build()
+        tab = w.run_sequence_tab
+        self._load_inject(tab)
+        self._set_cell(tab, 'volume', 'not-a-number')
+        with patch.object(et.QMessageBox, 'warning') as warn:
+            tab._on_apply()
+        warn.assert_called_once()
+        self.assertEqual(tab._step_entries[0]['volume'], 100)
+
+    def test_experiment_tab_type_field_not_editable(self):
+        from PyQt6.QtCore import Qt
+        w = self._build()
+        tab = w.run_sequence_tab
+        self._load_inject(tab)
+        for r in range(tab.step_table.rowCount()):
+            if tab.step_table.item(r, 0).text() == '$type':
+                flags = tab.step_table.item(r, 1).flags()
+                self.assertFalse(bool(flags & Qt.ItemFlag.ItemIsEditable))
+                return
+        self.fail("no $type row")
 
 
 @unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
@@ -250,6 +306,10 @@ class TestSystemTab(unittest.TestCase):
         svc.fluid_system = connected.get('fluid')
         svc.imaging_system = connected.get('imaging')
         svc.illumination_system = connected.get('illumination')
+        # A setup is loaded by default (truthy); tests that need "no setup"
+        # set svc.setup = None.
+        svc.setup = connected.get('setup', object())
+        svc.is_emulated.return_value = connected.get('emulated', False)
 
         def _states():
             return {
@@ -285,34 +345,71 @@ class TestSystemTab(unittest.TestCase):
         self.assertEqual(
             tab._status_labels['illumination'].text(), 'Connected')
 
-    def test_connect_imaging_uses_file_dialog(self):
-        from unittest.mock import patch
-        from PycroFlow.gui.tabs import system_tab as st
-        svc = self._svc()
+    def test_connect_imaging_emulated_calls_service(self):
+        from PycroFlow.gui.tabs.system_tab import SystemTab
+        svc = self._svc(emulated=True)
 
-        def _connect(path):
+        def _connect(*a, **k):
             svc.imaging_system = object()
         svc.connect_imaging.side_effect = _connect
 
-        tab = st.SystemTab(svc)
-        with patch.object(st.QFileDialog, 'getOpenFileName',
-                          return_value=('/tmp/imaging_config.yaml', '')):
-            tab._on_connect_imaging()
-
-        svc.connect_imaging.assert_called_once_with(
-            '/tmp/imaging_config.yaml')
+        tab = SystemTab(svc)
+        tab._on_connect_imaging()
+        svc.connect_imaging.assert_called_once()
         self.assertEqual(
             tab._status_labels['imaging'].text(), 'Connected')
 
-    def test_connect_cancelled_does_nothing(self):
+    def test_connect_requires_setup(self):
         from unittest.mock import patch
         from PycroFlow.gui.tabs import system_tab as st
-        svc = self._svc()
+        svc = self._svc(setup=None)
         tab = st.SystemTab(svc)
-        with patch.object(st.QFileDialog, 'getOpenFileName',
-                          return_value=('', '')):
-            tab._on_connect_imaging()
-        svc.connect_imaging.assert_not_called()
+        with patch.object(st.QMessageBox, 'warning') as warn:
+            tab._on_connect_illumination()
+        warn.assert_called_once()
+        svc.connect_illumination.assert_not_called()
+
+    def test_connect_fluid_requires_design(self):
+        from unittest.mock import MagicMock, patch
+        from PycroFlow.gui.tabs import system_tab as st
+        svc = self._svc()
+        exp = MagicMock(name='experiment_service')
+        exp.experiment_design = None
+        tab = st.SystemTab(svc, exp)
+        with patch.object(st.QMessageBox, 'warning') as warn:
+            tab._on_connect_fluid()
+        warn.assert_called_once()
+        svc.connect_fluid.assert_not_called()
+
+    def test_connect_fluid_passes_design_fluid_section(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.gui.tabs.system_tab import SystemTab
+        svc = self._svc()
+        exp = MagicMock(name='experiment_service')
+        fluid = {'settings': {'reservoir_names': {1: 'R1'}},
+                 'parameters': {'max_velocity': 200}}
+        exp.experiment_design = {'fluid': fluid}
+
+        def _connect(arg):
+            svc.fluid_system = object()
+        svc.connect_fluid.side_effect = _connect
+
+        tab = SystemTab(svc, exp)
+        tab._on_connect_fluid()
+        svc.connect_fluid.assert_called_once_with(fluid)
+        self.assertEqual(tab._status_labels['fluid'].text(), 'Connected')
+
+    def test_load_setup_fires_setup_listener(self):
+        from PycroFlow.gui.tabs.system_tab import SystemTab
+        svc = self._svc()
+        svc.get_monet_setup.return_value = 'Emulator'
+        tab = SystemTab(svc)
+        seen = []
+        tab.add_setup_listener(lambda name: seen.append(name))
+        tab.setup_combo.setCurrentText('Emulator')
+        tab._on_load_setup()
+        svc.load_setup.assert_called_once_with('Emulator')
+        self.assertEqual(seen, ['Emulator'])
 
     def test_connect_failure_shows_message_and_stays_disconnected(self):
         from unittest.mock import patch
@@ -351,6 +448,123 @@ class TestSystemTab(unittest.TestCase):
         with patch.object(st.QMessageBox, 'critical'):
             tab._on_connect_illumination()
         self.assertEqual(calls, [])
+
+
+def _example_design():
+    import PycroFlow
+    from PycroFlow.services import ExperimentService
+    path = os.path.join(
+        os.path.dirname(PycroFlow.__file__), 'examples', 'sph_resi_6plex.yaml')
+    return ExperimentService().load_experiment_design(path), path
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestSchemaForm(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_roundtrip_and_validate(self):
+        from PycroFlow.gui.widgets.schema_form import SchemaForm
+        from PycroFlow.schemas.experiment_design import ExperimentDesign
+        design, _ = _example_design()
+        form = SchemaForm(ExperimentDesign, design)
+        model = form.to_model()
+        self.assertEqual(model.fluid.settings.experiment.type, 'SPH-RESI')
+        d = form.to_dict()
+        tr = d['fluid']['settings']['experiment']['target-rounds']['A1']
+        self.assertEqual(len(tr['RESI-rounds']), 6)
+
+    def test_list_model_editor_add_remove(self):
+        from PycroFlow.gui.widgets.schema_form import _ListModelEditor
+        from PycroFlow.schemas.experiment_design import ResiRound
+        ed = _ListModelEditor(
+            ResiRound, [{'adapter': 'a', 'adapter_incubation': 1}], 'RESI')
+        self.assertEqual(len(ed.get_value()), 1)
+        ed._add_item({'adapter': 'b', 'adapter_incubation': 2})
+        self.assertEqual(len(ed.get_value()), 2)
+        ed._remove(ed._items[0])
+        self.assertEqual(len(ed.get_value()), 1)
+        self.assertEqual(ed.get_value()[0]['adapter'], 'b')
+
+    def test_scalar_defaults_seeded(self):
+        from PycroFlow.gui.widgets.schema_form import SchemaForm
+        from PycroFlow.schemas.experiment_design import FluidParameters
+        form = SchemaForm(FluidParameters, {})
+        self.assertEqual(form.to_dict()['mode'], 'tubing_ignore')
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestExperimentDesignTab(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_load_and_translate(self):
+        from PycroFlow.services import ExperimentService
+        from PycroFlow.gui.tabs.experiment_design_tab import (
+            ExperimentDesignTab)
+        _, path = _example_design()
+        svc = ExperimentService()
+        translated = []
+        tab = ExperimentDesignTab(
+            svc, on_translated=lambda: translated.append(1))
+        tab.load_design_path(path)
+        self.assertEqual(
+            svc.experiment_design['fluid']['settings']['experiment']['type'],
+            'SPH-RESI')
+        tab._on_translate()
+        self.assertEqual(svc.state.value, 'loaded')
+        self.assertEqual(translated, [1])
+
+    def test_drag_drop_loads_design(self):
+        from PycroFlow.services import ExperimentService
+        from PycroFlow.gui.tabs.experiment_design_tab import (
+            ExperimentDesignTab)
+        _, path = _example_design()
+        svc = ExperimentService()
+        tab = ExperimentDesignTab(svc)
+        tab.on_yaml_dropped(path)
+        self.assertIsNotNone(svc.experiment_design)
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestMonetSetSetup(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def tearDown(self):
+        sys.modules.pop('monet', None)
+        sys.modules.pop('monet.gui', None)
+        from PycroFlow.tests._mock_hardware import install_hardware_mocks
+        install_hardware_mocks()
+
+    def test_set_setup_passes_microscope(self):
+        from PyQt6.QtWidgets import QWidget
+        fake_monet = types.ModuleType('monet')
+        fake_gui = types.ModuleType('monet.gui')
+
+        class FakeMonetWidget(QWidget):
+            def __init__(self, initial_microscope=None):
+                super().__init__()
+                self.initial_microscope = initial_microscope
+
+        fake_gui.MonetWidget = FakeMonetWidget
+        fake_monet.gui = fake_gui
+        sys.modules['monet'] = fake_monet
+        sys.modules['monet.gui'] = fake_gui
+
+        from PycroFlow.gui.tabs.monet_tab import MonetTab
+        tab = MonetTab()
+        tab.set_setup('Mercury')
+        self.assertEqual(tab._monet_window.initial_microscope, 'Mercury')
 
 
 if __name__ == '__main__':

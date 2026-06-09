@@ -978,6 +978,7 @@ class LegacyArchitecture(AbstractSystem):
         delay=None,
         mode="chain",
         max_reservoir_vol=None,
+        confirm=True,
     ):
         """Clean all tubings by pumping cleaning liquids through paths.
 
@@ -986,6 +987,10 @@ class LegacyArchitecture(AbstractSystem):
         cleaning_reservoirs : list of int
             Reservoir IDs connected to cleaning liquid tanks, in the order
             they should be used for cleaning.
+        confirm : bool, default: True
+            Block on a terminal ``input()`` confirmation before starting.
+            Pass ``False`` from a GUI (which must confirm via its own dialog),
+            so cleaning never blocks on / crashes for missing stdin.
         extra_vol : int, default: 100
             Volume in ul beyond the tubing volume to push through each path.
         velocity : int or None
@@ -1096,7 +1101,8 @@ class LegacyArchitecture(AbstractSystem):
             "Make sure input and output needles are in the same "
             "container (fluidly connected)."
         )
-        input("Press Enter to confirm and continue...")
+        if confirm:
+            input("Press Enter to confirm and continue...")
 
         # Pre-empty: push leftover protocol liquid out of all reservoirs
         if max_reservoir_vol is not None:

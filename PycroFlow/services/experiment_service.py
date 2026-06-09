@@ -65,6 +65,7 @@ class ExperimentService:
         self._imaging_system = imaging_system
         self._fluid_system = fluid_system
         self._illumination_system = illumination_system
+        self._experiment_design: Optional[Dict] = None
         self._protocol: Optional[Dict] = None
         self._orchestrator: Optional[ProtocolOrchestrator] = None
         self._state = ExperimentState.IDLE
@@ -104,6 +105,54 @@ class ExperimentService:
         self._fluid_system = fluid_system
         self._imaging_system = imaging_system
         self._illumination_system = illumination_system
+
+    # --- Experiment design (high-level) -------------------------------
+
+    def load_experiment_design(self, source) -> Dict:
+        """Load + validate a high-level experiment design.
+
+        Parameters
+        ----------
+        source : dict or str
+            A design dict (e.g. from the GUI editor) or a path to a design
+            YAML file.
+
+        Returns
+        -------
+        dict
+            The validated design (with on-disk/aliased keys), stored for
+            :meth:`translate`.
+        """
+        from PycroFlow.schemas import validate_experiment_design
+
+        if isinstance(source, str):
+            with open(source) as f:
+                data = yaml.safe_load(f)
+        else:
+            data = source
+        model = validate_experiment_design(data)
+        self._experiment_design = model.model_dump(by_alias=True)
+        return self._experiment_design
+
+    @property
+    def experiment_design(self) -> Optional[Dict]:
+        return self._experiment_design
+
+    def translate(self) -> Dict:
+        """Compile the loaded design into a Run Sequence and load it.
+
+        Returns
+        -------
+        dict
+            The compiled protocol (also loaded via :meth:`load_protocol`).
+        """
+        if self._experiment_design is None:
+            raise RuntimeError("no experiment design loaded")
+        from PycroFlow.protocols import ProtocolBuilder
+
+        protocol = ProtocolBuilder().build_protocol(self._experiment_design)
+        self.load_protocol(protocol)
+        return protocol
 
     # --- Protocol loading ---------------------------------------------
 

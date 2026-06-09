@@ -1,12 +1,12 @@
 """Emulated orchestration subsystems (:class:`AbstractSystem` implementations).
 
 These stand in for the real ``FluidSystem`` / ``ImagingSystem`` /
-``IlluminationSystem`` when driving the :class:`ProtocolOrchestrator` in a test.
-Unlike a bare ``MagicMock`` they:
+``IlluminationSystem`` when driving the :class:`ProtocolOrchestrator` in a
+test. Unlike a bare ``MagicMock`` they:
 
 * implement the full :class:`~PycroFlow.orchestration.AbstractSystem` contract,
-* honour the pause / resume / abort flags so pause-resume and abort paths can be
-  exercised deterministically,
+* honour the pause / resume / abort flags so pause-resume and abort paths can
+  be exercised deterministically,
 * record every executed entry in ``executed`` for assertions.
 
 ``EmulatedFluidSystem`` optionally drives an :class:`EmulatedPump` /
@@ -63,6 +63,9 @@ class EmulatedImagingSystem(_BaseEmulatedSystem):
         if entry.get('$type') == 'acquire':
             self.acquisitions.append(entry)
 
+    def close(self):
+        """No-op cleanup (matches ImagingSystem.close for SystemService)."""
+
 
 class EmulatedIlluminationSystem(_BaseEmulatedSystem):
     """Records laser power / shutter changes instead of talking to monet."""
@@ -71,6 +74,7 @@ class EmulatedIlluminationSystem(_BaseEmulatedSystem):
         super().__init__()
         self.power = None
         self.laser = None
+        self.enabled = {}
         self.shutter_open = False
 
     def _on_entry(self, entry):
@@ -80,6 +84,17 @@ class EmulatedIlluminationSystem(_BaseEmulatedSystem):
             self.laser = entry.get('laser', self.laser)
         elif t == 'set shutter':
             self.shutter_open = bool(entry.get('state'))
+
+    # Manual-control surface (matches IlluminationSystem) so the GUI/CLI
+    # SystemService laser controls work against the emulator.
+    def set_laser(self, laser):
+        self.laser = laser
+
+    def set_laser_enabled(self, laser, enabled=True):
+        self.enabled[laser] = enabled
+
+    def set_sample_power(self, power, warmup_delay=0):
+        self.power = power
 
 
 class EmulatedFluidSystem(_BaseEmulatedSystem):

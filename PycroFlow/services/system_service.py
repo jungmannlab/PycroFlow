@@ -48,6 +48,41 @@ class SystemService:
         self.fluid_system = fluid_system
         self.imaging_system = imaging_system
         self.illumination_system = illumination_system
+        self._setup = None
+        self._setup_name = None
+
+    # --- Setup (per-microscope hardware) -------------------------------
+
+    def load_setup(self, name):
+        """Load a per-microscope setup (hardware) config by name.
+
+        Parameters
+        ----------
+        name : str
+            Setup name (e.g. ``'Mercury'`` / ``'Emulator'``) or a path.
+
+        Returns
+        -------
+        dict
+            The parsed setup config.
+        """
+        from PycroFlow.configs import load_setup
+
+        self._setup = load_setup(name)
+        self._setup_name = self._setup.get('setup', name)
+        return self._setup
+
+    @property
+    def setup(self):
+        return self._setup
+
+    def get_monet_setup(self):
+        """Return the setup name (a ``monet.CONFIGS`` key) for Monet."""
+        return self._setup_name
+
+    def is_emulated(self) -> bool:
+        """Whether the loaded setup runs against emulated hardware."""
+        return bool(self._setup and self._setup.get('emulated'))
 
     # --- Connection ----------------------------------------------------
 
@@ -66,68 +101,111 @@ class SystemService:
             'illumination': self.illumination_system is not None,
         }
 
-    def connect_fluid(self, hamilton_config, tubing_config):
+    def connect_fluid(self, fluid):
         """Build and connect the Hamilton (legacy) fluid system.
+
+        Merges the loaded setup's hardware wiring with the experiment's
+        reservoir choices (``configs.assemble_hamilton_config``). For an
+        emulated setup the *real* drivers run over the fake serial wire
+        emulator, so fill/clean/manual-pump all work without instruments.
+
+        The design's fluid ``parameters`` are assigned to the system on
+        connect (as an empty protocol) so manual controls (fill/clean/pump)
+        work immediately, before any Run Sequence is loaded.
 
         Parameters
         ----------
-        hamilton_config : str or dict
-            Hamilton system config (path to YAML or parsed dict). Must
-            carry an ``interface`` (COM/baud) and ``system_type == 'legacy'``.
-        tubing_config : str or dict
-            Tubing config (path to YAML or parsed dict).
+        fluid : dict
+            The experiment design's ``fluid`` section (with ``settings`` —
+            needs ``reservoir_names`` — and optional ``parameters``). A bare
+            settings dict is also accepted.
 
         Returns
         -------
         object
             The constructed fluid system.
         """
+        if self._setup is None:
+            raise RuntimeError("no setup loaded; call load_setup first")
+        from PycroFlow.configs import assemble_hamilton_config
         import PycroFlow.hamilton_architecture as ha
 
-        hcfg = _load_yaml_or_dict(hamilton_config)
-        tcfg = _load_yaml_or_dict(tubing_config)
-        if hcfg.get('system_type') != 'legacy':
+        if 'settings' in fluid:
+            settings = fluid['settings']
+            parameters = fluid.get('parameters', {})
+        else:  # a bare settings dict
+            settings = fluid
+            parameters = {}
+
+        hamilton, tubing = assemble_hamilton_config(self._setup, settings)
+        if hamilton.get('system_type') != 'legacy':
             raise NotImplementedError(
                 "system_type {!r} is not implemented".format(
-                    hcfg.get('system_type')))
-        interface = hcfg['interface']
-        ha.connect(interface['COM'], interface['baud'])
-        self.fluid_system = ha.LegacyArchitecture(hcfg, tcfg)
+                    hamilton.get('system_type')))
+        interface = hamilton['interface']
+
+        if self.is_emulated():
+            from PycroFlow.tests.emulators import patch_serial
+            with patch_serial():
+                ha.connect(interface['COM'], interface['baud'])
+                self.fluid_system = ha.LegacyArchitecture(hamilton, tubing)
+        else:
+            ha.connect(interface['COM'], interface['baud'])
+            self.fluid_system = ha.LegacyArchitecture(hamilton, tubing)
+
+        # Seed parameters so manual fill/clean/pump work before a Run
+        # Sequence is loaded; translate later re-assigns the full protocol.
+        self.fluid_system._assign_protocol(
+            {'parameters': dict(parameters), 'protocol_entries': []})
         return self.fluid_system
 
-    def connect_imaging(self, imaging_config):
+    def connect_imaging(self, imaging_config=None):
         """Build and connect the imaging system.
+
+        For an emulated setup an :class:`EmulatedImagingSystem` is built and
+        ``imaging_config`` is ignored. Otherwise a real
+        :class:`PycroFlow.imaging.ImagingSystem` is built from
+        ``imaging_config`` (assemble it with
+        :func:`PycroFlow.configs.assemble_imaging_config`).
 
         Parameters
         ----------
-        imaging_config : str or dict
-            Imaging config (path to YAML or parsed dict).
+        imaging_config : str or dict, optional
+            Imaging config (path or dict). Required for a real setup.
 
         Returns
         -------
         object
             The constructed imaging system.
         """
-        import PycroFlow.imaging as im
-
-        self.imaging_system = im.ImagingSystem(
-            _load_yaml_or_dict(imaging_config))
+        if self.is_emulated():
+            from PycroFlow.tests.emulators import EmulatedImagingSystem
+            self.imaging_system = EmulatedImagingSystem()
+        else:
+            import PycroFlow.imaging as im
+            self.imaging_system = im.ImagingSystem(
+                _load_yaml_or_dict(imaging_config))
         return self.imaging_system
 
     def connect_illumination(self):
         """Build the illumination system.
 
-        No config is needed at construction; the monet laser control loads
-        when a protocol carrying an illumination ``setup`` is assigned.
+        For an emulated setup an :class:`EmulatedIlluminationSystem` is built.
+        Otherwise a real :class:`PycroFlow.illumination.IlluminationSystem`
+        is built; its monet control loads when a protocol carrying an
+        illumination ``setup`` is assigned.
 
         Returns
         -------
         object
             The constructed illumination system.
         """
-        import PycroFlow.illumination as il
-
-        self.illumination_system = il.IlluminationSystem()
+        if self.is_emulated():
+            from PycroFlow.tests.emulators import EmulatedIlluminationSystem
+            self.illumination_system = EmulatedIlluminationSystem()
+        else:
+            import PycroFlow.illumination as il
+            self.illumination_system = il.IlluminationSystem()
         return self.illumination_system
 
     # --- Fluid ---------------------------------------------------------
@@ -137,8 +215,10 @@ class SystemService:
         self.fluid_system.fill_tubings()
 
     def clean_tubings(self) -> None:
+        # confirm=False: no terminal prompt — GUI callers confirm via a
+        # dialog before calling, and there is no stdin to block on.
         self._require('fluid_system')
-        self.fluid_system.clean_tubings()
+        self.fluid_system.clean_tubings(confirm=False)
 
     def deliver_fluid(self, reservoir_id: int, volume: float) -> None:
         self._require('fluid_system')

@@ -1,0 +1,90 @@
+# Example high-level Experiment Design (SPH-RESI, 6 RESI rounds).
+#
+# Hardware-free: this is the experiment intent only. Pair it with a setup
+# (e.g. Mercury or Emulator) in the GUI / services, then Translate it into a
+# Run Sequence. Derived from the legacy start_experiment.py.
+
+base_name: 260518_red_2xBC_SPH_6plex_kon9e5_C+
+save_dir: '.'
+
+fluid:
+  parameters:
+    start_velocity: 500
+    max_velocity: 10000
+    stop_velocity: 500
+    pumpout_dispense_velocity: 290000
+    clean_velocity: 10000
+    clean_delay: 10
+    mode: tubing_ignore
+    extractionfactor: 10
+    inject_pickup_extravol: 0
+    inject_in_to_out_delay: 2
+    inject_out_to_in_delay: 2
+    inject_precreate_underpressure: false
+  settings:
+    vol_wash: 50
+    vol_reagent: 20
+    vol_remove_before_flush: 200
+    wait_after_pickup: 0
+    wash_buffer_1: C+
+    wash_buffer_2: null
+    reservoir_names:
+      1: A1-c3
+      2: A1-c2
+      3: A1-c1
+      4: R4-Ali
+      5: R1-A1
+      6: R6-BC
+      7: C+
+      14: Blocker_R1
+    special_names:
+      flushbuffer_a: 7
+      h2o: 16
+    cleaning_reservoirs: [h2o]
+    experiment:
+      type: SPH-RESI
+      wash_buffer_1: C+
+      wash_buffer_2: null
+      blocker: Blocker_R1
+      blocker_incubation: 1
+      initial_imager_present: false
+      round0:
+        round0_imager: R4-Ali
+        frames_round0: 10000
+      target-rounds:
+        A1:
+          BC_imager_pre: R6-BC
+          frames_BC_pre: 40000
+          BC_imager_post: R6-BC
+          frames_BC_post: 10
+          RESI-imager: R1-A1
+          RESI-frames: 20000
+          RESI-rounds:
+            - {adapter: A1-c1, adapter_incubation: 3.83}
+            - {adapter: A1-c1, adapter_incubation: 4.98}
+            - {adapter: A1-c1, adapter_incubation: 6.83}
+            - {adapter: A1-c1, adapter_incubation: 10.29}
+            - {adapter: A1-c2, adapter_incubation: 3.83}
+            - {adapter: A1-c3, adapter_incubation: 3.83}
+
+img:
+  parameters:
+    show_progress: true
+    show_display: true
+    close_display_after_acquisition: true
+  settings:
+    t_exp: 100
+
+illu:
+  parameters:
+    setup: Mercury
+    channel_group: Filter turret
+    filter: 1-R640
+    ROI: [512, 512, 512, 512]
+  settings:
+    laser: 642
+    power_acq: 70
+    power_nonacq: 70
+    warmup_delay: 1
+    shutter_off_nonacq: true
+    lasers_off_finally: true

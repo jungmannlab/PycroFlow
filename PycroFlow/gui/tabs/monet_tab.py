@@ -24,57 +24,84 @@ class MonetTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._monet_window = None
-        self._build_ui()
+        self._setup_name = None
+        self._layout = QVBoxLayout(self)
+        self._placeholder = None
+        self._embed(None)
 
-    def _build_ui(self):
-        layout = QVBoxLayout(self)
-        window, problem = self._make_monet_window()
+    def set_setup(self, setup_name):
+        """(Re)embed monet for the given setup (a ``monet.CONFIGS`` key).
+
+        Called by the System tab when a microscope setup is loaded, so the
+        Monet tab connects to the matching monet config.
+        """
+        self._setup_name = setup_name
+        self._embed(setup_name)
+
+    def _embed(self, setup_name):
+        # Tear down whatever is currently shown.
+        self.shutdown()
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+        self._monet_window = None
+
+        window, problem = self._make_monet_window(setup_name)
         if window is None:
-            layout.addWidget(QLabel(
+            self._placeholder = QLabel(
                 "monet is not available in this environment.\n\n"
                 "Install the monet sibling package to enable "
                 "laser/illumination\n"
                 "control here (pip install -e ../monet).\n\n"
-                "Detail: {}".format(problem)))
+                "Detail: {}".format(problem))
+            self._layout.addWidget(self._placeholder)
             return
-        # Embed monet's QMainWindow as a child widget. It does not own the
-        # QApplication loop, so this is safe.
+        # Embed monet's widget as a child. It does not own the QApplication
+        # loop, so this is safe.
         self._monet_window = window
-        layout.addWidget(self._monet_window)
+        self._layout.addWidget(self._monet_window)
 
     @staticmethod
-    def _make_monet_window():
-        """Return (window, None) on success or (None, reason) on failure.
+    def _make_monet_window(setup_name=None):
+        """Return (widget, None) on success or (None, reason) on failure.
+
+        monet's own guidance is that embedders use ``MonetWidget`` (a
+        ``QWidget``); ``initial_microscope`` is a ``monet.CONFIGS`` key — i.e.
+        the PycroFlow setup name — and the widget auto-connects to it. We fall
+        back to ``MonetMainWindow`` for older monet versions.
 
         Failure modes handled: monet not installed; monet import-time error;
-        monet present but mocked (returns a non-QWidget, e.g. under the test
-        hardware mocks); monet window construction raising (missing hardware).
+        monet present but mocked (returns a non-QWidget); monet built against
+        a different Qt binding (constructing it would crash, so we check the
+        class is a PyQt6 ``QWidget`` subclass *before* instantiating).
         """
         from PyQt6.QtWidgets import QWidget
         try:
-            from monet.gui import MonetMainWindow
+            import monet.gui as mg
         except Exception as exc:
             return None, "import failed: {!r}".format(exc)
-        # Verify monet's window is a PyQt6 QWidget *subclass* before
-        # constructing it. Two cases this guards against:
-        #   * monet is mocked (tests) — MonetMainWindow is not a class;
-        #   * monet was built against a different Qt binding (e.g. PyQt5),
-        #     so its window is not a PyQt6 QWidget. Instantiating that emits
-        #     "Must construct a QApplication before a QWidget" and crashes
-        #     the process before the try/except below can catch it.
-        # In both cases fall back to the placeholder instead of crashing.
-        if not (isinstance(MonetMainWindow, type)
-                and issubclass(MonetMainWindow, QWidget)):
+        cls = getattr(mg, 'MonetWidget', None) or getattr(
+            mg, 'MonetMainWindow', None)
+        if cls is None:
+            return None, "monet.gui has no MonetWidget / MonetMainWindow"
+        if not (isinstance(cls, type) and issubclass(cls, QWidget)):
             return None, (
-                "monet.gui.MonetMainWindow is not a PyQt6 QWidget — monet is "
+                "monet's embed widget is not a PyQt6 QWidget — monet is "
                 "mocked, or built against a different Qt binding than "
                 "PycroFlow's PyQt6 GUI (it cannot be embedded then)."
             )
         try:
-            window = MonetMainWindow()
+            window = cls(initial_microscope=setup_name)
+        except TypeError:
+            # Older signature without initial_microscope.
+            try:
+                window = cls()
+            except Exception as exc:
+                return None, "construction failed: {!r}".format(exc)
         except Exception as exc:
-            return None, "MonetMainWindow construction failed: {!r}".format(
-                exc)
+            return None, "construction failed: {!r}".format(exc)
         return window, None
 
     def shutdown(self):

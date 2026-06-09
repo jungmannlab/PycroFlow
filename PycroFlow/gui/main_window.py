@@ -12,6 +12,7 @@ from PyQt6.QtGui import QAction
 
 from PycroFlow.gui.qt_bridge import QtBridge
 from PycroFlow.gui.tabs.system_tab import SystemTab
+from PycroFlow.gui.tabs.experiment_design_tab import ExperimentDesignTab
 from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
 from PycroFlow.gui.tabs.fluid_tab import FluidTab
 from PycroFlow.gui.tabs.imaging_tab import ImagingTab
@@ -53,29 +54,38 @@ class PycroFlowMainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.system_tab = SystemTab(
             self._system_service, self._experiment_service)
-        self.experiment_tab = ExperimentTab(
+        self.run_sequence_tab = ExperimentTab(
             self._experiment_service, self._bridge)
+        self.design_tab = ExperimentDesignTab(
+            self._experiment_service,
+            on_translated=self._on_translated)
         self.fluid_tab = FluidTab(self._system_service)
         self.imaging_tab = ImagingTab(self._system_service)
         self.monet_tab = MonetTab()
 
         self.tabs.addTab(self.system_tab, "System")
-        self.tabs.addTab(self.experiment_tab, "Experiment")
+        self.tabs.addTab(self.design_tab, "Experiment Design")
+        self.tabs.addTab(self.run_sequence_tab, "Run Sequence")
         self.tabs.addTab(self.fluid_tab, "Fluid")
         self.tabs.addTab(self.imaging_tab, "Imaging")
         self.tabs.addTab(self.monet_tab, "Monet")
         self.setCentralWidget(self.tabs)
 
         # Keep the per-subsystem tabs' status in sync when the System tab
-        # connects hardware.
+        # connects hardware, and drive the Monet tab from the chosen setup.
         self.system_tab.add_connection_listener(self.fluid_tab.refresh)
         self.system_tab.add_connection_listener(self.imaging_tab.refresh)
+        self.system_tab.add_setup_listener(self.monet_tab.set_setup)
+
+    def _on_translated(self):
+        """Switch to the Run Sequence tab after a design is compiled."""
+        self.tabs.setCurrentWidget(self.run_sequence_tab)
 
     def _on_load(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load protocol YAML", "", "YAML files (*.yaml *.yml)")
+            self, "Load Run Sequence YAML", "", "YAML files (*.yaml *.yml)")
         if path:
-            self.experiment_tab.load_protocol_path(path)
+            self.run_sequence_tab.load_protocol_path(path)
 
     def closeEvent(self, event):
         """Clean shutdown: abort any running experiment, run monet's cleanup,

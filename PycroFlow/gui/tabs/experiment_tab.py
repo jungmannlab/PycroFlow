@@ -4,12 +4,17 @@ Drives :class:`PycroFlow.services.experiment_service.ExperimentService` and
 subscribes to a :class:`PycroFlow.gui.qt_bridge.QtBridge` for thread-safe
 state/log updates.
 """
+import ast
+
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QListWidget,
-    QPlainTextEdit, QFileDialog, QGroupBox,
+    QPlainTextEdit, QFileDialog, QGroupBox, QTableWidget, QTableWidgetItem,
+    QMessageBox,
 )
 
 from PycroFlow.services.experiment_service import ExperimentState
+from PycroFlow.gui.widgets.dnd import YamlDropMixin
 
 
 # Which controls are enabled in each state.
@@ -21,14 +26,18 @@ _CAN_ABORT = {ExperimentState.ORCHESTRATING, ExperimentState.RUNNING,
               ExperimentState.PAUSED}
 
 
-class ExperimentTab(QWidget):
+class ExperimentTab(YamlDropMixin, QWidget):
     def __init__(self, service, bridge, parent=None):
         super().__init__(parent)
         self._service = service
         self._bridge = bridge
+        self.enable_yaml_drop()
         # Backing store for the step list so a selection can look up the
-        # full entry dict (the list only shows index + $type).
+        # full entry dict (the list only shows index + $type). Entries are
+        # references into the loaded protocol, so editing them in the table
+        # mutates the protocol the orchestrator runs.
         self._step_entries = []
+        self._current_step = -1
         self._build_ui()
         self._connect_signals()
         self._refresh_controls(self._service.state)
@@ -64,13 +73,16 @@ class ExperimentTab(QWidget):
         self.step_list = QListWidget()
         steps_layout.addWidget(self.step_list, 1)
 
-        params_box = QGroupBox("Step parameters")
+        params_box = QGroupBox("Step parameters (editable)")
         params_layout = QVBoxLayout(params_box)
-        self.step_params = QPlainTextEdit()
-        self.step_params.setReadOnly(True)
-        self.step_params.setPlaceholderText(
-            "Select a step to see its parameters.")
-        params_layout.addWidget(self.step_params)
+        self.step_table = QTableWidget(0, 2)
+        self.step_table.setHorizontalHeaderLabels(["Parameter", "Value"])
+        self.step_table.horizontalHeader().setStretchLastSection(True)
+        self.step_table.verticalHeader().setVisible(False)
+        params_layout.addWidget(self.step_table)
+        self.apply_btn = QPushButton("Apply changes")
+        self.apply_btn.setEnabled(False)
+        params_layout.addWidget(self.apply_btn)
         steps_layout.addWidget(params_box, 1)
 
         layout.addWidget(steps_box)
@@ -92,6 +104,7 @@ class ExperimentTab(QWidget):
         self._bridge.state_changed.connect(self._on_state_changed)
         self._bridge.log_message.connect(self._on_log)
         self.step_list.currentRowChanged.connect(self._on_step_selected)
+        self.apply_btn.clicked.connect(self._on_apply)
 
     # --- service-driven commands
 
@@ -107,6 +120,10 @@ class ExperimentTab(QWidget):
         """Programmatic load (used by the toolbar / tests)."""
         self._service.load_protocol_from_yaml(path)
         self._populate_steps()
+
+    def on_yaml_dropped(self, path):
+        """Load a Run Sequence YAML dropped onto the tab."""
+        self.load_protocol_path(path)
 
     def _on_start(self):
         self._service.start()
@@ -161,23 +178,114 @@ class ExperimentTab(QWidget):
                 self.step_list.addItem(
                     "[{}] {:d}: {}".format(system, i, type_))
                 self._step_entries.append(entry)
-        self.step_params.clear()
+        self._current_step = -1
+        self.step_table.setRowCount(0)
+        self.apply_btn.setEnabled(False)
 
     def _on_step_selected(self, row):
-        """Show the selected step's parameters in the side box."""
+        """Show the selected step's parameters in the editable table."""
+        self._current_step = row
+        self.step_table.setRowCount(0)
         if row < 0 or row >= len(self._step_entries):
-            self.step_params.clear()
+            self.apply_btn.setEnabled(False)
             return
         entry = self._step_entries[row]
         if not isinstance(entry, dict):
-            self.step_params.setPlainText(str(entry))
+            # Non-dict entry: show it read-only, nothing to edit.
+            self._set_value_row(0, "value", entry, editable=False)
+            self.step_table.setRowCount(1)
+            self.apply_btn.setEnabled(False)
             return
-        # '$type' first, then the remaining parameters in definition order.
-        lines = []
+        # '$type' first (read-only — it is the schema discriminator), then
+        # the remaining parameters in definition order.
+        keys = [k for k in entry if k != '$type']
         if '$type' in entry:
-            lines.append("$type: {}".format(entry['$type']))
-        for key, value in entry.items():
+            keys = ['$type'] + keys
+        self.step_table.setRowCount(len(keys))
+        for r, key in enumerate(keys):
+            self._set_value_row(r, key, entry[key], editable=(key != '$type'))
+        self.apply_btn.setEnabled(True)
+
+    def _on_apply(self):
+        """Write edited table values back into the selected step entry.
+
+        The entry is a reference into the loaded protocol, so this mutates
+        the protocol the orchestrator runs (future, not-yet-executed steps
+        pick up the change). Fields that fail type coercion are left
+        unchanged and reported.
+        """
+        row = self._current_step
+        if row < 0 or row >= len(self._step_entries):
+            return
+        entry = self._step_entries[row]
+        if not isinstance(entry, dict):
+            return
+        errors = []
+        for r in range(self.step_table.rowCount()):
+            key_item = self.step_table.item(r, 0)
+            value_item = self.step_table.item(r, 1)
+            if key_item is None or value_item is None:
+                continue
+            key = key_item.text()
             if key == '$type':
                 continue
-            lines.append("{}: {}".format(key, value))
-        self.step_params.setPlainText("\n".join(lines))
+            original = value_item.data(Qt.ItemDataRole.UserRole)
+            try:
+                entry[key] = self._coerce(value_item.text(), original)
+            except (ValueError, SyntaxError) as exc:
+                errors.append("{}: {}".format(key, exc))
+        if errors:
+            QMessageBox.warning(
+                self, "Could not apply some values",
+                "These fields were left unchanged:\n\n" + "\n".join(errors))
+        # Re-render from the stored entry so displayed text and the cached
+        # value types reflect what was actually written.
+        self._on_step_selected(row)
+
+    # --- editing helpers
+
+    def _set_value_row(self, r, key, value, editable):
+        key_item = QTableWidgetItem(str(key))
+        key_item.setFlags(key_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.step_table.setItem(r, 0, key_item)
+
+        value_item = QTableWidgetItem(self._format_value(value))
+        # Stash the original value so _coerce knows the target type.
+        value_item.setData(Qt.ItemDataRole.UserRole, value)
+        if not editable:
+            value_item.setFlags(
+                value_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.step_table.setItem(r, 1, value_item)
+
+    @staticmethod
+    def _format_value(value):
+        """Render a value for the cell. Containers use a literal-parseable
+        repr so :meth:`_coerce` can round-trip them via ast.literal_eval."""
+        if isinstance(value, (list, dict, tuple)):
+            return repr(value)
+        return str(value)
+
+    @staticmethod
+    def _coerce(text, original):
+        """Convert edited cell text back to the original value's type.
+
+        Booleans accept true/false/1/0/yes/no/on/off; ints and floats parse
+        directly; strings pass through; None and container types are parsed
+        as Python literals. Raises ValueError/SyntaxError on bad input.
+        """
+        text = text.strip()
+        if isinstance(original, bool):  # before int — bool subclasses int
+            low = text.lower()
+            if low in ('true', '1', 'yes', 'on'):
+                return True
+            if low in ('false', '0', 'no', 'off'):
+                return False
+            raise ValueError("expected a boolean")
+        if isinstance(original, int):
+            return int(text)
+        if isinstance(original, float):
+            return float(text)
+        if isinstance(original, str):
+            return text
+        # None or container types: parse a Python literal.
+        return ast.literal_eval(text)

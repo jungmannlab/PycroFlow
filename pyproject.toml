@@ -90,6 +90,8 @@ include = ["PycroFlow*"]
 PycroFlow = [
     "TestData/*.yaml",
     "configs/*.yaml",
+    "configs/setups/*.yaml",
+    "examples/*.yaml",
     "tests/fixtures/configs/*.py",
     "tests/fixtures/snapshots/*.json",
 ]

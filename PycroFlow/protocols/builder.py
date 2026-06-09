@@ -99,22 +99,21 @@ class ProtocolBuilder:
         self.steps = {"fluid": [], "img": [], "illu": []}
         self.reservoir_vols = {}
 
-    def create_protocol(self, config):
-        """Create a protocol based on a configuration file.
+    def build_protocol(self, config):
+        """Compile a config into a validated Run Sequence dict (no I/O).
 
         Parameters
         ----------
         config : dict
-            Flow acquisition configuration with keys ``save_dir``,
-            ``base_name``, ``fluid_settings``, ``imaging_settings``,
-            ``illumination_settings`` and ``mm_parameters``.
+            The experiment design (``save_dir``, ``base_name``, and the
+            ``fluid`` / ``img`` / ``illu`` sections each with
+            ``parameters`` / ``settings``).
 
         Returns
         -------
-        fname : str
-            Filename of the saved protocol.
-        steps : dict
-            The per-subsystem step lists.
+        dict
+            The linearized protocol (per-subsystem ``protocol_entries`` +
+            ``parameters``), schema-validated via :func:`validate_protocol`.
         """
         steps, reservoir_vols = self.create_steps(config)
         protocol = {}
@@ -136,6 +135,28 @@ class ProtocolBuilder:
         # picks them up mid-run. Schema-validation only — protocol dict is
         # unchanged.
         validate_protocol(protocol)
+        return protocol
+
+    def create_protocol(self, config):
+        """Compile a config and write the Run Sequence to a YAML file.
+
+        Thin wrapper around :meth:`build_protocol` that also persists the
+        result. Kept for the CLI / ``start_experiment.py`` flow.
+
+        Parameters
+        ----------
+        config : dict
+            See :meth:`build_protocol`. Additionally needs ``save_dir`` and
+            ``base_name`` for the output filename.
+
+        Returns
+        -------
+        fname : str
+            Filename of the saved protocol.
+        steps : dict
+            The per-subsystem step lists.
+        """
+        protocol = self.build_protocol(config)
 
         # save protocol
         fname = (
@@ -154,7 +175,7 @@ class ProtocolBuilder:
                 default_style='"',
             )
 
-        return fname, steps
+        return fname, self.steps
 
     # Registry mapping the user-facing experiment type (case-insensitive)
     # to the ProtocolBuilder method that knows how to expand it. New
