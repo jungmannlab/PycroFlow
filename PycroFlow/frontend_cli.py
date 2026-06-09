@@ -76,8 +76,15 @@ class PycroFlowInteractive(cmd.Cmd):
     hamilton_config = None
     tubing_config = None
 
-    def __init__(self):
+    def __init__(self, configure_logging=True):
         super().__init__()
+        # Ensure logging is routed to files (pyHamilton serial traffic to
+        # hamilton.log, the rest to pycroflow.log, only ERROR to the
+        # terminal) even when a startup script constructs this directly
+        # instead of going through main(). Skips if a caller already
+        # configured logging, so main()'s clean_old=True call still wins.
+        if configure_logging and not PycroFlow.logging_configured():
+            PycroFlow.setup_logging()
         # Stage-3 service objects. Both frontends (CLI now, Qt GUI later)
         # talk to PycroFlow through these so that orchestrator/system
         # internals do not leak into UI code. The CLI still keeps the

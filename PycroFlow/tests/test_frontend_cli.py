@@ -1,8 +1,8 @@
 """Coverage for the PycroFlowInteractive CLI (frontend_cli).
 
 The CLI is a cmd.Cmd REPL whose do_* commands route through the service layer
-and the orchestrator. We construct it with auto-loading disabled, then drive the
-commands against mocks, asserting delegation, argument parsing, and the
+and the orchestrator. We construct it with auto-loading disabled, then drive
+the commands against mocks, asserting delegation, argument parsing, and the
 "orchestration not started" guards.
 """
 import io
@@ -17,8 +17,10 @@ from PycroFlow.frontend_cli import PycroFlowInteractive
 
 def _cli():
     # __init__ scans the cwd and auto-loads configs; disable that for tests.
+    # configure_logging=False keeps the test run from writing log files into
+    # the repo / reconfiguring loguru sinks.
     with patch('PycroFlow.frontend_cli.os.listdir', return_value=[]):
-        return PycroFlowInteractive()
+        return PycroFlowInteractive(configure_logging=False)
 
 
 def _cli_with_orchestrator():
