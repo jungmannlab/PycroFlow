@@ -1,8 +1,10 @@
-"""Experiment tab: load a protocol, run it, watch state and log output.
+"""Run Sequence tab: watch a loaded protocol run — state, progress, log.
 
 Drives :class:`PycroFlow.services.experiment_service.ExperimentService` and
 subscribes to a :class:`PycroFlow.gui.qt_bridge.QtBridge` for thread-safe
-state/log updates.
+state/log updates. Loading and the run controls (Start/Pause/Resume/Abort)
+live in the main-window toolbar — the single, always-visible control surface —
+so this tab is a pure view.
 """
 import ast
 
@@ -10,21 +12,13 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QListWidget,
-    QPlainTextEdit, QFileDialog, QGroupBox, QTableWidget, QTableWidgetItem,
+    QPlainTextEdit, QGroupBox, QTableWidget, QTableWidgetItem,
     QMessageBox, QProgressBar,
 )
 
 from PycroFlow.services.experiment_service import ExperimentState
 from PycroFlow.gui.widgets.dnd import YamlDropMixin
 
-
-# Which controls are enabled in each state.
-_CAN_START = {ExperimentState.LOADED, ExperimentState.ORCHESTRATING,
-              ExperimentState.PAUSED}
-_CAN_PAUSE = {ExperimentState.RUNNING}
-_CAN_RESUME = {ExperimentState.PAUSED}
-_CAN_ABORT = {ExperimentState.ORCHESTRATING, ExperimentState.RUNNING,
-              ExperimentState.PAUSED}
 
 # States during which we poll the orchestrator for live progress.
 _ACTIVE_STATES = {ExperimentState.ORCHESTRATING, ExperimentState.RUNNING,
@@ -54,7 +48,6 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._poll_timer.setInterval(500)
         self._build_ui()
         self._connect_signals()
-        self._refresh_controls(self._service.state)
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -67,19 +60,6 @@ class ExperimentTab(YamlDropMixin, QWidget):
         status_row.addWidget(self.state_label)
         status_row.addStretch()
         layout.addLayout(status_row)
-
-        # --- protocol controls
-        controls = QHBoxLayout()
-        self.load_btn = QPushButton("Load protocol…")
-        self.start_btn = QPushButton("Start")
-        self.pause_btn = QPushButton("Pause")
-        self.resume_btn = QPushButton("Resume")
-        self.abort_btn = QPushButton("Abort")
-        for b in (self.load_btn, self.start_btn, self.pause_btn,
-                  self.resume_btn, self.abort_btn):
-            controls.addWidget(b)
-        controls.addStretch()
-        layout.addLayout(controls)
 
         # --- progress
         prog_box = QGroupBox("Progress")
@@ -129,29 +109,16 @@ class ExperimentTab(YamlDropMixin, QWidget):
         layout.addWidget(log_box)
 
     def _connect_signals(self):
-        self.load_btn.clicked.connect(self._on_load)
-        self.start_btn.clicked.connect(self._on_start)
-        self.pause_btn.clicked.connect(self._on_pause)
-        self.resume_btn.clicked.connect(self._on_resume)
-        self.abort_btn.clicked.connect(self._on_abort)
         self._bridge.state_changed.connect(self._on_state_changed)
         self._bridge.log_message.connect(self._on_log)
         self.step_list.currentRowChanged.connect(self._on_step_selected)
         self.apply_btn.clicked.connect(self._on_apply)
         self._poll_timer.timeout.connect(self._poll_progress)
 
-    # --- service-driven commands
-
-    def _on_load(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load protocol YAML", "", "YAML files (*.yaml *.yml)")
-        if not path:
-            return
-        self._service.load_protocol_from_yaml(path)
-        self._populate_steps()
+    # --- loading (controls live in the main-window toolbar)
 
     def load_protocol_path(self, path):
-        """Programmatic load (used by the toolbar / tests)."""
+        """Programmatic load (used by the toolbar / drag&drop / tests)."""
         self._service.load_protocol_from_yaml(path)
         self._populate_steps()
 
@@ -159,23 +126,10 @@ class ExperimentTab(YamlDropMixin, QWidget):
         """Load a Run Sequence YAML dropped onto the tab."""
         self.load_protocol_path(path)
 
-    def _on_start(self):
-        self._service.start()
-
-    def _on_pause(self):
-        self._service.pause()
-
-    def _on_resume(self):
-        self._service.resume()
-
-    def _on_abort(self):
-        self._service.abort()
-
     # --- bridge-driven UI updates (run on the GUI thread)
 
     def _on_state_changed(self, old, new):
         self.state_label.setText(new.value)
-        self._refresh_controls(new)
         # Repopulate the step list whenever a protocol becomes loaded,
         # regardless of how it was loaded (button, toolbar, or programmatic),
         # so the view always reflects the active protocol.
@@ -194,12 +148,6 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.log_view.appendPlainText(message)
 
     # --- helpers
-
-    def _refresh_controls(self, state):
-        self.start_btn.setEnabled(state in _CAN_START)
-        self.pause_btn.setEnabled(state in _CAN_PAUSE)
-        self.resume_btn.setEnabled(state in _CAN_RESUME)
-        self.abort_btn.setEnabled(state in _CAN_ABORT)
 
     def _populate_steps(self):
         self.step_list.clear()

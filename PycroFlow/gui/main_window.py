@@ -36,6 +36,17 @@ _RUN_LOCK_STATES = {
     ExperimentState.PAUSED,
 }
 
+# Which toolbar run controls are enabled in each experiment state.
+_CAN_START = {ExperimentState.LOADED, ExperimentState.ORCHESTRATING,
+              ExperimentState.PAUSED}
+_CAN_PAUSE = {ExperimentState.RUNNING}
+_CAN_RESUME = {ExperimentState.PAUSED}
+_CAN_ABORT = {ExperimentState.ORCHESTRATING, ExperimentState.RUNNING,
+              ExperimentState.PAUSED}
+# Loading a new run sequence is only allowed when nothing is running.
+_CAN_LOAD = {ExperimentState.IDLE, ExperimentState.LOADED,
+             ExperimentState.FINISHED, ExperimentState.ABORTED}
+
 
 class PycroFlowMainWindow(QMainWindow):
     def __init__(self, experiment_service, system_service, parent=None):
@@ -68,9 +79,10 @@ class PycroFlowMainWindow(QMainWindow):
         self.act_load = QAction("Load run sequence", self)
         self.act_start = QAction("Start", self)
         self.act_pause = QAction("Pause", self)
+        self.act_resume = QAction("Resume", self)
         self.act_abort = QAction("Abort", self)
         for a in (self.act_load, self.act_start, self.act_pause,
-                  self.act_abort):
+                  self.act_resume, self.act_abort):
             tb.addAction(a)
 
         self.setup_combo.currentTextChanged.connect(self._on_setup_changed)
@@ -80,6 +92,8 @@ class PycroFlowMainWindow(QMainWindow):
             lambda: self._experiment_service.start())
         self.act_pause.triggered.connect(
             lambda: self._experiment_service.pause())
+        self.act_resume.triggered.connect(
+            lambda: self._experiment_service.resume())
         self.act_abort.triggered.connect(
             lambda: self._experiment_service.abort())
 
@@ -107,8 +121,10 @@ class PycroFlowMainWindow(QMainWindow):
         self.setCentralWidget(self.tabs)
 
         # Lock manual hardware access (setup/connect, fluid manual controls,
-        # the embedded monet GUI) while the orchestrator owns the instruments.
+        # the embedded monet GUI) while the orchestrator owns the instruments,
+        # and enable/disable the toolbar run controls per experiment state.
         self._bridge.state_changed.connect(self._on_experiment_state)
+        self._refresh_run_controls(self._experiment_service.state)
 
     # --- setup / connection -------------------------------------------
 
@@ -136,8 +152,17 @@ class PycroFlowMainWindow(QMainWindow):
         self._autoconnect()
 
     def _on_experiment_state(self, old, new):
-        """Lock/unlock manual hardware access on experiment state changes."""
+        """React to experiment state changes: hardware lock + run controls."""
         self._lock_hardware(new in _RUN_LOCK_STATES)
+        self._refresh_run_controls(new)
+
+    def _refresh_run_controls(self, state):
+        """Enable/disable the toolbar Load + Start/Pause/Resume/Abort."""
+        self.act_load.setEnabled(state in _CAN_LOAD)
+        self.act_start.setEnabled(state in _CAN_START)
+        self.act_pause.setEnabled(state in _CAN_PAUSE)
+        self.act_resume.setEnabled(state in _CAN_RESUME)
+        self.act_abort.setEnabled(state in _CAN_ABORT)
 
     def _lock_hardware(self, locked):
         self.setup_combo.setEnabled(not locked)
