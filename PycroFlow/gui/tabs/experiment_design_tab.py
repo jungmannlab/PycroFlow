@@ -17,10 +17,12 @@ from PycroFlow.gui.widgets.dnd import YamlDropMixin
 
 
 class ExperimentDesignTab(YamlDropMixin, QWidget):
-    def __init__(self, experiment_service, on_translated=None, parent=None):
+    def __init__(self, experiment_service, on_translated=None,
+                 on_design_loaded=None, parent=None):
         super().__init__(parent)
         self._svc = experiment_service
         self._on_translated = on_translated
+        self._on_design_loaded = on_design_loaded
         self._form = None
         self._build_ui()
         self.enable_yaml_drop()
@@ -69,6 +71,8 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
                 self, "Invalid experiment design", "{}".format(exc))
             return
         self._set_form(self._svc.experiment_design)
+        if self._on_design_loaded is not None:
+            self._on_design_loaded()
 
     def on_yaml_dropped(self, path):
         self.load_design_path(path)

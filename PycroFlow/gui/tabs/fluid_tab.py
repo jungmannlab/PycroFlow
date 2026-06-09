@@ -25,9 +25,10 @@ _STOP_STYLE = (
 
 
 class FluidTab(QWidget):
-    def __init__(self, system_service, parent=None):
+    def __init__(self, system_service, on_connect=None, parent=None):
         super().__init__(parent)
         self._svc = system_service
+        self._on_connect = on_connect
         self._busy = False
         self._build_ui()
         # Buttons disabled while a fluid op runs in the background (the serial
@@ -40,13 +41,17 @@ class FluidTab(QWidget):
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
-        # --- status
+        # --- status + connect
         status_box = QGroupBox("Fluid system")
-        status_layout = QVBoxLayout(status_box)
+        status_row = QHBoxLayout(status_box)
         connected = self._svc.fluid_system is not None
         self.status_label = QLabel(
             "connected" if connected else "not connected")
-        status_layout.addWidget(self.status_label)
+        status_row.addWidget(self.status_label)
+        status_row.addStretch()
+        self.connect_btn = QPushButton("Connect")
+        self.connect_btn.clicked.connect(self._on_connect_clicked)
+        status_row.addWidget(self.connect_btn)
         layout.addWidget(status_box)
 
         layout.addWidget(self._build_tubing_group())
@@ -139,13 +144,18 @@ class FluidTab(QWidget):
         return box
 
     def refresh(self):
-        """Update the connection label from the fluid system.
-
-        Called when the System tab connects/disconnects hardware.
-        """
+        """Update the connection label from the fluid system."""
         connected = self._svc.fluid_system is not None
         self.status_label.setText(
             "connected" if connected else "not connected")
+
+    def set_status_text(self, text):
+        """Set the status label (e.g. 'connecting…') from the coordinator."""
+        self.status_label.setText(text)
+
+    def _on_connect_clicked(self):
+        if self._on_connect is not None:
+            self._on_connect()
 
     # --- handlers -----------------------------------------------------
 

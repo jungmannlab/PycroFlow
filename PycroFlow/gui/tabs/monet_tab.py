@@ -26,23 +26,35 @@ class MonetTab(QWidget):
         self._monet_window = None
         self._setup_name = None
         self._layout = QVBoxLayout(self)
+        # PycroFlow's own illumination-system connection status (distinct from
+        # monet's embedded laser GUI below).
+        self._illu_status = QLabel("PycroFlow illumination: not connected")
+        self._layout.addWidget(self._illu_status)
+        self._embed_container = QWidget()
+        self._embed_layout = QVBoxLayout(self._embed_container)
+        self._embed_layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.addWidget(self._embed_container, 1)
         self._placeholder = None
         self._embed(None)
 
     def set_setup(self, setup_name):
         """(Re)embed monet for the given setup (a ``monet.CONFIGS`` key).
 
-        Called by the System tab when a microscope setup is loaded, so the
-        Monet tab connects to the matching monet config.
+        Called when a microscope setup is loaded, so the Monet tab connects to
+        the matching monet config.
         """
         self._setup_name = setup_name
         self._embed(setup_name)
 
+    def set_illumination_status(self, text):
+        """Show the PycroFlow illumination-system connection status."""
+        self._illu_status.setText("PycroFlow illumination: {}".format(text))
+
     def _embed(self, setup_name):
-        # Tear down whatever is currently shown.
+        # Tear down whatever is currently embedded.
         self.shutdown()
-        while self._layout.count():
-            item = self._layout.takeAt(0)
+        while self._embed_layout.count():
+            item = self._embed_layout.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.setParent(None)
@@ -56,12 +68,12 @@ class MonetTab(QWidget):
                 "laser/illumination\n"
                 "control here (pip install -e ../monet).\n\n"
                 "Detail: {}".format(problem))
-            self._layout.addWidget(self._placeholder)
+            self._embed_layout.addWidget(self._placeholder)
             return
         # Embed monet's widget as a child. It does not own the QApplication
         # loop, so this is safe.
         self._monet_window = window
-        self._layout.addWidget(self._monet_window)
+        self._embed_layout.addWidget(self._monet_window)
 
     @staticmethod
     def _make_monet_window(setup_name=None):

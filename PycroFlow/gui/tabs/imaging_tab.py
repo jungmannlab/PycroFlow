@@ -4,31 +4,49 @@ Read-only view for now — live preview and a graphical acquisition editor are
 explicitly out of scope for the initial GUI (see the plan's Stage 5 notes).
 """
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QGroupBox, QFormLayout,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox, QFormLayout,
+    QPushButton,
 )
 
 
 class ImagingTab(QWidget):
-    def __init__(self, system_service, parent=None):
+    def __init__(self, system_service, on_connect=None, parent=None):
         super().__init__(parent)
         self._svc = system_service
+        self._on_connect = on_connect
         self._build_ui()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
         status_box = QGroupBox("Imaging system")
-        form = QFormLayout(status_box)
+        box_layout = QVBoxLayout(status_box)
+        status_row = QHBoxLayout()
         connected = self._svc.imaging_system is not None
         self.status_label = QLabel(
             "connected" if connected else "not connected")
-        form.addRow("Status", self.status_label)
+        status_row.addWidget(self.status_label)
+        status_row.addStretch()
+        self.connect_btn = QPushButton("Connect")
+        self.connect_btn.clicked.connect(self._on_connect_clicked)
+        status_row.addWidget(self.connect_btn)
+        box_layout.addLayout(status_row)
+        form = QFormLayout()
         self.pfs_label = QLabel("—")
         form.addRow("PFS", self.pfs_label)
         self.last_acq_label = QLabel("—")
         form.addRow("Last acquisition", self.last_acq_label)
+        box_layout.addLayout(form)
         layout.addWidget(status_box)
         layout.addStretch()
+
+    def set_status_text(self, text):
+        """Set the status label (e.g. 'connecting…') from the coordinator."""
+        self.status_label.setText(text)
+
+    def _on_connect_clicked(self):
+        if self._on_connect is not None:
+            self._on_connect()
 
     def refresh(self):
         """Pull current status from the imaging system.

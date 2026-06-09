@@ -101,11 +101,11 @@ class TestMainWindow(unittest.TestCase):
 
     def test_builds_tabs(self):
         w = self._build()
-        self.assertEqual(w.tabs.count(), 6)
+        self.assertEqual(w.tabs.count(), 5)
         self.assertEqual(
-            [w.tabs.tabText(i) for i in range(6)],
-            ['System', 'Experiment Design', 'Run Sequence', 'Fluid',
-             'Imaging', 'Monet'])
+            [w.tabs.tabText(i) for i in range(5)],
+            ['Experiment Design', 'Run Sequence', 'Fluid', 'Imaging',
+             'Monet'])
 
     def test_experiment_tab_reflects_state(self):
         from PycroFlow.examples.demo_protocols import protocol
@@ -174,21 +174,6 @@ class TestMainWindow(unittest.TestCase):
             tab.step_list.item(0).background().color(), _FINISHED_COLOR)
         self.assertEqual(
             tab.step_list.item(1).background().color(), _ACTIVE_COLOR)
-
-    def test_subsystem_tabs_sync_via_system_tab_listeners(self):
-        w = self._build()
-        # Both tabs start "not connected".
-        self.assertEqual(w.fluid_tab.status_label.text(), 'not connected')
-        self.assertEqual(w.imaging_tab.status_label.text(), 'not connected')
-        # Simulate hardware connected on the shared service, then fire the
-        # listeners the System tab invokes after a successful connect.
-        w._system_service.fluid_system = object()
-        w._system_service.imaging_system = object()
-        self.assertTrue(w.system_tab._connection_listeners)
-        for fn in w.system_tab._connection_listeners:
-            fn()
-        self.assertEqual(w.fluid_tab.status_label.text(), 'connected')
-        self.assertEqual(w.imaging_tab.status_label.text(), 'connected')
 
     def test_experiment_tab_lists_all_subsystem_steps(self):
         w = self._build()
@@ -325,7 +310,7 @@ class TestMonetTab(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
-class TestSystemTab(unittest.TestCase):
+class TestConnectionFlow(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
@@ -340,154 +325,48 @@ class TestSystemTab(unittest.TestCase):
         from PycroFlow.gui.widgets import worker
         worker.set_synchronous(False)
 
-    def _svc(self, **connected):
-        from unittest.mock import MagicMock
-        svc = MagicMock(name='system_service')
-        svc.fluid_system = connected.get('fluid')
-        svc.imaging_system = connected.get('imaging')
-        svc.illumination_system = connected.get('illumination')
-        # A setup is loaded by default (truthy); tests that need "no setup"
-        # set svc.setup = None.
-        svc.setup = connected.get('setup', object())
-        svc.is_emulated.return_value = connected.get('emulated', False)
+    def _win(self):
+        from PycroFlow.services import ExperimentService, SystemService
+        from PycroFlow.gui.main_window import PycroFlowMainWindow
+        return PycroFlowMainWindow(ExperimentService(), SystemService())
 
-        def _states():
-            return {
-                'fluid': svc.fluid_system is not None,
-                'imaging': svc.imaging_system is not None,
-                'illumination': svc.illumination_system is not None,
-            }
-        svc.connection_states.side_effect = _states
-        return svc
-
-    def test_refresh_reflects_states(self):
-        from PycroFlow.gui.tabs.system_tab import SystemTab
-        tab = SystemTab(self._svc(imaging=object()))
-        self.assertEqual(tab._status_labels['imaging'].text(), 'Connected')
+    def test_startup_loads_setup_and_drives_monet(self):
+        w = self._win()
+        self.assertIsNotNone(w._system_service.setup)
         self.assertEqual(
-            tab._status_labels['fluid'].text(), 'Not connected')
+            w._system_service.get_monet_setup(),
+            w.setup_combo.currentText())
 
-    def test_connect_illumination_calls_service_and_mirrors(self):
-        from unittest.mock import MagicMock
-        from PycroFlow.gui.tabs.system_tab import SystemTab
-        svc = self._svc()
-        exp = MagicMock(name='experiment_service')
-
-        def _connect():
-            svc.illumination_system = object()
-        svc.connect_illumination.side_effect = _connect
-
-        tab = SystemTab(svc, exp)
-        tab._on_connect_illumination()
-
-        svc.connect_illumination.assert_called_once()
-        exp.attach_systems.assert_called_once()
+    def test_autoconnect_on_design_load(self):
+        import PycroFlow
+        w = self._win()
+        w._on_setup_changed('Emulator')
+        path = os.path.join(
+            os.path.dirname(PycroFlow.__file__), 'examples',
+            'sph_resi_6plex.yaml')
+        w.design_tab.load_design_path(path)
         self.assertEqual(
-            tab._status_labels['illumination'].text(), 'Connected')
+            w._system_service.connection_states(),
+            {'fluid': True, 'imaging': True, 'illumination': True})
+        self.assertEqual(w.fluid_tab.status_label.text(), 'connected')
+        self.assertEqual(w.imaging_tab.status_label.text(), 'connected')
+        self.assertIsNotNone(w._experiment_service._fluid_system)
 
-    def test_connect_imaging_emulated_calls_service(self):
-        from PycroFlow.gui.tabs.system_tab import SystemTab
-        svc = self._svc(emulated=True)
-
-        def _connect(*a, **k):
-            svc.imaging_system = object()
-        svc.connect_imaging.side_effect = _connect
-
-        tab = SystemTab(svc)
-        tab._on_connect_imaging()
-        svc.connect_imaging.assert_called_once()
-        self.assertEqual(
-            tab._status_labels['imaging'].text(), 'Connected')
-
-    def test_connect_requires_setup(self):
+    def test_fluid_connect_requires_design(self):
         from unittest.mock import patch
-        from PycroFlow.gui.tabs import system_tab as st
-        svc = self._svc(setup=None)
-        tab = st.SystemTab(svc)
-        with patch.object(st.QMessageBox, 'warning') as warn:
-            tab._on_connect_illumination()
+        from PycroFlow.gui import main_window as mw
+        w = self._win()
+        with patch.object(mw.QMessageBox, 'warning') as warn:
+            w.fluid_tab._on_connect_clicked()
         warn.assert_called_once()
-        svc.connect_illumination.assert_not_called()
+        self.assertIsNone(w._system_service.fluid_system)
 
-    def test_connect_fluid_requires_design(self):
-        from unittest.mock import MagicMock, patch
-        from PycroFlow.gui.tabs import system_tab as st
-        svc = self._svc()
-        exp = MagicMock(name='experiment_service')
-        exp.experiment_design = None
-        tab = st.SystemTab(svc, exp)
-        with patch.object(st.QMessageBox, 'warning') as warn:
-            tab._on_connect_fluid()
-        warn.assert_called_once()
-        svc.connect_fluid.assert_not_called()
-
-    def test_connect_fluid_passes_design_fluid_section(self):
-        from unittest.mock import MagicMock
-        from PycroFlow.gui.tabs.system_tab import SystemTab
-        svc = self._svc()
-        exp = MagicMock(name='experiment_service')
-        fluid = {'settings': {'reservoir_names': {1: 'R1'}},
-                 'parameters': {'max_velocity': 200}}
-        exp.experiment_design = {'fluid': fluid}
-
-        def _connect(arg):
-            svc.fluid_system = object()
-        svc.connect_fluid.side_effect = _connect
-
-        tab = SystemTab(svc, exp)
-        tab._on_connect_fluid()
-        svc.connect_fluid.assert_called_once_with(fluid)
-        self.assertEqual(tab._status_labels['fluid'].text(), 'Connected')
-
-    def test_load_setup_fires_setup_listener(self):
-        from PycroFlow.gui.tabs.system_tab import SystemTab
-        svc = self._svc()
-        svc.get_monet_setup.return_value = 'Emulator'
-        tab = SystemTab(svc)
-        seen = []
-        tab.add_setup_listener(lambda name: seen.append(name))
-        tab.setup_combo.setCurrentText('Emulator')
-        tab._on_load_setup()
-        svc.load_setup.assert_called_once_with('Emulator')
-        self.assertEqual(seen, ['Emulator'])
-
-    def test_connect_failure_shows_message_and_stays_disconnected(self):
-        from unittest.mock import patch
-        from PycroFlow.gui.tabs import system_tab as st
-        svc = self._svc()
-        svc.connect_illumination.side_effect = RuntimeError("boom")
-        tab = st.SystemTab(svc)
-        with patch.object(st.QMessageBox, 'critical') as crit:
-            tab._on_connect_illumination()
-        crit.assert_called_once()
-        self.assertEqual(
-            tab._status_labels['illumination'].text(), 'Not connected')
-
-    def test_connection_listener_fires_on_connect(self):
-        from PycroFlow.gui.tabs.system_tab import SystemTab
-        svc = self._svc()
-
-        def _connect():
-            svc.illumination_system = object()
-        svc.connect_illumination.side_effect = _connect
-
-        tab = SystemTab(svc)
-        calls = []
-        tab.add_connection_listener(lambda: calls.append(True))
-        tab._on_connect_illumination()
-        self.assertEqual(calls, [True])
-
-    def test_connection_listener_not_fired_on_failure(self):
-        from unittest.mock import patch
-        from PycroFlow.gui.tabs import system_tab as st
-        svc = self._svc()
-        svc.connect_illumination.side_effect = RuntimeError("boom")
-        tab = st.SystemTab(svc)
-        calls = []
-        tab.add_connection_listener(lambda: calls.append(True))
-        with patch.object(st.QMessageBox, 'critical'):
-            tab._on_connect_illumination()
-        self.assertEqual(calls, [])
+    def test_manual_imaging_connect(self):
+        w = self._win()
+        w._on_setup_changed('Emulator')
+        w.imaging_tab._on_connect_clicked()
+        self.assertIsNotNone(w._system_service.imaging_system)
+        self.assertEqual(w.imaging_tab.status_label.text(), 'connected')
 
 
 def _example_design():
