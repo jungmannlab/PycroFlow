@@ -567,5 +567,90 @@ class TestMonetSetSetup(unittest.TestCase):
         self.assertEqual(tab._monet_window.initial_microscope, 'Mercury')
 
 
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestFluidTab(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _tab(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.gui.tabs.fluid_tab import FluidTab
+        svc = MagicMock(name='system_service')
+        svc.fluid_system = object()
+        return FluidTab(svc), svc
+
+    def test_fill_calls_service(self):
+        tab, svc = self._tab()
+        tab._on_fill()
+        svc.fill_tubings.assert_called_once()
+
+    def test_clean_confirm_yes_calls_service(self):
+        from unittest.mock import patch
+        from PycroFlow.gui.tabs import fluid_tab as ft
+        tab, svc = self._tab()
+        with patch.object(ft.QMessageBox, 'question',
+                          return_value=ft.QMessageBox.StandardButton.Yes):
+            tab._on_clean()
+        svc.clean_tubings.assert_called_once()
+
+    def test_clean_confirm_no_does_nothing(self):
+        from unittest.mock import patch
+        from PycroFlow.gui.tabs import fluid_tab as ft
+        tab, svc = self._tab()
+        with patch.object(ft.QMessageBox, 'question',
+                          return_value=ft.QMessageBox.StandardButton.No):
+            tab._on_clean()
+        svc.clean_tubings.assert_not_called()
+
+    def test_stroke_calls_manual_pump(self):
+        tab, svc = self._tab()
+        tab.stroke_pump.setCurrentText('pump_a')
+        tab.stroke_vol.setText('150')
+        tab.stroke_vel.setText('200')
+        tab.stroke_pickup.setCurrentText('in')
+        tab.stroke_dispense.setCurrentText('out')
+        tab._on_stroke()
+        svc.manual_pump.assert_called_once_with(
+            'pump_a', vol=150.0, pickup_dir='in', dispense_dir='out',
+            velocity=200.0)
+
+    def test_move_includes_reservoirs(self):
+        tab, svc = self._tab()
+        tab.move_pump.setCurrentText('pump_a')
+        tab.move_vol.setText('80')
+        tab.move_pickup_res.setText('5')
+        tab.move_dispense_res.setText('7')
+        tab.move_pickup_dir.setCurrentText('in')
+        tab.move_dispense_dir.setCurrentText('in')
+        tab._on_move()
+        svc.manual_pump.assert_called_once_with(
+            'pump_a', vol=80.0, pickup_dir='in', dispense_dir='in',
+            pickup_res=5, dispense_res=7)
+
+    def test_set_valves_calls_service(self):
+        tab, svc = self._tab()
+        tab.valve_res.setText('3')
+        tab._on_set_valves()
+        svc.set_valves.assert_called_once_with(3)
+
+    def test_set_valves_required_empty_warns(self):
+        from unittest.mock import patch
+        from PycroFlow.gui.tabs import fluid_tab as ft
+        tab, svc = self._tab()
+        tab.valve_res.setText('')
+        with patch.object(ft.QMessageBox, 'warning') as warn:
+            tab._on_set_valves()
+        warn.assert_called_once()
+        svc.set_valves.assert_not_called()
+
+    def test_stop_calls_service(self):
+        tab, svc = self._tab()
+        tab._on_stop()
+        svc.stop_all_moves.assert_called_once()
+
+
 if __name__ == '__main__':
     unittest.main()

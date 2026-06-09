@@ -68,6 +68,9 @@ class ExperimentService:
         self._experiment_design: Optional[Dict] = None
         self._protocol: Optional[Dict] = None
         self._orchestrator: Optional[ProtocolOrchestrator] = None
+        # Snapshot of the systems the current orchestrator was built with, so
+        # start() can tell whether hardware was connected after load/translate.
+        self._orchestrator_systems = None
         self._state = ExperimentState.IDLE
         self._lock = threading.Lock()
         self._state_observers: List[StateObserver] = []
@@ -168,13 +171,27 @@ class ExperimentService:
                 "(state={!r}); abort first".format(self._state)
             )
         self._protocol = protocol
+        self._build_orchestrator()
+        self._set_state(ExperimentState.LOADED)
+
+    def _build_orchestrator(self) -> None:
+        """(Re)build the orchestrator from the current protocol + systems.
+
+        Called on load and again on :meth:`start`, so subsystems connected
+        *after* a protocol/design was loaded are still picked up (otherwise
+        the handlers see ``system=None`` and finish immediately).
+        """
         self._orchestrator = ProtocolOrchestrator(
-            protocol,
+            self._protocol,
             imaging_system=self._imaging_system,
             fluid_system=self._fluid_system,
             illumination_system=self._illumination_system,
         )
-        self._set_state(ExperimentState.LOADED)
+        self._orchestrator_systems = self._current_systems()
+
+    def _current_systems(self):
+        return (self._fluid_system, self._imaging_system,
+                self._illumination_system)
 
     def load_protocol_from_yaml(self, path: str) -> None:
         """Load a protocol from a YAML file (the format produced by
@@ -187,6 +204,17 @@ class ExperimentService:
     def start(self, system_steps: Optional[Dict] = None) -> None:
         self._require_orchestrator()
         if self._state == ExperimentState.LOADED:
+            # Rebuild only if hardware was connected after load/translate
+            # (otherwise the handlers see system=None and the protocol
+            # silently finishes immediately). Skipping the rebuild when
+            # systems are unchanged preserves an externally-set orchestrator.
+            if self._current_systems() != self._orchestrator_systems:
+                self._build_orchestrator()
+            if not any(self._current_systems()):
+                logger.warning(
+                    "Starting with no subsystems connected — the protocol "
+                    "will finish immediately. Connect hardware (or the "
+                    "Emulator setup) in the System tab first.")
             self._orchestrator.start_orchestration()
             self._set_state(ExperimentState.ORCHESTRATING)
         if self._state in (

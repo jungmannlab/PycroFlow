@@ -224,6 +224,11 @@ class SystemService:
         self._require('fluid_system')
         self.fluid_system.deliver_fluid(reservoir_id, volume)
 
+    def set_valves(self, reservoir_id: int) -> None:
+        """Route the manifold valves to access ``reservoir_id`` (manual)."""
+        self._require('fluid_system')
+        self.fluid_system._set_valves(reservoir_id)
+
     def stop_all_moves(self) -> None:
         """Emergency stop on the fluid system. Safe to call from anywhere."""
         if self.fluid_system is None:

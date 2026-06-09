@@ -132,6 +132,24 @@ class TestExperimentService(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             svc.attach_systems()
 
+    def test_start_rebuilds_with_systems_attached_after_load(self):
+        # Regression: connecting hardware AFTER load/translate must still
+        # feed the orchestrator — start() rebuilds it. Otherwise handlers
+        # see system=None and the protocol finishes immediately.
+        from PycroFlow.examples.demo_protocols import protocol
+        svc = ExperimentService()
+        svc.load_protocol(protocol)
+        self.assertIsNone(svc.orchestrator.fluid_system)
+        fluid = MagicMock(name='fluid')
+        svc.attach_systems(fluid_system=fluid)
+        with patch('PycroFlow.orchestration.core.ProtocolOrchestrator.'
+                   'start_orchestration'), \
+                patch('PycroFlow.orchestration.core.ProtocolOrchestrator.'
+                      'start_protocol'):
+            svc.start()
+        self.assertIs(svc.orchestrator.fluid_system, fluid)
+        self.assertEqual(svc.state, ExperimentState.RUNNING)
+
 
 class TestSystemService(unittest.TestCase):
 
