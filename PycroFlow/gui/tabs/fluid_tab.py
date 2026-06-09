@@ -15,6 +15,8 @@ from PyQt6.QtWidgets import (
     QGroupBox, QFormLayout, QComboBox, QMessageBox,
 )
 
+from PycroFlow.gui.widgets.worker import run_in_background
+
 
 _STOP_STYLE = (
     "background-color: #b00000; color: white; font-weight: bold; "
@@ -26,7 +28,14 @@ class FluidTab(QWidget):
     def __init__(self, system_service, parent=None):
         super().__init__(parent)
         self._svc = system_service
+        self._busy = False
         self._build_ui()
+        # Buttons disabled while a fluid op runs in the background (the serial
+        # bus serves one operation at a time). STOP stays enabled.
+        self._busy_buttons = [
+            self.fill_btn, self.clean_btn, self.stroke_btn,
+            self.move_btn, self.valve_btn,
+        ]
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -141,7 +150,7 @@ class FluidTab(QWidget):
     # --- handlers -----------------------------------------------------
 
     def _on_fill(self):
-        self._guard(self._svc.fill_tubings, "Fill tubings")
+        self._run(self._svc.fill_tubings, "Fill tubings")
 
     def _on_clean(self):
         reply = QMessageBox.question(
@@ -151,7 +160,7 @@ class FluidTab(QWidget):
             "container (fluidly connected) and cleaning reservoirs are "
             "connected to their tanks.")
         if reply == QMessageBox.StandardButton.Yes:
-            self._guard(self._svc.clean_tubings, "Clean tubings")
+            self._run(self._svc.clean_tubings, "Clean tubings")
 
     def _on_stroke(self):
         vol, ok = self._num(self.stroke_vol, "Volume", True, float)
@@ -167,7 +176,7 @@ class FluidTab(QWidget):
         )
         if vel is not None:
             kwargs['velocity'] = vel
-        self._guard(
+        self._run(
             lambda: self._svc.manual_pump(
                 self.stroke_pump.currentText(), **kwargs),
             "Pump stroke")
@@ -198,7 +207,7 @@ class FluidTab(QWidget):
             kwargs['pickup_res'] = pres
         if dres is not None:
             kwargs['dispense_res'] = dres
-        self._guard(
+        self._run(
             lambda: self._svc.manual_pump(
                 self.move_pump.currentText(), **kwargs),
             "Pump move")
@@ -207,7 +216,7 @@ class FluidTab(QWidget):
         rid, ok = self._num(self.valve_res, "Reservoir id", True, int)
         if not ok:
             return
-        self._guard(lambda: self._svc.set_valves(rid), "Set valves")
+        self._run(lambda: self._svc.set_valves(rid), "Set valves")
 
     def _on_stop(self):
         # Always safe; SystemService.stop_all_moves swallows errors.
@@ -236,9 +245,26 @@ class FluidTab(QWidget):
                 "{} must be a number.".format(name))
             return None, False
 
-    def _guard(self, call, what):
-        try:
-            call()
-        except Exception as exc:
-            QMessageBox.critical(
-                self, "{} failed".format(what), "{!r}".format(exc))
+    def _run(self, call, what):
+        """Run a (potentially long) fluid op off the GUI thread.
+
+        Disables the action buttons while it runs (the serial bus serves one
+        op at a time); STOP stays enabled. Errors surface via a dialog.
+        """
+        if self._busy:
+            return
+        self._set_busy(True)
+        run_in_background(
+            self, call,
+            on_done=lambda _: self._set_busy(False),
+            on_error=lambda exc: self._on_op_error(exc, what))
+
+    def _on_op_error(self, exc, what):
+        self._set_busy(False)
+        QMessageBox.critical(
+            self, "{} failed".format(what), "{!r}".format(exc))
+
+    def _set_busy(self, busy):
+        self._busy = busy
+        for btn in self._busy_buttons:
+            btn.setEnabled(not busy)

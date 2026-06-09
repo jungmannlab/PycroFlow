@@ -300,6 +300,14 @@ class TestSystemTab(unittest.TestCase):
         from PyQt6.QtWidgets import QApplication
         cls.app = QApplication.instance() or QApplication([])
 
+    def setUp(self):
+        from PycroFlow.gui.widgets import worker
+        worker.set_synchronous(True)
+
+    def tearDown(self):
+        from PycroFlow.gui.widgets import worker
+        worker.set_synchronous(False)
+
     def _svc(self, **connected):
         from unittest.mock import MagicMock
         svc = MagicMock(name='system_service')
@@ -575,6 +583,14 @@ class TestFluidTab(unittest.TestCase):
         from PyQt6.QtWidgets import QApplication
         cls.app = QApplication.instance() or QApplication([])
 
+    def setUp(self):
+        from PycroFlow.gui.widgets import worker
+        worker.set_synchronous(True)
+
+    def tearDown(self):
+        from PycroFlow.gui.widgets import worker
+        worker.set_synchronous(False)
+
     def _tab(self):
         from unittest.mock import MagicMock
         from PycroFlow.gui.tabs.fluid_tab import FluidTab
@@ -650,6 +666,55 @@ class TestFluidTab(unittest.TestCase):
         tab, svc = self._tab()
         tab._on_stop()
         svc.stop_all_moves.assert_called_once()
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestWorker(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _pump_until(self, predicate, timeout=5.0):
+        import time
+        deadline = time.time() + timeout
+        while not predicate() and time.time() < deadline:
+            self.app.processEvents()
+            time.sleep(0.005)
+
+    def test_runs_off_thread_and_calls_on_done(self):
+        from PyQt6.QtWidgets import QWidget
+        from PyQt6.QtCore import QThread
+        from PycroFlow.gui.widgets import worker
+        worker.set_synchronous(False)
+        owner = QWidget()
+        results = []
+        threads = []
+
+        def work():
+            threads.append(QThread.currentThread())
+            return 21 * 2
+
+        worker.run_in_background(owner, work, on_done=results.append)
+        self._pump_until(lambda: results)
+        self.assertEqual(results, [42])
+        # ran on a different thread than the GUI thread
+        self.assertIsNot(threads[0], self.app.thread())
+
+    def test_on_error_called_for_exception(self):
+        from PyQt6.QtWidgets import QWidget
+        from PycroFlow.gui.widgets import worker
+        worker.set_synchronous(False)
+        owner = QWidget()
+        errors = []
+
+        def boom():
+            raise RuntimeError("nope")
+
+        worker.run_in_background(owner, boom, on_error=errors.append)
+        self._pump_until(lambda: errors)
+        self.assertIsInstance(errors[0], RuntimeError)
 
 
 if __name__ == '__main__':

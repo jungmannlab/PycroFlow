@@ -70,6 +70,12 @@ class SystemService:
 
         self._setup = load_setup(name)
         self._setup_name = self._setup.get('setup', name)
+        if self._setup.get('emulated'):
+            # Warm the emulator import on THIS (main) thread. Importing the
+            # tests package runs install_hardware_mocks(), whose subprocess
+            # imports deadlock if first triggered from a worker thread; doing
+            # it here means later background connects find it cached.
+            import PycroFlow.tests.emulators  # noqa: F401
         return self._setup
 
     @property

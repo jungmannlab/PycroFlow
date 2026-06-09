@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
 )
 
 from PycroFlow import configs
+from PycroFlow.gui.widgets.worker import run_in_background
 
 
 _CONNECTED_STYLE = "color: green; font-weight: bold;"
@@ -25,6 +26,8 @@ class SystemTab(QWidget):
         self._svc = system_service
         self._experiment_service = experiment_service
         self._status_labels = {}
+        self._connect_buttons = {}
+        self._busy = False
         # Fired after a successful connect (sibling tabs refresh status).
         self._connection_listeners = []
         # Fired after a setup is loaded, with the setup name (Monet tab).
@@ -76,6 +79,7 @@ class SystemTab(QWidget):
             btn = QPushButton("Connect…")
             btn.clicked.connect(handler)
             grid.addWidget(btn, r, 2)
+            self._connect_buttons[key] = btn
         layout.addWidget(box)
         layout.addStretch()
 
@@ -133,13 +137,19 @@ class SystemTab(QWidget):
         if self._svc.setup is None:
             self._need_setup()
             return
+        # Imaging connect runs on the GUI thread: it touches the
+        # Micro-Manager Core (pycromanager / ZMQ), best kept off worker
+        # threads. It's a one-time, comparatively short step.
         if self._svc.is_emulated():
-            self._do_connect(self._svc.connect_imaging, "imaging")
+            self._do_connect(
+                self._svc.connect_imaging, "imaging", background=False)
             return
         design = getattr(
             self._experiment_service, 'experiment_design', None) or {}
         cfg = configs.assemble_imaging_config(self._svc.setup, design)
-        self._do_connect(lambda: self._svc.connect_imaging(cfg), "imaging")
+        self._do_connect(
+            lambda: self._svc.connect_imaging(cfg), "imaging",
+            background=False)
 
     def _on_connect_illumination(self):
         if self._svc.setup is None:
@@ -153,15 +163,31 @@ class SystemTab(QWidget):
         QMessageBox.warning(
             self, "No setup", "Load a microscope setup first.")
 
-    def _do_connect(self, connect_call, key):
-        try:
-            connect_call()
-        except Exception as exc:
-            QMessageBox.critical(
-                self, "Connection failed",
-                "Could not connect the {} system:\n\n{!r}".format(key, exc))
-            self.refresh()
+    def _do_connect(self, connect_call, key, background=True):
+        # Connecting can take many seconds (serial handshake) — run it off the
+        # GUI thread so the UI stays responsive. ``background=False`` keeps it
+        # on the GUI thread (used for imaging / Micro-Manager).
+        if self._busy:
             return
+        self._set_busy(True)
+        label = self._status_labels[key]
+        label.setText("Connecting…")
+        label.setStyleSheet("")
+        if not background:
+            try:
+                connect_call()
+            except Exception as exc:
+                self._connect_error(exc, key)
+            else:
+                self._connect_done()
+            return
+        run_in_background(
+            self, connect_call,
+            on_done=lambda _: self._connect_done(),
+            on_error=lambda exc: self._connect_error(exc, key))
+
+    def _connect_done(self):
+        self._set_busy(False)
         self._mirror_to_experiment_service()
         self.refresh()
         for fn in self._connection_listeners:
@@ -169,6 +195,19 @@ class SystemTab(QWidget):
                 fn()
             except Exception:
                 pass
+
+    def _connect_error(self, exc, key):
+        self._set_busy(False)
+        self.refresh()
+        QMessageBox.critical(
+            self, "Connection failed",
+            "Could not connect the {} system:\n\n{!r}".format(key, exc))
+
+    def _set_busy(self, busy):
+        self._busy = busy
+        for btn in self._connect_buttons.values():
+            btn.setEnabled(not busy)
+        self.load_setup_btn.setEnabled(not busy)
 
     def _mirror_to_experiment_service(self):
         if self._experiment_service is None:
