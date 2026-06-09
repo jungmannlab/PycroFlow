@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QAction
 
 from PycroFlow import configs
+from PycroFlow.services.experiment_service import ExperimentState
 from PycroFlow.gui.qt_bridge import QtBridge
 from PycroFlow.gui.widgets.worker import run_in_background
 from PycroFlow.gui.tabs.experiment_design_tab import ExperimentDesignTab
@@ -25,6 +26,15 @@ from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
 from PycroFlow.gui.tabs.fluid_tab import FluidTab
 from PycroFlow.gui.tabs.imaging_tab import ImagingTab
 from PycroFlow.gui.tabs.monet_tab import MonetTab
+
+
+# Experiment states during which hardware must not be touched manually (the
+# orchestrator owns the instruments).
+_RUN_LOCK_STATES = {
+    ExperimentState.ORCHESTRATING,
+    ExperimentState.RUNNING,
+    ExperimentState.PAUSED,
+}
 
 
 class PycroFlowMainWindow(QMainWindow):
@@ -96,6 +106,10 @@ class PycroFlowMainWindow(QMainWindow):
         self.tabs.addTab(self.monet_tab, "Monet")
         self.setCentralWidget(self.tabs)
 
+        # Lock manual hardware access (setup/connect, fluid manual controls,
+        # the embedded monet GUI) while the orchestrator owns the instruments.
+        self._bridge.state_changed.connect(self._on_experiment_state)
+
     # --- setup / connection -------------------------------------------
 
     def _init_setup(self):
@@ -120,6 +134,20 @@ class PycroFlowMainWindow(QMainWindow):
 
     def _on_design_changed(self):
         self._autoconnect()
+
+    def _on_experiment_state(self, old, new):
+        """Lock/unlock manual hardware access on experiment state changes."""
+        self._lock_hardware(new in _RUN_LOCK_STATES)
+
+    def _lock_hardware(self, locked):
+        self.setup_combo.setEnabled(not locked)
+        self.act_connect.setEnabled(not locked)
+        self.fluid_tab.set_run_lock(locked)
+        self.imaging_tab.set_run_lock(locked)
+        self.monet_tab.set_run_lock(locked)
+        if not locked:
+            # Restore real connection statuses after the run lock lifts.
+            self._refresh_status()
 
     def _autoconnect(self):
         if self._system_service.setup is None:

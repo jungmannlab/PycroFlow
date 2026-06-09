@@ -368,6 +368,28 @@ class TestConnectionFlow(unittest.TestCase):
         self.assertIsNotNone(w._system_service.imaging_system)
         self.assertEqual(w.imaging_tab.status_label.text(), 'connected')
 
+    def test_hardware_locked_during_run(self):
+        from PycroFlow.services import ExperimentState
+        w = self._win()
+        self.assertTrue(w.fluid_tab.connect_btn.isEnabled())
+        self.assertTrue(w.setup_combo.isEnabled())
+
+        # Entering a running state locks manual hardware access.
+        w._experiment_service._set_state(ExperimentState.RUNNING)
+        self.assertFalse(w.fluid_tab.connect_btn.isEnabled())
+        self.assertFalse(w.imaging_tab.connect_btn.isEnabled())
+        self.assertFalse(w.monet_tab._embed_container.isEnabled())
+        self.assertFalse(w.setup_combo.isEnabled())
+        self.assertFalse(w.act_connect.isEnabled())
+        # STOP stays available during a run.
+        self.assertTrue(w.fluid_tab.stop_btn.isEnabled())
+
+        # Leaving the run unlocks everything again.
+        w._experiment_service._set_state(ExperimentState.ABORTED)
+        self.assertTrue(w.fluid_tab.connect_btn.isEnabled())
+        self.assertTrue(w.monet_tab._embed_container.isEnabled())
+        self.assertTrue(w.setup_combo.isEnabled())
+
 
 def _example_design():
     import PycroFlow
@@ -465,8 +487,8 @@ class TestMonetSetSetup(unittest.TestCase):
         from PycroFlow.tests._mock_hardware import install_hardware_mocks
         install_hardware_mocks()
 
-    def test_set_setup_passes_microscope(self):
-        from PyQt6.QtWidgets import QWidget
+    def test_set_setup_preselects_without_autoconnect(self):
+        from PyQt6.QtWidgets import QWidget, QComboBox
         fake_monet = types.ModuleType('monet')
         fake_gui = types.ModuleType('monet.gui')
 
@@ -474,6 +496,8 @@ class TestMonetSetSetup(unittest.TestCase):
             def __init__(self, initial_microscope=None):
                 super().__init__()
                 self.initial_microscope = initial_microscope
+                self._scope_combo = QComboBox()
+                self._scope_combo.addItems(['Emulator', 'Mercury'])
 
         fake_gui.MonetWidget = FakeMonetWidget
         fake_monet.gui = fake_gui
@@ -483,7 +507,12 @@ class TestMonetSetSetup(unittest.TestCase):
         from PycroFlow.gui.tabs.monet_tab import MonetTab
         tab = MonetTab()
         tab.set_setup('Mercury')
-        self.assertEqual(tab._monet_window.initial_microscope, 'Mercury')
+        # No auto-connect: initial_microscope is NOT passed (avoids fighting
+        # PycroFlow's IlluminationSystem for the laser COM port).
+        self.assertIsNone(tab._monet_window.initial_microscope)
+        # The scope is pre-selected for display.
+        self.assertEqual(
+            tab._monet_window._scope_combo.currentText(), 'Mercury')
 
 
 @unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")

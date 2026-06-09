@@ -39,6 +39,7 @@ class IlluminationSystem(AbstractSystem):
         laser : int
             The laser line to activate.
         """
+        self._ensure_monet()
         if self.instrument.laser:
             if self.instrument.lasers[self.instrument.curr_laser].enabled:
                 print(
@@ -73,6 +74,7 @@ class IlluminationSystem(AbstractSystem):
 
     def set_laser_enabled(self, laser, enabled=True):
         """Set the activation state of a laser in the system"""
+        self._ensure_monet()
         self.instrument.lasers[int(laser)].enabled = enabled
 
     def set_laser_power(self, power):
@@ -83,6 +85,7 @@ class IlluminationSystem(AbstractSystem):
             print(str(e))
 
     def set_sample_power(self, power, warmup_delay=0):
+        self._ensure_monet()
         if int(power) != self.instrument.power:
             logger.debug(
                 f"Changing sample power from "
@@ -99,6 +102,7 @@ class IlluminationSystem(AbstractSystem):
 
     def set_attenuation(self, pos):
         """Set the attenuation device to a position (float)"""
+        self._ensure_monet()
         if pos.upper() == "HOME":
             self.instrument.attenuator.home()
         else:
@@ -159,8 +163,23 @@ class IlluminationSystem(AbstractSystem):
     def _assign_protocol(self, protocol):
         self.protocol = protocol
         self.parameters = protocol.get("parameters")
+        # monet / laser control loads lazily on first use (run start or a
+        # manual laser command), not here: building the orchestrator — e.g.
+        # translating an experiment design — must not open the lasers.
 
-        self._load_monet_control(self.parameters["setup"])
+    def _ensure_monet(self):
+        """Load monet's laser control on first use (idempotent).
+
+        Deferred out of :meth:`_assign_protocol` so compiling/translating a
+        protocol does not require the lasers; they are opened when
+        illumination is actually used.
+        """
+        if getattr(self, "instrument", None) is not None:
+            return
+        params = getattr(self, "parameters", None) or {}
+        setup = params.get("setup")
+        if setup:
+            self._load_monet_control(setup)
 
     def _load_monet_control(self, mconfig_name):
         """Load the monet illumination laser control and its configuration.
@@ -234,6 +253,7 @@ class IlluminationSystem(AbstractSystem):
 
     def execute_protocol_entry(self, i):
         """execute protocol entry i"""
+        self._ensure_monet()
         pentry = self.protocol["protocol_entries"][i]
         if pentry["$type"] == "set power":
             logger.debug(

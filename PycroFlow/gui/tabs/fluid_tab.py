@@ -153,6 +153,17 @@ class FluidTab(QWidget):
         """Set the status label (e.g. 'connecting…') from the coordinator."""
         self.status_label.setText(text)
 
+    def set_run_lock(self, locked):
+        """Disable manual fluid controls during a run; STOP stays available.
+
+        The orchestrator owns the fluid system while running, so manual
+        connect / tubing / pump actions must not be issued. The emergency
+        STOP button is intentionally left enabled.
+        """
+        self.connect_btn.setEnabled(not locked)
+        for btn in self._busy_buttons:
+            btn.setEnabled(not locked)
+
     def _on_connect_clicked(self):
         if self._on_connect is not None:
             self._on_connect()

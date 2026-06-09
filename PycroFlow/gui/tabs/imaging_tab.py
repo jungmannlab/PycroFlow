@@ -44,6 +44,10 @@ class ImagingTab(QWidget):
         """Set the status label (e.g. 'connecting…') from the coordinator."""
         self.status_label.setText(text)
 
+    def set_run_lock(self, locked):
+        """Disable the connect control while an experiment is running."""
+        self.connect_btn.setEnabled(not locked)
+
     def _on_connect_clicked(self):
         if self._on_connect is not None:
             self._on_connect()

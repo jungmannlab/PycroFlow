@@ -50,6 +50,18 @@ class MonetTab(QWidget):
         """Show the PycroFlow illumination-system connection status."""
         self._illu_status.setText("PycroFlow illumination: {}".format(text))
 
+    def set_run_lock(self, locked):
+        """Disable the embedded monet GUI during an experiment run.
+
+        PycroFlow's IlluminationSystem owns the lasers while running, so the
+        manual monet controls (which would grab the same COM port) are greyed
+        out to make it clear they are off-limits. The real status is restored
+        by the coordinator on unlock.
+        """
+        self._embed_container.setEnabled(not locked)
+        if locked:
+            self.set_illumination_status("in use by experiment")
+
     def _embed(self, setup_name):
         # Tear down whatever is currently embedded.
         self.shutdown()
@@ -80,9 +92,16 @@ class MonetTab(QWidget):
         """Return (widget, None) on success or (None, reason) on failure.
 
         monet's own guidance is that embedders use ``MonetWidget`` (a
-        ``QWidget``); ``initial_microscope`` is a ``monet.CONFIGS`` key — i.e.
-        the PycroFlow setup name — and the widget auto-connects to it. We fall
-        back to ``MonetMainWindow`` for older monet versions.
+        ``QWidget``). We fall back to ``MonetMainWindow`` for older monet
+        versions.
+
+        The embed is constructed **without auto-connecting** the lasers:
+        passing ``initial_microscope`` makes ``MonetWidget`` open the lasers,
+        which would fight PycroFlow's own ``IlluminationSystem`` for the same
+        COM port (→ "No lasers could be loaded"). PycroFlow owns the lasers
+        during automated runs; the Monet tab is a manual tool — the user picks
+        the scope (pre-selected here for convenience) and clicks monet's own
+        Connect when they want direct laser control (not while running).
 
         Failure modes handled: monet not installed; monet import-time error;
         monet present but mocked (returns a non-QWidget); monet built against
@@ -105,15 +124,21 @@ class MonetTab(QWidget):
                 "PycroFlow's PyQt6 GUI (it cannot be embedded then)."
             )
         try:
-            window = cls(initial_microscope=setup_name)
-        except TypeError:
-            # Older signature without initial_microscope.
-            try:
-                window = cls()
-            except Exception as exc:
-                return None, "construction failed: {!r}".format(exc)
+            # NB: no initial_microscope -> no laser auto-connect.
+            window = cls()
         except Exception as exc:
             return None, "construction failed: {!r}".format(exc)
+        # Pre-select the scope in monet's own combo for convenience (display
+        # only — does not connect). Best-effort; private API may be absent.
+        if setup_name:
+            combo = getattr(window, '_scope_combo', None)
+            if combo is not None:
+                try:
+                    idx = combo.findText(setup_name)
+                    if idx >= 0:
+                        combo.setCurrentIndex(idx)
+                except Exception:
+                    pass
         return window, None
 
     def shutdown(self):

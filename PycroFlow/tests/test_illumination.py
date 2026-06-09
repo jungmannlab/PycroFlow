@@ -188,6 +188,32 @@ class ProtocolDispatchTest(unittest.TestCase):
         self.assertTrue(all(l.enabled for l in isy.instrument.lasers.values()))
 
 
+class LazyMonetTest(unittest.TestCase):
+    def test_assign_protocol_does_not_load_monet(self):
+        # _assign_protocol must not open the lasers — so translating a design
+        # (which builds the orchestrator) never touches hardware.
+        isy = IlluminationSystem()
+        isy._assign_protocol(
+            {'protocol_entries': [], 'parameters': {'setup': 'X'}})
+        self.assertIsNone(getattr(isy, 'instrument', None))
+
+    def test_ensure_monet_loads_once(self):
+        isy = IlluminationSystem()
+        isy._assign_protocol(
+            {'protocol_entries': [], 'parameters': {'setup': 'X'}})
+        calls = []
+
+        def fake_load(name):
+            calls.append(name)
+            isy.instrument = FakeInstrument()
+
+        isy._load_monet_control = fake_load
+        isy._ensure_monet()
+        self.assertEqual(calls, ['X'])
+        isy._ensure_monet()          # idempotent — already loaded
+        self.assertEqual(calls, ['X'])
+
+
 class PauseAbortTest(unittest.TestCase):
     def test_pause_resume_abort_flags(self):
         isy = _make_system()
