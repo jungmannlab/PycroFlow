@@ -158,6 +158,30 @@ class TestEmulatedFluidOps(unittest.TestCase):
                 side_effect=AssertionError("input() must not be called")):
             svc.clean_tubings()
 
+    def test_inject_step_duration_estimate(self):
+        fluid = self._connected().fluid_system
+        # inject of 1000 µl at 200 µl/min -> ~2*1000/200 = 10 min = 600 s.
+        est = fluid._estimate_entry_duration(
+            {'$type': 'inject', 'volume': 1000})
+        self.assertGreaterEqual(est, 600)
+        # non-time-based steps have no estimate.
+        self.assertIsNone(
+            fluid._estimate_entry_duration({'$type': 'signal', 'value': 'x'}))
+
+    def test_get_step_progress_during_inject(self):
+        import time
+        fluid = self._connected().fluid_system
+        # Idle: nothing running.
+        self.assertIsNone(fluid.get_step_progress())
+        # Simulate a running inject started 1 s ago with a 100 s estimate.
+        fluid._step_estimate = (time.time() - 1.0, 100.0, 'inject')
+        cur, tot, label = fluid.get_step_progress()
+        self.assertEqual((tot, label), (100.0, 'inject'))
+        self.assertTrue(0.5 <= cur <= 3.0)
+        # Elapsed is capped at the estimate.
+        fluid._step_estimate = (time.time() - 500.0, 100.0, 'inject')
+        self.assertEqual(fluid.get_step_progress()[0], 100.0)
+
 
 class TestTranslate(unittest.TestCase):
 

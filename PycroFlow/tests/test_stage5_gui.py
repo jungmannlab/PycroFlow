@@ -265,6 +265,39 @@ class TestMainWindow(unittest.TestCase):
         self.assertEqual(tab.current_round_bar.value(), 25)
         self.assertEqual(tab.current_round_count.text(), '1/4')
 
+    def test_within_step_bars(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+        svc = MagicMock(name='service')
+        svc.state = ExperimentState.RUNNING
+        svc.protocol = {
+            'fluid': {'protocol_entries': [{'$type': 'incubate'}]},
+            'img': {'protocol_entries': [{'$type': 'acquire'}]},
+            'illu': {'protocol_entries': []},
+        }
+        svc.progress.return_value = {
+            'fluid': (0, 1), 'img': (0, 1), 'illu': (0, 0)}
+        # Imaging mid-acquisition; fluid incubating; illu nothing.
+        svc.step_progress.return_value = {
+            'img': (200, 500, 'frames'),
+            'fluid': (12.0, 30.0, 'incubate'),
+            'illu': None,
+        }
+        tab = ExperimentTab(svc, MagicMock(name='bridge'))
+        tab._populate_steps()
+        tab._poll_progress()
+        img_bar, img_count = tab.substep_bars['img'][1:]
+        # isHidden() reflects the explicit show/hide flag (isVisible() needs a
+        # shown top-level window, which offscreen tests don't have).
+        self.assertFalse(img_bar.isHidden())
+        self.assertEqual(img_bar.value(), 40)
+        self.assertEqual(img_count.text(), 'frames 200/500')
+        fluid_count = tab.substep_bars['fluid'][2]
+        self.assertEqual(fluid_count.text(), 'incubate 12/30 s')
+        # Illumination has no sub-progress -> its row stays hidden.
+        self.assertTrue(tab.substep_bars['illu'][1].isHidden())
+
     def test_experiment_tab_lists_all_subsystem_steps(self):
         w = self._build()
         proto = {
@@ -446,6 +479,25 @@ class TestConnectionFlow(unittest.TestCase):
         self.assertEqual(w.fluid_tab.status_label.text(), 'connected')
         self.assertEqual(w.imaging_tab.status_label.text(), 'connected')
         self.assertIsNotNone(w._experiment_service._fluid_system)
+
+    def test_status_bar_confirms_connections(self):
+        import PycroFlow
+        w = self._win()
+        w._on_setup_changed('Emulator')
+        # Before connecting: setup shown, systems not connected.
+        text = w.status_label.text()
+        self.assertIn('Setup: Emulator', text)
+        self.assertIn('not connected', text)
+        # After autoconnect (via design load): each system confirmed.
+        path = os.path.join(
+            os.path.dirname(PycroFlow.__file__), 'examples',
+            'sph_resi_6plex.yaml')
+        w.design_tab.load_design_path(path)
+        text = w.status_label.text()
+        self.assertIn('Fluid: ✓ connected', text)
+        self.assertIn('Imaging: ✓ connected', text)
+        self.assertIn('Illumination: ✓ connected', text)
+        self.assertNotIn('not connected', text)
 
     def test_fluid_connect_requires_design(self):
         from unittest.mock import patch

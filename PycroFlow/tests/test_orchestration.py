@@ -148,6 +148,50 @@ class TestOrchestration(unittest.TestCase):
         self.assertEqual(po.threadexchange['fluid'], ['fluid round 1 done'])
         self.assertEqual(po.threadexchange['img'], ['imaging round 1 done'])
 
+    def test_get_step_progress_handler_and_system(self):
+        # The handler returns its own step_progress (set by the incubate
+        # dispatcher) if present, else delegates to the system.
+        threadexchange = self.get_threadexchange()
+        system = MagicMock()
+        system.get_step_progress.return_value = (3, 10, 'frames')
+        fh = por.ImagingHandler(
+            system, _wrap([{'$type': 'acquire', 'frames': 10, 't_exp': 1}]),
+            threadexchange)
+        # No handler-level progress -> delegates to the system.
+        self.assertEqual(fh.get_step_progress(), (3, 10, 'frames'))
+        # Handler-level progress (e.g. incubate) takes precedence.
+        fh.step_progress = (5.0, 30.0, 'incubate')
+        self.assertEqual(fh.get_step_progress(), (5.0, 30.0, 'incubate'))
+
+    def test_incubate_sets_step_progress(self):
+        # The incubate dispatcher exposes elapsed/total while waiting.
+        from PycroFlow.protocol_entries import parse_entry
+        from PycroFlow.orchestration.core import dispatch_entry
+        threadexchange = self.get_threadexchange()
+        fh = por.FluidHandler(
+            MagicMock(), _wrap([{'$type': 'incubate', 'duration': 0.3}]),
+            threadexchange)
+        seen = []
+
+        def watch():
+            for _ in range(40):
+                if fh.step_progress is not None:
+                    seen.append(fh.step_progress)
+                    break
+                time.sleep(0.01)
+
+        import threading
+        t = threading.Thread(target=watch)
+        t.start()
+        dispatch_entry(parse_entry({'$type': 'incubate', 'duration': 0.3}), fh)
+        t.join(timeout=1)
+        self.assertTrue(seen, "step_progress was never set during incubate")
+        cur, tot, label = seen[0]
+        self.assertEqual(tot, 0.3)
+        self.assertEqual(label, 'incubate')
+        # Cleared once the wait completes.
+        self.assertIsNone(fh.step_progress)
+
     def test_illumination_handler_assigns_protocol(self):
         # Regression: IlluminationHandler must assign the protocol to its
         # system (like Fluid/Imaging) or execute_protocol_entry raises

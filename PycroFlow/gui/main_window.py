@@ -7,7 +7,9 @@ coordinates
 hardware connection: the microscope **setup** is chosen in the toolbar, and
 subsystems **autoconnect** once an experiment design is loaded (the fluid
 system needs the design's reservoir list). Each subsystem tab shows its
-connection status and offers a manual Connect/Reconnect.
+connection status and offers a manual Connect/Reconnect, and the status bar
+shows a single always-visible confirmation of the loaded setup + each
+subsystem's connection state.
 
 Owns the :class:`QtBridge` that marshals ExperimentService observer callbacks
 onto the GUI thread.
@@ -51,6 +53,7 @@ class PycroFlowMainWindow(QMainWindow):
         self.setWindowTitle("PycroFlow {}".format(__version__))
         self._build_toolbar()
         self._build_tabs()
+        self._build_statusbar()
         self._init_setup()
 
     # --- toolbar ------------------------------------------------------
@@ -97,6 +100,12 @@ class PycroFlowMainWindow(QMainWindow):
         # Lock manual hardware access (setup/connect, fluid manual controls,
         # the embedded monet GUI) while the orchestrator owns the instruments.
         self._bridge.state_changed.connect(self._on_experiment_state)
+
+    def _build_statusbar(self):
+        # A single always-visible confirmation of the loaded setup and each
+        # subsystem's connection state (the per-tab labels stay too).
+        self.status_label = QLabel()
+        self.statusBar().addWidget(self.status_label)
 
     # --- setup / connection -------------------------------------------
 
@@ -220,6 +229,7 @@ class PycroFlowMainWindow(QMainWindow):
             self.imaging_tab.set_status_text("connecting…")
         elif key == 'illumination':
             self.monet_tab.set_illumination_status("connecting…")
+        self._update_statusbar()
 
     def _refresh_status(self):
         self.fluid_tab.refresh()
@@ -227,6 +237,25 @@ class PycroFlowMainWindow(QMainWindow):
         self.monet_tab.set_illumination_status(
             "connected" if self._is_connected('illumination')
             else "not connected")
+        self._update_statusbar()
+
+    def _status_word(self, key):
+        if key in self._connecting:
+            return "connecting…"
+        return "✓ connected" if self._is_connected(key) else "✗ not connected"
+
+    def _update_statusbar(self):
+        """Refresh the status bar's setup + per-subsystem confirmation."""
+        if self._system_service.setup is None:
+            self.status_label.setText("No setup loaded")
+            return
+        parts = ["Setup: {}".format(self.setup_combo.currentText())]
+        if self._system_service.is_emulated():
+            parts[0] += " (emulated)"
+        for key, label in (('fluid', 'Fluid'), ('imaging', 'Imaging'),
+                           ('illumination', 'Illumination')):
+            parts.append("{}: {}".format(label, self._status_word(key)))
+        self.status_label.setText("      ".join(parts))
 
     def _mirror_systems(self):
         try:

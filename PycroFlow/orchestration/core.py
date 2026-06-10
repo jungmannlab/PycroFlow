@@ -102,8 +102,12 @@ if _TYPED_ENTRIES_AVAILABLE:
                 handler.txchange["abort_flag"].is_set()
                 or handler.txchange["abort_protocol_flag"].is_set()
             ):
+                handler.step_progress = None
                 return
+            # Expose elapsed/total so the GUI can show a wait progress bar.
+            handler.step_progress = (time.time() - tic, duration, "incubate")
             time.sleep(0.05)
+        handler.step_progress = None
 
 
 class AbstractSystem(abc.ABC):
@@ -148,6 +152,10 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         self.txchange = threadexchange
         self.system = None  # is set in Handler subclasses
         self.protocol_iter = 0
+        # Progress within the current step as (current, total, label), or
+        # None when the current step has no meaningful sub-progress. Set by
+        # the incubate dispatcher; imaging delegates to its system.
+        self.step_progress = None
 
     def run(self):
         if self.system is None:
@@ -182,6 +190,9 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         nsteps = len(self.protocol["protocol_entries"])
         self.protocol_iter = 0
         while self.protocol_iter < len(self.protocol["protocol_entries"]):
+            # Clear any sub-step progress from the previous step; the current
+            # step's dispatcher/system sets it if it has any.
+            self.step_progress = None
             step = self.protocol["protocol_entries"][self.protocol_iter]
             logger.debug(
                 "System {:s} performing step {:d}/{:d}: {:s}".format(
@@ -234,6 +245,23 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
 
     def get_current_protocol_iter(self, arg=None):
         return self.protocol_iter
+
+    def get_step_progress(self):
+        """Progress within the current step as (current, total, label).
+
+        Returns the handler's own ``step_progress`` (set by the incubate
+        dispatcher) if present, else delegates to the system's
+        ``get_step_progress`` (e.g. imaging frame count), else ``None``.
+        """
+        if self.step_progress is not None:
+            return self.step_progress
+        getter = getattr(self.system, "get_step_progress", None)
+        if getter is None:
+            return None
+        try:
+            return getter()
+        except Exception:
+            return None
 
     def set_current_protocol_iter(self, i):
         self.protocol_iter = i

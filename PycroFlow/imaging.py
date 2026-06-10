@@ -122,6 +122,12 @@ class ImagingSystem(AbstractSystem):
 
         self.handler_ref = None
 
+        # Within-acquisition progress (for the GUI step bar): frames acquired
+        # so far / total, and whether an acquisition is currently running.
+        self.curr_frame = 0
+        self.curr_n_frames = 0
+        self.acquiring = False
+
         # PFS logging
         # self.pfs_pars = {  # for Mercury
         #     'tag_pfs': 'TIPFSOffset',
@@ -343,6 +349,8 @@ class ImagingSystem(AbstractSystem):
             index=range(int(acquisition_config["frames"] / 100)),
         )
         self.curr_frame = 0
+        self.curr_n_frames = n_frames
+        self.acquiring = True
         self.is_out_of_focus = False
 
         self.core.set_exposure(t_exp)
@@ -374,10 +382,24 @@ class ImagingSystem(AbstractSystem):
             "close_display_after_acquisition", True
         ):
             viewer.close()
+        self.acquiring = False
         self.pfs_log.to_excel(os.path.join(acq_dir, acq_name + "_pfs.xlsx"))
         if self.protocol["parameters"].get("show_progress"):
             self.probar.end_progress()
         logger.debug("acquired all images of {:s}".format(acq_name))
+
+    def get_step_progress(self):
+        """Frames acquired so far within the current acquisition.
+
+        Returns
+        -------
+        tuple or None
+            ``(current_frame, total_frames, 'frames')`` while acquiring,
+            else ``None``.
+        """
+        if self.acquiring and self.curr_n_frames:
+            return (self.curr_frame, self.curr_n_frames, "frames")
+        return None
 
     def image_process_fn(self, img, meta, event_queue):
         if self.protocol["parameters"].get("show_progress"):

@@ -306,6 +306,30 @@ class ExperimentService:
             out[key] = (cur, total)
         return out
 
+    def step_progress(self) -> Dict:
+        """Per-subsystem progress *within* the current step.
+
+        Returns
+        -------
+        dict
+            Maps ``'fluid'`` / ``'img'`` / ``'illu'`` to ``(current, total,
+            label)`` for steps that have meaningful sub-progress (imaging
+            frames, fluid incubation wait), or ``None`` otherwise. Empty dict
+            when nothing is loaded.
+        """
+        if self._orchestrator is None:
+            return {}
+        handlers = {
+            'fluid': self._orchestrator.fluid_handler,
+            'img': self._orchestrator.imaging_handler,
+            'illu': self._orchestrator.illumination_handler,
+        }
+        out = {}
+        for key, handler in handlers.items():
+            getter = getattr(handler, 'get_step_progress', None)
+            out[key] = getter() if getter is not None else None
+        return out
+
     def is_finished(self) -> bool:
         if self._orchestrator is None:
             return False

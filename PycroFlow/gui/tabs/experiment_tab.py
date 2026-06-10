@@ -99,16 +99,25 @@ class ExperimentTab(YamlDropMixin, QWidget):
         prog_box = QGroupBox("Progress")
         prog_grid = QGridLayout(prog_box)
         prog_grid.setColumnStretch(1, 1)
-        self.overall_bar, self.overall_count = self._add_bar(
+        self.overall_bar, self.overall_count, _ = self._add_bar(
             prog_grid, 0, "Overall")
-        self.round_bar, self.round_count = self._add_bar(
+        self.round_bar, self.round_count, _ = self._add_bar(
             prog_grid, 1, "Rounds in Experiment")
         # Steps performed within the round currently being executed.
-        self.current_round_bar, self.current_round_count = self._add_bar(
+        self.current_round_bar, self.current_round_count, _ = self._add_bar(
             prog_grid, 2, "Steps in Round")
         self.step_status = QLabel("—")
         self.step_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         prog_grid.addWidget(self.step_status, 3, 0, 1, 3)
+        # Per-subsystem within-step progress (e.g. imaging frames, fluid
+        # incubation wait). Only meaningful for some steps, so each row is
+        # hidden until its subsystem reports sub-progress.
+        self.substep_bars = {}
+        for i, system in enumerate(_SYSTEMS):
+            bar, count, name = self._add_bar(
+                prog_grid, 4 + i, _SYSTEM_LABELS[system])
+            self.substep_bars[system] = (name, bar, count)
+            self._set_substep_visible(system, False)
         layout.addWidget(prog_box)
 
         # --- per-subsystem step lists (side by side) + parameters below
@@ -153,12 +162,13 @@ class ExperimentTab(YamlDropMixin, QWidget):
 
     @staticmethod
     def _add_bar(grid, row, label):
-        """Add a labelled progress bar row to a grid; return (bar, count).
+        """Add a labelled progress bar row; return (bar, count, name_label).
 
         Column 0 holds the description, column 1 the bar (shows the percent),
         column 2 a right-aligned ``current/total`` count.
         """
-        grid.addWidget(QLabel(label), row, 0)
+        name = QLabel(label)
+        grid.addWidget(name, row, 0)
         bar = QProgressBar()
         bar.setRange(0, 100)
         bar.setFormat("%p%")
@@ -168,7 +178,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
         count.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         grid.addWidget(count, row, 2)
-        return bar, count
+        return bar, count, name
 
     def _connect_signals(self):
         self._bridge.state_changed.connect(self._on_state_changed)
@@ -326,7 +336,37 @@ class ExperimentTab(YamlDropMixin, QWidget):
 
         done_rounds, total_rounds = self._update_round_bar(prog.get('img'))
         self._update_current_round_bar(prog, done_rounds, total_rounds)
+        self._update_substep_bars()
         self._shade_steps(prog)
+
+    def _set_substep_visible(self, system, visible):
+        for w in self.substep_bars[system]:
+            w.setVisible(visible)
+
+    def _update_substep_bars(self):
+        """Update the per-subsystem within-step bars (hidden when N/A)."""
+        getter = getattr(self._service, 'step_progress', None)
+        sp = getter() if callable(getter) else {}
+        if not isinstance(sp, dict):
+            sp = {}
+        for system in _SYSTEMS:
+            prog = sp.get(system)
+            if not (isinstance(prog, (tuple, list)) and len(prog) == 3):
+                self._set_substep_visible(system, False)
+                continue
+            cur, tot, name = prog
+            _, bar, count = self.substep_bars[system]
+            bar.setValue(int(100 * cur / tot) if tot else 0)
+            count.setText(self._substep_caption(name, cur, tot))
+            self._set_substep_visible(system, True)
+
+    @staticmethod
+    def _substep_caption(name, cur, tot):
+        # Imaging counts frames; the fluid steps (incubate / inject /
+        # pump_out) are time-based and shown in seconds.
+        if name == 'frames':
+            return "frames {}/{}".format(int(cur), int(tot))
+        return "{} {:.0f}/{:.0f} s".format(name, cur, tot)
 
     def _step_name(self, system, cur):
         """``$type`` of the step a subsystem is currently on (or 'done')."""

@@ -198,6 +198,10 @@ class LegacyArchitecture(AbstractSystem):
             self._calibrate_tubing()
 
         self.handler_ref = None
+        # Estimated-duration tracking for the within-step progress bar:
+        # (start_time, est_seconds, label) for the running inject/pump_out,
+        # else None. See _estimate_entry_duration / get_step_progress.
+        self._step_estimate = None
         # self.fluid_lock = threading.Lock()
         # self.fluid_pause = threading.Event()
         # self.fluid_abort = threading.Event()
@@ -902,26 +906,92 @@ class LegacyArchitecture(AbstractSystem):
         """
         delay = self.protocol[i].get("delay", 0)
         extractionfactor = self.protocol[i].get("extractionfactor")
-        if self.parameters["mode"] == "tubing_stack":
-            if (self.last_protocol_entry != i - 1) or (i == 0):
-                self._assemble_tubing_stack(i)
-            for reservoir_id, vol in self.tubing_stack[i]:
-                self._set_valves(reservoir_id)
-                self._inject(
-                    vol, delay=delay, extractionfactor=extractionfactor
-                )
-            self.last_protocol_entry = i
-        elif self.parameters["mode"] == "tubing_flush":
-            # # this way, we flush (1+flushfactor)
-            # # and also through sample. But that shouldn't matter for now.
-            # self._flush()
-            # self.execute_single_protocol_entry(i)
-            pass
-        elif self.parameters["mode"] == "tubing_ignore":
-            # this way, exactly the volumes given in the protocol are used
-            self.execute_single_protocol_entry(i)
-        else:
-            raise NotImplementedError("Mode " + self.parameters["mode"])
+        # Publish an estimated duration so the GUI can show a within-step
+        # progress bar (cleared in `finally` so it never lingers past the
+        # step, even on error/abort).
+        est = self._estimate_entry_duration(self.protocol[i])
+        if est:
+            self._step_estimate = (
+                time.time(), est, self.protocol[i].get("$type"))
+        try:
+            if self.parameters["mode"] == "tubing_stack":
+                if (self.last_protocol_entry != i - 1) or (i == 0):
+                    self._assemble_tubing_stack(i)
+                for reservoir_id, vol in self.tubing_stack[i]:
+                    self._set_valves(reservoir_id)
+                    self._inject(
+                        vol, delay=delay, extractionfactor=extractionfactor
+                    )
+                self.last_protocol_entry = i
+            elif self.parameters["mode"] == "tubing_flush":
+                # # this way, we flush (1+flushfactor)
+                # # and also through sample. But that shouldn't matter for now.
+                # self._flush()
+                # self.execute_single_protocol_entry(i)
+                pass
+            elif self.parameters["mode"] == "tubing_ignore":
+                # this way, exactly the volumes given in the protocol are used
+                self.execute_single_protocol_entry(i)
+            else:
+                raise NotImplementedError("Mode " + self.parameters["mode"])
+        finally:
+            self._step_estimate = None
+
+    def _estimate_entry_duration(self, pentry):
+        """Estimate the wall-clock duration of an inject/pump_out entry.
+
+        The motion time is dominated by moving ``volume`` µl at ``velocity``
+        µl/min: an inject (and a pump-out) both pick the volume up and then
+        dispense it, so ~``2 * volume / velocity`` minutes, plus the inject
+        equilibration delays and per-stroke settle waits. This is an estimate
+        (valve moves, serial round-trips and the underpressure pre-stroke are
+        not modelled), so the GUI caps the bar at 99 % until the step actually
+        finishes. Returns seconds, or ``None`` for steps without a meaningful
+        time estimate (signals, flushes, valve-only moves).
+
+        Parameters
+        ----------
+        pentry : dict
+            A protocol entry (needs ``$type`` and ``volume``).
+
+        Returns
+        -------
+        float or None
+            Estimated duration in seconds, or ``None``.
+        """
+        type_ = pentry.get("$type")
+        if type_ not in ("inject", "pump_out"):
+            return None
+        vol = pentry.get("volume")
+        velocity = pentry.get("velocity") or self.parameters.get(
+            "max_velocity")
+        if not vol or not velocity:
+            return None
+        seconds = 120.0 * float(vol) / float(velocity)  # pickup + dispense
+        if type_ == "inject":
+            seconds += self.parameters.get("inject_in_to_out_delay", 0) or 0
+            seconds += self.parameters.get("inject_out_to_in_delay", 0) or 0
+            seconds += 2 * (pentry.get("delay", 0) or 0)
+        return seconds if seconds > 0 else None
+
+    def get_step_progress(self):
+        """Within-step progress of a running inject/pump_out.
+
+        Returns
+        -------
+        tuple or None
+            ``(elapsed, estimate, label)`` in seconds while an inject/pump_out
+            runs (elapsed capped at the estimate), else ``None``. Computed
+            from the timestamp/estimate published by
+            :meth:`execute_protocol_entry`, so it is safe to call from the GUI
+            thread (no serial I/O, unlike polling the pump position).
+        """
+        est = self._step_estimate
+        if est is None:
+            return None
+        start, total, label = est
+        elapsed = min(time.time() - start, total)
+        return (elapsed, total, label)
 
     # @run_in_thread
     def execute_single_protocol_entry(self, i):
