@@ -2,27 +2,44 @@
 
 Drives :class:`PycroFlow.services.experiment_service.ExperimentService` and
 subscribes to a :class:`PycroFlow.gui.qt_bridge.QtBridge` for thread-safe
-state/log updates. Loading and the run controls (Start/Pause/Resume/Abort)
-live in the main-window toolbar — the single, always-visible control surface —
-so this tab is a pure view.
+state/log updates. Owns the run controls — Load run sequence, Start, a
+Pause/Resume toggle, and Abort — enabled/relabelled per experiment state.
+
+The three subsystems (fluid / img / illu) run in parallel, so their steps are
+shown in three side-by-side lists. Clicking a step in any list shows that
+step's parameters in the editable box below, labelled with which list it came
+from.
 """
 import ast
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QListWidget,
-    QPlainTextEdit, QGroupBox, QTableWidget, QTableWidgetItem,
-    QMessageBox, QProgressBar,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel,
+    QListWidget, QPlainTextEdit, QFileDialog, QGroupBox, QTableWidget,
+    QTableWidgetItem, QMessageBox, QProgressBar,
 )
 
 from PycroFlow.services.experiment_service import ExperimentState
 from PycroFlow.gui.widgets.dnd import YamlDropMixin
 
 
+# The subsystems, in display order.
+_SYSTEMS = ('fluid', 'img', 'illu')
+_SYSTEM_LABELS = {'fluid': 'Fluid', 'img': 'Imaging', 'illu': 'Illumination'}
+
 # States during which we poll the orchestrator for live progress.
 _ACTIVE_STATES = {ExperimentState.ORCHESTRATING, ExperimentState.RUNNING,
                   ExperimentState.PAUSED}
+
+# Which run controls are enabled in each experiment state.
+_CAN_START = {ExperimentState.LOADED, ExperimentState.ORCHESTRATING,
+              ExperimentState.PAUSED}
+_CAN_ABORT = {ExperimentState.ORCHESTRATING, ExperimentState.RUNNING,
+              ExperimentState.PAUSED}
+# Loading a new run sequence is only allowed when nothing is running.
+_CAN_LOAD = {ExperimentState.IDLE, ExperimentState.LOADED,
+             ExperimentState.FINISHED, ExperimentState.ABORTED}
 
 # Step-list shading.
 _FINISHED_COLOR = QColor("#e8f5e9")   # light green — completed
@@ -35,19 +52,20 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._service = service
         self._bridge = bridge
         self.enable_yaml_drop()
-        # Backing store for the step list so a selection can look up the
-        # full entry dict (the list only shows index + $type). Entries are
-        # references into the loaded protocol, so editing them in the table
+        # Per-subsystem backing store: the entry dicts shown in each list, and
+        # the round index of each entry (for the current-round bar). Entries
+        # are references into the loaded protocol, so editing them in the table
         # mutates the protocol the orchestrator runs.
-        self._step_entries = []
-        # (system, index) per list row, aligned with _step_entries, for
-        # progress shading.
-        self._step_meta = []
-        self._current_step = -1
+        self._entries = {s: [] for s in _SYSTEMS}
+        self._round_of = {s: [] for s in _SYSTEMS}
+        # The step whose parameters are shown (the last one clicked).
+        self._current_sys = None
+        self._current_row = -1
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(500)
         self._build_ui()
         self._connect_signals()
+        self._refresh_controls(self._service.state)
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -61,33 +79,57 @@ class ExperimentTab(YamlDropMixin, QWidget):
         status_row.addStretch()
         layout.addLayout(status_row)
 
+        # --- run controls
+        controls = QHBoxLayout()
+        self.load_btn = QPushButton("Load run sequence…")
+        self.start_btn = QPushButton("Start")
+        # One button toggles Pause/Resume depending on the run state.
+        self.pause_resume_btn = QPushButton("Pause")
+        self.abort_btn = QPushButton("Abort")
+        for b in (self.load_btn, self.start_btn, self.pause_resume_btn,
+                  self.abort_btn):
+            controls.addWidget(b)
+        controls.addStretch()
+        layout.addLayout(controls)
+
         # --- progress
+        # A grid keeps the three bars aligned: column 0 = label, column 1 =
+        # bar (the only stretching column, so all bars are the same width),
+        # column 2 = the right-aligned current/total count.
         prog_box = QGroupBox("Progress")
-        prog_layout = QVBoxLayout(prog_box)
-        overall_row = QHBoxLayout()
-        overall_row.addWidget(QLabel("Overall:"))
-        self.overall_bar = QProgressBar()
-        self.overall_bar.setRange(0, 100)
-        overall_row.addWidget(self.overall_bar)
-        prog_layout.addLayout(overall_row)
-        round_row = QHBoxLayout()
-        round_row.addWidget(QLabel("Rounds:"))
-        self.round_bar = QProgressBar()
-        self.round_bar.setRange(0, 100)
-        round_row.addWidget(self.round_bar)
-        prog_layout.addLayout(round_row)
+        prog_grid = QGridLayout(prog_box)
+        prog_grid.setColumnStretch(1, 1)
+        self.overall_bar, self.overall_count = self._add_bar(
+            prog_grid, 0, "Overall")
+        self.round_bar, self.round_count = self._add_bar(
+            prog_grid, 1, "Rounds in Experiment")
+        # Steps performed within the round currently being executed.
+        self.current_round_bar, self.current_round_count = self._add_bar(
+            prog_grid, 2, "Steps in Round")
         self.step_status = QLabel("—")
-        prog_layout.addWidget(self.step_status)
+        self.step_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        prog_grid.addWidget(self.step_status, 3, 0, 1, 3)
         layout.addWidget(prog_box)
 
-        # --- step list + per-step parameters
+        # --- per-subsystem step lists (side by side) + parameters below
         steps_box = QGroupBox("Protocol steps")
-        steps_layout = QHBoxLayout(steps_box)
-        self.step_list = QListWidget()
-        steps_layout.addWidget(self.step_list, 1)
+        steps_layout = QVBoxLayout(steps_box)
+
+        lists_row = QHBoxLayout()
+        self.step_lists = {}
+        for system in _SYSTEMS:
+            col = QVBoxLayout()
+            col.addWidget(QLabel(_SYSTEM_LABELS[system]))
+            lst = QListWidget()
+            self.step_lists[system] = lst
+            col.addWidget(lst)
+            lists_row.addLayout(col, 1)
+        steps_layout.addLayout(lists_row, 1)
 
         params_box = QGroupBox("Step parameters (editable)")
         params_layout = QVBoxLayout(params_box)
+        self.step_param_label = QLabel("Select a step above to view it.")
+        params_layout.addWidget(self.step_param_label)
         self.step_table = QTableWidget(0, 2)
         self.step_table.setHorizontalHeaderLabels(["Parameter", "Value"])
         self.step_table.horizontalHeader().setStretchLastSection(True)
@@ -96,26 +138,70 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.apply_btn = QPushButton("Apply changes")
         self.apply_btn.setEnabled(False)
         params_layout.addWidget(self.apply_btn)
-        steps_layout.addWidget(params_box, 1)
+        steps_layout.addWidget(params_box)
 
-        layout.addWidget(steps_box)
+        layout.addWidget(steps_box, 1)
 
-        # --- log pane
+        # --- log pane (compact — it carries little detail)
         log_box = QGroupBox("Log")
         log_layout = QVBoxLayout(log_box)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
+        self.log_view.setMaximumHeight(100)
         log_layout.addWidget(self.log_view)
         layout.addWidget(log_box)
+
+    @staticmethod
+    def _add_bar(grid, row, label):
+        """Add a labelled progress bar row to a grid; return (bar, count).
+
+        Column 0 holds the description, column 1 the bar (shows the percent),
+        column 2 a right-aligned ``current/total`` count.
+        """
+        grid.addWidget(QLabel(label), row, 0)
+        bar = QProgressBar()
+        bar.setRange(0, 100)
+        bar.setFormat("%p%")
+        grid.addWidget(bar, row, 1)
+        count = QLabel("0/0")
+        count.setMinimumWidth(70)
+        count.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        grid.addWidget(count, row, 2)
+        return bar, count
 
     def _connect_signals(self):
         self._bridge.state_changed.connect(self._on_state_changed)
         self._bridge.log_message.connect(self._on_log)
-        self.step_list.currentRowChanged.connect(self._on_step_selected)
+        for system, lst in self.step_lists.items():
+            lst.currentRowChanged.connect(
+                lambda row, s=system: self._on_step_selected(s, row))
         self.apply_btn.clicked.connect(self._on_apply)
         self._poll_timer.timeout.connect(self._poll_progress)
+        self.load_btn.clicked.connect(self._on_load)
+        self.start_btn.clicked.connect(self._on_start)
+        self.pause_resume_btn.clicked.connect(self._on_pause_resume)
+        self.abort_btn.clicked.connect(self._on_abort)
 
-    # --- loading (controls live in the main-window toolbar)
+    # --- run controls
+
+    def _on_load(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Run Sequence YAML", "", "YAML files (*.yaml *.yml)")
+        if path:
+            self.load_protocol_path(path)
+
+    def _on_start(self):
+        self._service.start()
+
+    def _on_pause_resume(self):
+        if self._service.state is ExperimentState.RUNNING:
+            self._service.pause()
+        elif self._service.state is ExperimentState.PAUSED:
+            self._service.resume()
+
+    def _on_abort(self):
+        self._service.abort()
 
     def load_protocol_path(self, path):
         """Programmatic load (used by the toolbar / drag&drop / tests)."""
@@ -126,12 +212,28 @@ class ExperimentTab(YamlDropMixin, QWidget):
         """Load a Run Sequence YAML dropped onto the tab."""
         self.load_protocol_path(path)
 
+    def _refresh_controls(self, state):
+        """Enable/disable + relabel the run controls for the given state."""
+        self.load_btn.setEnabled(state in _CAN_LOAD)
+        self.start_btn.setEnabled(state in _CAN_START)
+        self.abort_btn.setEnabled(state in _CAN_ABORT)
+        if state is ExperimentState.RUNNING:
+            self.pause_resume_btn.setText("Pause")
+            self.pause_resume_btn.setEnabled(True)
+        elif state is ExperimentState.PAUSED:
+            self.pause_resume_btn.setText("Resume")
+            self.pause_resume_btn.setEnabled(True)
+        else:
+            self.pause_resume_btn.setText("Pause")
+            self.pause_resume_btn.setEnabled(False)
+
     # --- bridge-driven UI updates (run on the GUI thread)
 
     def _on_state_changed(self, old, new):
         self.state_label.setText(new.value)
-        # Repopulate the step list whenever a protocol becomes loaded,
-        # regardless of how it was loaded (button, toolbar, or programmatic),
+        self._refresh_controls(new)
+        # Repopulate the step lists whenever a protocol becomes loaded,
+        # regardless of how it was loaded (toolbar, drag&drop, programmatic),
         # so the view always reflects the active protocol.
         if new is ExperimentState.LOADED:
             self._populate_steps()
@@ -150,29 +252,56 @@ class ExperimentTab(YamlDropMixin, QWidget):
     # --- helpers
 
     def _populate_steps(self):
-        self.step_list.clear()
-        self._step_entries = []
-        self._step_meta = []
         protocol = self._service.protocol or {}
-        # List each subsystem's steps, prefixed with the subsystem so the
-        # combined view is unambiguous. _step_entries / _step_meta stay
-        # aligned with the list rows (for the param view and progress shading).
-        for system in ('fluid', 'img', 'illu'):
+        for system in _SYSTEMS:
+            lst = self.step_lists[system]
+            lst.clear()
             sub = protocol.get(system, {})
             entries = (
                 sub.get('protocol_entries', []) if isinstance(sub, dict)
                 else [])
+            self._entries[system] = list(entries)
+            self._round_of[system] = self._round_indices(entries)
             for i, entry in enumerate(entries):
                 type_ = (
                     entry.get('$type', '?') if isinstance(entry, dict)
                     else '?')
-                self.step_list.addItem(
-                    "[{}] {:d}: {}".format(system, i, type_))
-                self._step_entries.append(entry)
-                self._step_meta.append((system, i))
-        self._current_step = -1
+                lst.addItem("{:d}: {}".format(i, type_))
+        self._current_sys = None
+        self._current_row = -1
         self.step_table.setRowCount(0)
+        self.step_param_label.setText("Select a step above to view it.")
         self.apply_btn.setEnabled(False)
+
+    @staticmethod
+    def _is_round_marker(entry):
+        """Whether an entry marks the end of a round for its subsystem.
+
+        Each PycroFlow round is one imaging acquisition; subsystems sync on it.
+        So a round closes at an ``acquire`` (imaging) or at the
+        ``wait for signal`` on the imaging subsystem (fluid/illumination wait
+        for imaging to finish before the next round). Both occur exactly once
+        per round, giving a consistent round count across subsystems.
+        """
+        if not isinstance(entry, dict):
+            return False
+        type_ = entry.get('$type')
+        if type_ == 'acquire':
+            return True
+        if type_ == 'wait for signal' and entry.get('target') == 'img':
+            return True
+        return False
+
+    @classmethod
+    def _round_indices(cls, entries):
+        """Return the round index of each entry (markers before it)."""
+        out = []
+        seen = 0
+        for entry in entries:
+            out.append(seen)
+            if cls._is_round_marker(entry):
+                seen += 1
+        return out
 
     # --- live progress
 
@@ -184,17 +313,29 @@ class ExperimentTab(YamlDropMixin, QWidget):
         total = sum(t for _, t in prog.values())
         pct = int(100 * done / total) if total else 0
         self.overall_bar.setValue(pct)
-        self.overall_bar.setFormat("{}/{} steps (%p%)".format(done, total))
+        self.overall_count.setText("{}/{}".format(done, total))
 
         parts = []
-        for key in ('fluid', 'img', 'illu'):
+        for key in _SYSTEMS:
             if key in prog:
                 cur, tot = prog[key]
-                parts.append("{} {}/{}".format(key, cur, tot))
-        self.step_status.setText("   ·   ".join(parts))
+                parts.append(
+                    "{} {}/{} ({})".format(
+                        key, cur, tot, self._step_name(key, cur)))
+        self.step_status.setText("      ".join(parts))
 
-        self._update_round_bar(prog.get('img'))
+        done_rounds, total_rounds = self._update_round_bar(prog.get('img'))
+        self._update_current_round_bar(prog, done_rounds, total_rounds)
         self._shade_steps(prog)
+
+    def _step_name(self, system, cur):
+        """``$type`` of the step a subsystem is currently on (or 'done')."""
+        entries = self._entries.get(system, [])
+        if 0 <= cur < len(entries) and isinstance(entries[cur], dict):
+            return entries[cur].get('$type', '?')
+        if entries and cur >= len(entries):
+            return "done"
+        return "—"
 
     def _update_round_bar(self, img_prog):
         protocol = self._service.protocol or {}
@@ -207,36 +348,79 @@ class ExperimentTab(YamlDropMixin, QWidget):
         total_rounds = len(acquire_idx)
         if not total_rounds:
             self.round_bar.setValue(0)
-            self.round_bar.setFormat("no imaging rounds")
-            return
+            self.round_count.setText("—")
+            return 0, 0
         cur = img_prog[0] if img_prog else 0
         done_rounds = sum(1 for i in acquire_idx if i < cur)
         self.round_bar.setValue(int(100 * done_rounds / total_rounds))
-        self.round_bar.setFormat(
-            "round {}/{}".format(done_rounds, total_rounds))
+        self.round_count.setText("{}/{}".format(done_rounds, total_rounds))
+        return done_rounds, total_rounds
+
+    def _update_current_round_bar(self, prog, done_rounds, total_rounds):
+        """Show step progress within the round currently being executed.
+
+        Counts, across all subsystems, the steps belonging to the in-progress
+        round (index ``done_rounds``) and how many of those are done.
+        """
+        if not total_rounds:
+            self.current_round_bar.setValue(0)
+            self.current_round_count.setText("—")
+            return
+        current = min(done_rounds, total_rounds)
+        done = total = 0
+        for system in _SYSTEMS:
+            cur = prog.get(system, (0, 0))[0]
+            for idx, rnd in enumerate(self._round_of.get(system, [])):
+                if rnd == current:
+                    total += 1
+                    if idx < cur:
+                        done += 1
+        pct = int(100 * done / total) if total else 0
+        self.current_round_bar.setValue(pct)
+        self.current_round_count.setText("{}/{}".format(done, total))
 
     def _shade_steps(self, prog):
         active = self._service.state in _ACTIVE_STATES
-        for row, (system, idx) in enumerate(self._step_meta):
-            item = self.step_list.item(row)
-            if item is None:
-                continue
+        for system in _SYSTEMS:
+            lst = self.step_lists[system]
             cur, _ = prog.get(system, (0, 0))
-            if idx < cur:
-                item.setBackground(_FINISHED_COLOR)
-            elif idx == cur and active:
-                item.setBackground(_ACTIVE_COLOR)
-            else:
-                item.setBackground(QBrush())
+            for idx in range(lst.count()):
+                item = lst.item(idx)
+                if item is None:
+                    continue
+                if idx < cur:
+                    item.setBackground(_FINISHED_COLOR)
+                elif idx == cur and active:
+                    item.setBackground(_ACTIVE_COLOR)
+                else:
+                    item.setBackground(QBrush())
 
-    def _on_step_selected(self, row):
-        """Show the selected step's parameters in the editable table."""
-        self._current_step = row
+    def _on_step_selected(self, system, row):
+        """Show the clicked step's parameters in the editable table.
+
+        Three lists feed one parameter box, so clicking in one clears the
+        others' selection (the box shows the *last* clicked step).
+        """
+        if row < 0:
+            # Deselection — e.g. from clearing another list, or repopulating.
+            return
+        for other, lst in self.step_lists.items():
+            if other != system:
+                lst.blockSignals(True)
+                lst.setCurrentRow(-1)
+                lst.blockSignals(False)
+
+        self._current_sys = system
+        self._current_row = row
         self.step_table.setRowCount(0)
-        if row < 0 or row >= len(self._step_entries):
+        entries = self._entries.get(system, [])
+        if row >= len(entries):
             self.apply_btn.setEnabled(False)
             return
-        entry = self._step_entries[row]
+        entry = entries[row]
+        type_ = entry.get('$type', '?') if isinstance(entry, dict) else '?'
+        self.step_param_label.setText(
+            "{} · step {}: {}".format(_SYSTEM_LABELS[system], row, type_))
         if not isinstance(entry, dict):
             # Non-dict entry: show it read-only, nothing to edit.
             self._set_value_row(0, "value", entry, editable=False)
@@ -261,10 +445,11 @@ class ExperimentTab(YamlDropMixin, QWidget):
         pick up the change). Fields that fail type coercion are left
         unchanged and reported.
         """
-        row = self._current_step
-        if row < 0 or row >= len(self._step_entries):
+        entries = self._entries.get(self._current_sys, [])
+        row = self._current_row
+        if row < 0 or row >= len(entries):
             return
-        entry = self._step_entries[row]
+        entry = entries[row]
         if not isinstance(entry, dict):
             return
         errors = []
@@ -287,7 +472,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
                 "These fields were left unchanged:\n\n" + "\n".join(errors))
         # Re-render from the stored entry so displayed text and the cached
         # value types reflect what was actually written.
-        self._on_step_selected(row)
+        self._on_step_selected(self._current_sys, row)
 
     # --- editing helpers
 

@@ -13,6 +13,13 @@ from loguru import logger
 import os
 import sys
 
+try:
+    from importlib.metadata import PackageNotFoundError, version
+
+    __version__ = version("PycroFlow")
+except (ImportError, PackageNotFoundError):  # not installed (e.g. source tree)
+    __version__ = "0.0.0"
+
 
 # loguru auto-installs a DEBUG->stderr handler (id 0) on import. Drop it so
 # nothing spams the terminal before a frontend calls setup_logging(); that

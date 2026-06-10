@@ -5,10 +5,12 @@ Load / Save a design YAML, edit it field-by-field (incl. the nested SPH-RESI
 target / RESI rounds), and **Translate** it into the Run Sequence tab via
 :meth:`PycroFlow.services.ExperimentService.translate`.
 """
+import os
+
 import yaml
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QScrollArea, QFileDialog,
-    QMessageBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+    QFileDialog, QMessageBox,
 )
 
 from PycroFlow.schemas.experiment_design import ExperimentDesign
@@ -53,6 +55,35 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
     def _set_form(self, data):
         self._form = SchemaForm(ExperimentDesign, data)
         self.scroll.setWidget(self._form)
+        self._wire_save_dir_hint()
+
+    def _wire_save_dir_hint(self):
+        """Show the resolved absolute save_dir beside the edit box.
+
+        Files created during the run land in ``save_dir``, resolved against
+        the working directory (which loading a design from disk moves to the
+        design's folder). When the entered path is relative (or '.'), the
+        actual destination is non-obvious, so show it; hide it for an
+        already-absolute path.
+        """
+        self._save_dir_hint = None
+        editor = self._form.field_editor('save_dir')
+        line = editor.line_edit() if editor is not None else None
+        if line is None:
+            return
+        hint = QLabel()
+        hint.setStyleSheet("color: gray;")
+        editor.add_suffix(hint)
+        self._save_dir_hint = hint
+
+        def update(text):
+            if os.path.isabs(text):
+                hint.setText("")
+            else:
+                hint.setText("→ {}".format(os.path.abspath(text or '.')))
+
+        line.textChanged.connect(update)
+        update(line.text())
 
     # --- actions ------------------------------------------------------
 

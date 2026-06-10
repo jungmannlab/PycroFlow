@@ -111,6 +111,15 @@ class _ScalarEditor(QWidget):
             if value is not None:
                 self._w.setText(str(value))
         lay.addWidget(self._w)
+        self._lay = lay
+
+    def line_edit(self):
+        """The inner ``QLineEdit`` (None for a bool/checkbox field)."""
+        return self._w if isinstance(self._w, QLineEdit) else None
+
+    def add_suffix(self, widget):
+        """Append a trailing widget (e.g. a hint label) after the editor."""
+        self._lay.addWidget(widget)
 
     def get_value(self):
         if isinstance(self._w, QCheckBox):
@@ -406,6 +415,10 @@ class SchemaForm(QWidget):
                 form.addRow(editor)
             else:
                 form.addRow(alias, editor)
+
+    def field_editor(self, alias):
+        """Return the editor widget for a top-level field (None if absent)."""
+        return self._editors.get(alias)
 
     def to_dict(self):
         """Return the edited values as an alias-keyed dict."""

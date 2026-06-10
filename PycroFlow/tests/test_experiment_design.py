@@ -179,6 +179,24 @@ class TestTranslate(unittest.TestCase):
         svc.translate()
         self.assertIs(svc.orchestrator.fluid_system, fluid)
 
+    def test_load_from_path_changes_cwd(self):
+        import shutil
+        original = os.getcwd()
+        self.addCleanup(os.chdir, original)
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, True)
+        dst = os.path.join(folder, 'design.yaml')
+        shutil.copy(_EXAMPLE, dst)
+        ExperimentService().load_experiment_design(dst)
+        self.assertEqual(os.path.realpath(os.getcwd()),
+                         os.path.realpath(folder))
+
+    def test_load_from_dict_keeps_cwd(self):
+        original = os.getcwd()
+        self.addCleanup(os.chdir, original)
+        ExperimentService().load_experiment_design(_example_design())
+        self.assertEqual(os.getcwd(), original)
+
 
 if __name__ == '__main__':
     unittest.main()

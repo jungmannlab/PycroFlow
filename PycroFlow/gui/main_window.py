@@ -1,7 +1,9 @@
 """PycroFlowMainWindow — the top-level GUI window.
 
-A toolbar (setup selector + run controls) over a tab widget: Experiment
-Design, Run Sequence, Fluid, Imaging, Monet. The window also coordinates
+A toolbar (setup selector + Connect) over a tab widget: Experiment
+Design, Run Sequence, Fluid, Imaging, Monet. The run controls (Load /
+Start / Pause-Resume / Abort) live in the Run Sequence tab. The window also
+coordinates
 hardware connection: the microscope **setup** is chosen in the toolbar, and
 subsystems **autoconnect** once an experiment design is loaded (the fluid
 system needs the design's reservoir list). Each subsystem tab shows its
@@ -11,8 +13,7 @@ Owns the :class:`QtBridge` that marshals ExperimentService observer callbacks
 onto the GUI thread.
 """
 from PyQt6.QtWidgets import (
-    QMainWindow, QTabWidget, QToolBar, QFileDialog, QLabel, QComboBox,
-    QMessageBox,
+    QMainWindow, QTabWidget, QToolBar, QLabel, QComboBox, QMessageBox,
 )
 # Qt6 moved QAction out of QtWidgets into QtGui.
 from PyQt6.QtGui import QAction
@@ -36,17 +37,6 @@ _RUN_LOCK_STATES = {
     ExperimentState.PAUSED,
 }
 
-# Which toolbar run controls are enabled in each experiment state.
-_CAN_START = {ExperimentState.LOADED, ExperimentState.ORCHESTRATING,
-              ExperimentState.PAUSED}
-_CAN_PAUSE = {ExperimentState.RUNNING}
-_CAN_RESUME = {ExperimentState.PAUSED}
-_CAN_ABORT = {ExperimentState.ORCHESTRATING, ExperimentState.RUNNING,
-              ExperimentState.PAUSED}
-# Loading a new run sequence is only allowed when nothing is running.
-_CAN_LOAD = {ExperimentState.IDLE, ExperimentState.LOADED,
-             ExperimentState.FINISHED, ExperimentState.ABORTED}
-
 
 class PycroFlowMainWindow(QMainWindow):
     def __init__(self, experiment_service, system_service, parent=None):
@@ -57,7 +47,8 @@ class PycroFlowMainWindow(QMainWindow):
         # Keys of subsystems whose connect is currently in flight.
         self._connecting = set()
 
-        self.setWindowTitle("PycroFlow")
+        from PycroFlow import __version__
+        self.setWindowTitle("PycroFlow {}".format(__version__))
         self._build_toolbar()
         self._build_tabs()
         self._init_setup()
@@ -65,6 +56,8 @@ class PycroFlowMainWindow(QMainWindow):
     # --- toolbar ------------------------------------------------------
 
     def _build_toolbar(self):
+        # Hardware connection only — the run controls (Load / Start /
+        # Pause-Resume / Abort) live in the Run Sequence tab.
         tb = QToolBar("Main")
         self.addToolBar(tb)
 
@@ -74,28 +67,9 @@ class PycroFlowMainWindow(QMainWindow):
         tb.addWidget(self.setup_combo)
         self.act_connect = QAction("Connect", self)
         tb.addAction(self.act_connect)
-        tb.addSeparator()
-
-        self.act_load = QAction("Load run sequence", self)
-        self.act_start = QAction("Start", self)
-        self.act_pause = QAction("Pause", self)
-        self.act_resume = QAction("Resume", self)
-        self.act_abort = QAction("Abort", self)
-        for a in (self.act_load, self.act_start, self.act_pause,
-                  self.act_resume, self.act_abort):
-            tb.addAction(a)
 
         self.setup_combo.currentTextChanged.connect(self._on_setup_changed)
         self.act_connect.triggered.connect(self._autoconnect)
-        self.act_load.triggered.connect(self._on_load)
-        self.act_start.triggered.connect(
-            lambda: self._experiment_service.start())
-        self.act_pause.triggered.connect(
-            lambda: self._experiment_service.pause())
-        self.act_resume.triggered.connect(
-            lambda: self._experiment_service.resume())
-        self.act_abort.triggered.connect(
-            lambda: self._experiment_service.abort())
 
     def _build_tabs(self):
         self.tabs = QTabWidget()
@@ -121,10 +95,8 @@ class PycroFlowMainWindow(QMainWindow):
         self.setCentralWidget(self.tabs)
 
         # Lock manual hardware access (setup/connect, fluid manual controls,
-        # the embedded monet GUI) while the orchestrator owns the instruments,
-        # and enable/disable the toolbar run controls per experiment state.
+        # the embedded monet GUI) while the orchestrator owns the instruments.
         self._bridge.state_changed.connect(self._on_experiment_state)
-        self._refresh_run_controls(self._experiment_service.state)
 
     # --- setup / connection -------------------------------------------
 
@@ -152,17 +124,8 @@ class PycroFlowMainWindow(QMainWindow):
         self._autoconnect()
 
     def _on_experiment_state(self, old, new):
-        """React to experiment state changes: hardware lock + run controls."""
+        """Lock/unlock manual hardware access on experiment state changes."""
         self._lock_hardware(new in _RUN_LOCK_STATES)
-        self._refresh_run_controls(new)
-
-    def _refresh_run_controls(self, state):
-        """Enable/disable the toolbar Load + Start/Pause/Resume/Abort."""
-        self.act_load.setEnabled(state in _CAN_LOAD)
-        self.act_start.setEnabled(state in _CAN_START)
-        self.act_pause.setEnabled(state in _CAN_PAUSE)
-        self.act_resume.setEnabled(state in _CAN_RESUME)
-        self.act_abort.setEnabled(state in _CAN_ABORT)
 
     def _lock_hardware(self, locked):
         self.setup_combo.setEnabled(not locked)
@@ -281,12 +244,6 @@ class PycroFlowMainWindow(QMainWindow):
         """After compiling: connect (if needed) + show the Run Sequence tab."""
         self._autoconnect()
         self.tabs.setCurrentWidget(self.run_sequence_tab)
-
-    def _on_load(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load Run Sequence YAML", "", "YAML files (*.yaml *.yml)")
-        if path:
-            self.run_sequence_tab.load_protocol_path(path)
 
     def closeEvent(self, event):
         """Clean shutdown: abort any running experiment, run monet's cleanup,

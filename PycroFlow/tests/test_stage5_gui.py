@@ -107,14 +107,60 @@ class TestMainWindow(unittest.TestCase):
             ['Experiment Design', 'Run Sequence', 'Fluid', 'Imaging',
              'Monet'])
 
+    def test_window_title_has_version(self):
+        from PycroFlow import __version__
+        w = self._build()
+        self.assertIn(__version__, w.windowTitle())
+
+    def test_run_controls_live_in_run_sequence_tab(self):
+        from PycroFlow.examples.demo_protocols import protocol
+        from PycroFlow.services import ExperimentState
+        w = self._build()
+        tab = w.run_sequence_tab
+        # Idle: only Load is available.
+        self.assertTrue(tab.load_btn.isEnabled())
+        self.assertFalse(tab.start_btn.isEnabled())
+        self.assertFalse(tab.pause_resume_btn.isEnabled())
+        self.assertFalse(tab.abort_btn.isEnabled())
+        # Loaded: Start + Load available, Abort not.
+        tab._service.load_protocol(protocol)
+        self.assertTrue(tab.start_btn.isEnabled())
+        self.assertTrue(tab.load_btn.isEnabled())
+        self.assertFalse(tab.abort_btn.isEnabled())
+        # Running: the toggle shows Pause; Load is disabled.
+        tab._service._set_state(ExperimentState.RUNNING)
+        self.assertEqual(tab.pause_resume_btn.text(), 'Pause')
+        self.assertTrue(tab.pause_resume_btn.isEnabled())
+        self.assertTrue(tab.abort_btn.isEnabled())
+        self.assertFalse(tab.load_btn.isEnabled())
+        # Paused: the same toggle shows Resume.
+        tab._service._set_state(ExperimentState.PAUSED)
+        self.assertEqual(tab.pause_resume_btn.text(), 'Resume')
+        self.assertTrue(tab.pause_resume_btn.isEnabled())
+
+    def test_pause_resume_toggle_calls_service(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+        svc = MagicMock(name='service')
+        svc.state = ExperimentState.RUNNING
+        tab = ExperimentTab(svc, MagicMock(name='bridge'))
+        tab._on_pause_resume()
+        svc.pause.assert_called_once()
+        svc.resume.assert_not_called()
+        svc.state = ExperimentState.PAUSED
+        tab._on_pause_resume()
+        svc.resume.assert_called_once()
+
     def test_experiment_tab_reflects_state(self):
         from PycroFlow.examples.demo_protocols import protocol
         w = self._build()
         w.run_sequence_tab._service.load_protocol(protocol)
         # The bridge updates the label synchronously (same thread).
         self.assertEqual(w.run_sequence_tab.state_label.text(), 'loaded')
-        # Step list populated from the fluid protocol entries.
-        self.assertGreater(w.run_sequence_tab.step_list.count(), 0)
+        # Fluid step list populated from the fluid protocol entries.
+        self.assertGreater(
+            w.run_sequence_tab.step_lists['fluid'].count(), 0)
 
     @staticmethod
     def _table_dict(tab):
@@ -128,14 +174,16 @@ class TestMainWindow(unittest.TestCase):
         w = self._build()
         tab = w.run_sequence_tab
         tab._service.load_protocol(protocol)
-        self.assertGreater(tab.step_list.count(), 0)
+        self.assertGreater(tab.step_lists['fluid'].count(), 0)
         # Selecting a step shows that entry's parameters in the table.
-        tab.step_list.setCurrentRow(0)
-        entry = tab._step_entries[0]
+        tab.step_lists['fluid'].setCurrentRow(0)
+        entry = tab._entries['fluid'][0]
         shown = self._table_dict(tab)
         self.assertEqual(shown.get('$type'), str(entry['$type']))
         for key in entry:
             self.assertIn(key, shown)
+        # The parameter box labels which list the step came from.
+        self.assertIn('Fluid', tab.step_param_label.text())
 
     def test_close_event_is_safe(self):
         from PyQt6.QtGui import QCloseEvent
@@ -165,15 +213,57 @@ class TestMainWindow(unittest.TestCase):
         tab = ExperimentTab(svc, MagicMock(name='bridge'))
         tab._populate_steps()
         tab._poll_progress()
-        # overall: done 1+1+0=2 / total 3+2+0=5 = 40%
+        # overall: done 1+1+0=2 / total 3+2+0=5 = 40%, count shown on the right
         self.assertEqual(tab.overall_bar.value(), 40)
+        self.assertEqual(tab.overall_count.text(), '2/5')
         # rounds: 2 acquires, img cur=1 -> 1 done (idx 0) of 2 = 50%
         self.assertEqual(tab.round_bar.value(), 50)
+        self.assertEqual(tab.round_count.text(), '1/2')
+        # per-subsystem status: centered, current step name in brackets
+        from PyQt6.QtCore import Qt
+        # fluid cur=1 -> entries[1] is the 'signal' step
+        self.assertIn('fluid 1/3 (signal)', tab.step_status.text())
+        self.assertTrue(
+            bool(tab.step_status.alignment() & Qt.AlignmentFlag.AlignCenter))
         # fluid rows: 0 finished, 1 active (== cur), 2 pending
+        fluid = tab.step_lists['fluid']
         self.assertEqual(
-            tab.step_list.item(0).background().color(), _FINISHED_COLOR)
+            fluid.item(0).background().color(), _FINISHED_COLOR)
         self.assertEqual(
-            tab.step_list.item(1).background().color(), _ACTIVE_COLOR)
+            fluid.item(1).background().color(), _ACTIVE_COLOR)
+
+    def test_current_round_progress_bar(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+        svc = MagicMock(name='service')
+        svc.state = ExperimentState.RUNNING
+        # Two rounds: each fluid round ends at a wait-for-img; each img round
+        # ends at an acquire.
+        svc.protocol = {
+            'fluid': {'protocol_entries': [
+                {'$type': 'inject', 'reservoir_id': 1, 'volume': 10},
+                {'$type': 'signal', 'value': 'done flushing r0'},
+                {'$type': 'wait for signal', 'target': 'img', 'value': 'a'},
+                {'$type': 'inject', 'reservoir_id': 2, 'volume': 10},
+                {'$type': 'signal', 'value': 'done flushing r1'},
+                {'$type': 'wait for signal', 'target': 'img', 'value': 'b'}]},
+            'img': {'protocol_entries': [
+                {'$type': 'acquire', 'frames': 1, 't_exp': 1},
+                {'$type': 'signal', 'value': 'done imaging r0'},
+                {'$type': 'acquire', 'frames': 1, 't_exp': 1},
+                {'$type': 'signal', 'value': 'done imaging r1'}]},
+            'illu': {'protocol_entries': []},
+        }
+        # Mid round 0: fluid on step 1 of {0,1,2}, img acquire not yet done.
+        svc.progress.return_value = {
+            'fluid': (1, 6), 'img': (0, 4), 'illu': (0, 0)}
+        tab = ExperimentTab(svc, MagicMock(name='bridge'))
+        tab._populate_steps()
+        tab._poll_progress()
+        # Round-0 steps: fluid 0,1,2 + img 0 = 4 total; done = fluid step 0.
+        self.assertEqual(tab.current_round_bar.value(), 25)
+        self.assertEqual(tab.current_round_count.text(), '1/4')
 
     def test_experiment_tab_lists_all_subsystem_steps(self):
         w = self._build()
@@ -187,25 +277,30 @@ class TestMainWindow(unittest.TestCase):
         }
         tab = w.run_sequence_tab
         tab._service.load_protocol(proto)
-        items = [tab.step_list.item(i).text()
-                 for i in range(tab.step_list.count())]
-        self.assertEqual(items, [
-            '[fluid] 0: inject',
-            '[img] 0: acquire',
-            '[illu] 0: set power',
-        ])
-        # Selecting the img step shows its parameters in the table.
-        tab.step_list.setCurrentRow(1)
+        # Each subsystem has its own list.
+        self.assertEqual(
+            [tab.step_lists['fluid'].item(0).text()], ['0: inject'])
+        self.assertEqual(
+            [tab.step_lists['img'].item(0).text()], ['0: acquire'])
+        self.assertEqual(
+            [tab.step_lists['illu'].item(0).text()], ['0: set power'])
+        # Selecting the img step shows its parameters, labelled "Imaging".
+        tab.step_lists['img'].setCurrentRow(0)
         shown = self._table_dict(tab)
         self.assertEqual(shown['$type'], 'acquire')
         self.assertEqual(shown['frames'], '10')
         self.assertEqual(shown['t_exp'], '100')
+        self.assertIn('Imaging', tab.step_param_label.text())
+        # Selecting in another list moves the box and clears the img selection.
+        tab.step_lists['fluid'].setCurrentRow(0)
+        self.assertIn('Fluid', tab.step_param_label.text())
+        self.assertEqual(tab.step_lists['img'].currentRow(), -1)
 
     def _load_inject(self, tab):
         proto = {'fluid': {'protocol_entries': [
             {'$type': 'inject', 'reservoir_id': 1, 'volume': 100}]}}
         tab._service.load_protocol(proto)
-        tab.step_list.setCurrentRow(0)
+        tab.step_lists['fluid'].setCurrentRow(0)
 
     def _set_cell(self, tab, key, text):
         for r in range(tab.step_table.rowCount()):
@@ -220,9 +315,9 @@ class TestMainWindow(unittest.TestCase):
         self._load_inject(tab)
         self._set_cell(tab, 'volume', '250')
         tab._on_apply()
-        # _step_entries[0] is a reference into the loaded protocol, so both
+        # _entries['fluid'][0] is a reference into the loaded protocol, so both
         # the cached entry and the service's protocol are updated, as int.
-        self.assertEqual(tab._step_entries[0]['volume'], 250)
+        self.assertEqual(tab._entries['fluid'][0]['volume'], 250)
         stored = tab._service.protocol['fluid']['protocol_entries'][0]
         self.assertEqual(stored['volume'], 250)
         self.assertIsInstance(stored['volume'], int)
@@ -237,7 +332,7 @@ class TestMainWindow(unittest.TestCase):
         with patch.object(et.QMessageBox, 'warning') as warn:
             tab._on_apply()
         warn.assert_called_once()
-        self.assertEqual(tab._step_entries[0]['volume'], 100)
+        self.assertEqual(tab._entries['fluid'][0]['volume'], 100)
 
     def test_experiment_tab_type_field_not_editable(self):
         from PyQt6.QtCore import Qt
@@ -471,6 +566,26 @@ class TestExperimentDesignTab(unittest.TestCase):
         tab = ExperimentDesignTab(svc)
         tab.on_yaml_dropped(path)
         self.assertIsNotNone(svc.experiment_design)
+
+    def test_save_dir_absolute_path_hint(self):
+        from PycroFlow.services import ExperimentService
+        from PycroFlow.gui.tabs.experiment_design_tab import (
+            ExperimentDesignTab)
+        tab = ExperimentDesignTab(ExperimentService())
+        editor = tab._form.field_editor('save_dir')
+        line = editor.line_edit()
+        # Relative path -> hint shows the resolved absolute destination.
+        line.setText('subdir')
+        self.assertEqual(
+            tab._save_dir_hint.text(),
+            '→ {}'.format(os.path.abspath('subdir')))
+        # '.' resolves to the working directory.
+        line.setText('.')
+        self.assertEqual(
+            tab._save_dir_hint.text(), '→ {}'.format(os.path.abspath('.')))
+        # Absolute path -> no hint shown.
+        line.setText(os.path.abspath('subdir'))
+        self.assertEqual(tab._save_dir_hint.text(), '')
 
 
 @unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")

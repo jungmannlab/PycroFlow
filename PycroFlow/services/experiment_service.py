@@ -14,6 +14,7 @@ protocol that was loaded.
 from __future__ import annotations
 
 import enum
+import os
 import threading
 from typing import Callable, Dict, List, Optional
 
@@ -125,6 +126,12 @@ class ExperimentService:
         dict
             The validated design (with on-disk/aliased keys), stored for
             :meth:`translate`.
+
+        Notes
+        -----
+        When loaded from a file, the process working directory is changed to
+        the design's containing folder, so the Run Sequence YAML and any
+        acquisition output created during the run land next to the design.
         """
         from PycroFlow.schemas import validate_experiment_design
 
@@ -135,6 +142,10 @@ class ExperimentService:
             data = source
         model = validate_experiment_design(data)
         self._experiment_design = model.model_dump(by_alias=True)
+        if isinstance(source, str):
+            folder = os.path.dirname(os.path.abspath(source))
+            os.chdir(folder)
+            logger.info("Working directory changed to {}", folder)
         return self._experiment_design
 
     @property
