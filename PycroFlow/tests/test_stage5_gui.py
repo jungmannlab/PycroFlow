@@ -298,6 +298,49 @@ class TestMainWindow(unittest.TestCase):
         # Illumination has no sub-progress -> its row stays hidden.
         self.assertTrue(tab.substep_bars['illu'][1].isHidden())
 
+    @staticmethod
+    def _sync_protocol():
+        # One round: fluid flushes then signals; img waits, acquires, signals;
+        # fluid then waits for imaging.
+        return {
+            'fluid': {'protocol_entries': [
+                {'$type': 'inject', 'reservoir_id': 1, 'volume': 10},
+                {'$type': 'signal', 'value': 'flush0'},
+                {'$type': 'wait for signal', 'target': 'img',
+                 'value': 'img0'},
+                {'$type': 'inject', 'reservoir_id': 2, 'volume': 10}]},
+            'img': {'protocol_entries': [
+                {'$type': 'wait for signal', 'target': 'fluid',
+                 'value': 'flush0'},
+                {'$type': 'acquire', 'frames': 1, 't_exp': 1},
+                {'$type': 'signal', 'value': 'img0'}]},
+            'illu': {'protocol_entries': []},
+        }
+
+    def test_step_correlation_across_systems(self):
+        w = self._build()
+        tab = w.run_sequence_tab
+        tab._service.load_protocol(self._sync_protocol())
+        # Click the fluid round-0 inject -> img is parked at its wait.
+        tab.step_lists['fluid'].setCurrentRow(0)
+        self.assertEqual(tab.step_lists['img'].currentRow(), 0)
+        # Click the img acquire -> fluid is blocked at its wait-for-imaging.
+        tab.step_lists['img'].setCurrentRow(1)
+        self.assertEqual(tab.step_lists['fluid'].currentRow(), 2)
+        # The parameter box still reflects the clicked (img) step.
+        self.assertIn('Imaging', tab.step_param_label.text())
+
+    def test_center_button_enabled_only_while_running(self):
+        from PycroFlow.services import ExperimentState
+        w = self._build()
+        tab = w.run_sequence_tab
+        tab._service.load_protocol(self._sync_protocol())
+        self.assertFalse(tab.center_btn.isEnabled())   # loaded, not running
+        tab._service._set_state(ExperimentState.RUNNING)
+        self.assertTrue(tab.center_btn.isEnabled())
+        # Centring must not raise (scrolls each list to its current step).
+        tab._center_on_current()
+
     def test_experiment_tab_lists_all_subsystem_steps(self):
         w = self._build()
         proto = {
@@ -324,10 +367,10 @@ class TestMainWindow(unittest.TestCase):
         self.assertEqual(shown['frames'], '10')
         self.assertEqual(shown['t_exp'], '100')
         self.assertIn('Imaging', tab.step_param_label.text())
-        # Selecting in another list moves the box and clears the img selection.
-        tab.step_lists['fluid'].setCurrentRow(0)
-        self.assertIn('Fluid', tab.step_param_label.text())
-        self.assertEqual(tab.step_lists['img'].currentRow(), -1)
+        # With no signals the lone steps are concurrent, so clicking img
+        # correlates the other lists to their step 0.
+        self.assertEqual(tab.step_lists['fluid'].currentRow(), 0)
+        self.assertEqual(tab.step_lists['illu'].currentRow(), 0)
 
     def _load_inject(self, tab):
         proto = {'fluid': {'protocol_entries': [

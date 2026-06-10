@@ -17,7 +17,7 @@ from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel,
     QListWidget, QPlainTextEdit, QFileDialog, QGroupBox, QTableWidget,
-    QTableWidgetItem, QMessageBox, QProgressBar,
+    QTableWidgetItem, QMessageBox, QProgressBar, QAbstractItemView,
 )
 
 from PycroFlow.services.experiment_service import ExperimentState
@@ -27,6 +27,9 @@ from PycroFlow.gui.widgets.dnd import YamlDropMixin
 # The subsystems, in display order.
 _SYSTEMS = ('fluid', 'img', 'illu')
 _SYSTEM_LABELS = {'fluid': 'Fluid', 'img': 'Imaging', 'illu': 'Illumination'}
+
+# Scroll a list so the target row sits in the middle of the viewport.
+_CENTER = QAbstractItemView.ScrollHint.PositionAtCenter
 
 # States during which we poll the orchestrator for live progress.
 _ACTIVE_STATES = {ExperimentState.ORCHESTRATING, ExperimentState.RUNNING,
@@ -58,6 +61,10 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # mutates the protocol the orchestrator runs.
         self._entries = {s: [] for s in _SYSTEMS}
         self._round_of = {s: [] for s in _SYSTEMS}
+        # Per-step logical "time" (longest-path level over the signal/wait
+        # happens-before graph), used to correlate concurrent steps across
+        # systems. {system: [level per entry]}.
+        self._levels = {s: [] for s in _SYSTEMS}
         # The step whose parameters are shown (the last one clicked).
         self._current_sys = None
         self._current_row = -1
@@ -121,8 +128,18 @@ class ExperimentTab(YamlDropMixin, QWidget):
         layout.addWidget(prog_box)
 
         # --- per-subsystem step lists (side by side) + parameters below
-        steps_box = QGroupBox("Protocol steps")
+        steps_box = QGroupBox("Run Sequence Steps")
         steps_layout = QVBoxLayout(steps_box)
+
+        steps_head = QHBoxLayout()
+        self.center_btn = QPushButton("Center on current step")
+        self.center_btn.clicked.connect(self._center_on_current)
+        steps_head.addWidget(self.center_btn)
+        steps_head.addWidget(QLabel(
+            "Click a step to highlight the concurrent step in the other "
+            "systems."))
+        steps_head.addStretch()
+        steps_layout.addLayout(steps_head)
 
         lists_row = QHBoxLayout()
         self.step_lists = {}
@@ -227,6 +244,8 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.load_btn.setEnabled(state in _CAN_LOAD)
         self.start_btn.setEnabled(state in _CAN_START)
         self.abort_btn.setEnabled(state in _CAN_ABORT)
+        # Centring on the current step only makes sense while one is running.
+        self.center_btn.setEnabled(state in _ACTIVE_STATES)
         if state is ExperimentState.RUNNING:
             self.pause_resume_btn.setText("Pause")
             self.pause_resume_btn.setEnabled(True)
@@ -277,11 +296,95 @@ class ExperimentTab(YamlDropMixin, QWidget):
                     entry.get('$type', '?') if isinstance(entry, dict)
                     else '?')
                 lst.addItem("{:d}: {}".format(i, type_))
+        self._levels = self._compute_levels()
         self._current_sys = None
         self._current_row = -1
         self.step_table.setRowCount(0)
         self.step_param_label.setText("Select a step above to view it.")
         self.apply_btn.setEnabled(False)
+
+    def _compute_levels(self):
+        """Assign each step a logical 'time' for cross-system correlation.
+
+        Builds the happens-before graph from program order (a step follows the
+        previous one in its system) plus signal -> wait edges (a
+        ``wait for signal`` follows the ``signal`` that emits its value), then
+        takes the longest-path level of each node. Steps with the same level
+        run concurrently; per system the level is strictly increasing, so the
+        step a system is in at level ``L`` is its last step with level <= L.
+        """
+        # value -> (system, index) of the signal that emits it.
+        sigmap = {}
+        for system in _SYSTEMS:
+            for i, e in enumerate(self._entries[system]):
+                if isinstance(e, dict) and e.get('$type') == 'signal':
+                    val = e.get('value')
+                    if val is not None and val not in sigmap:
+                        sigmap[val] = (system, i)
+        levels = {s: [0] * len(self._entries[s]) for s in _SYSTEMS}
+        total = sum(len(self._entries[s]) for s in _SYSTEMS)
+        # Longest-path relaxation; converges in <= (longest chain) passes,
+        # bounded by the node count.
+        for _ in range(total + 1):
+            changed = False
+            for system in _SYSTEMS:
+                entries = self._entries[system]
+                for i, e in enumerate(entries):
+                    lvl = levels[system][i - 1] + 1 if i > 0 else 0
+                    if (isinstance(e, dict)
+                            and e.get('$type') == 'wait for signal'):
+                        dep = sigmap.get(e.get('value'))
+                        if dep is not None:
+                            ds, di = dep
+                            lvl = max(lvl, levels[ds][di] + 1)
+                    if lvl != levels[system][i]:
+                        levels[system][i] = lvl
+                        changed = True
+            if not changed:
+                break
+        return levels
+
+    def _concurrent_indices(self, system, idx):
+        """For each *other* system, the step it runs during ``system``[idx].
+
+        Returns {other_system: index}. Uses the logical levels: per system a
+        step occupies the interval from just after the previous step up to its
+        own level (a blocked ``wait`` spans until its signal arrives, so its
+        level is high). So the step a system is in at level ``L`` is the first
+        one whose level >= L (levels are strictly increasing per system); if
+        ``L`` is past the system's last step, it has finished — show the last.
+        """
+        out = {}
+        levs = self._levels.get(system) or []
+        if idx >= len(levs):
+            return out
+        target = levs[idx]
+        for other in _SYSTEMS:
+            if other == system:
+                continue
+            other_levs = self._levels.get(other) or []
+            if not other_levs:
+                continue
+            best = len(other_levs) - 1
+            for j, lv in enumerate(other_levs):
+                if lv >= target:
+                    best = j
+                    break
+            out[other] = best
+        return out
+
+    def _center_on_current(self):
+        """Scroll all three lists so the current step sits in the centre."""
+        prog = self._service.progress()
+        if not prog:
+            return
+        for system in _SYSTEMS:
+            lst = self.step_lists[system]
+            if not lst.count():
+                continue
+            cur = prog.get(system, (0, 0))[0]
+            cur = min(max(cur, 0), lst.count() - 1)
+            lst.scrollToItem(lst.item(cur), _CENTER)
 
     @staticmethod
     def _is_round_marker(entry):
@@ -436,19 +539,28 @@ class ExperimentTab(YamlDropMixin, QWidget):
                     item.setBackground(QBrush())
 
     def _on_step_selected(self, system, row):
-        """Show the clicked step's parameters in the editable table.
+        """Show the clicked step's parameters and correlate the other lists.
 
-        Three lists feed one parameter box, so clicking in one clears the
-        others' selection (the box shows the *last* clicked step).
+        Three lists feed one parameter box (which shows the *last* clicked
+        step). Clicking also selects + centres, in the other two systems, the
+        step they will be in while the clicked step runs (traced via the
+        signal / wait-for-signal happens-before graph).
         """
         if row < 0:
             # Deselection — e.g. from clearing another list, or repopulating.
             return
+        corr = self._concurrent_indices(system, row)
         for other, lst in self.step_lists.items():
-            if other != system:
-                lst.blockSignals(True)
+            if other == system:
+                continue
+            lst.blockSignals(True)
+            j = corr.get(other)
+            if j is not None and 0 <= j < lst.count():
+                lst.setCurrentRow(j)
+                lst.scrollToItem(lst.item(j), _CENTER)
+            else:
                 lst.setCurrentRow(-1)
-                lst.blockSignals(False)
+            lst.blockSignals(False)
 
         self._current_sys = system
         self._current_row = row
