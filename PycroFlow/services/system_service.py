@@ -90,6 +90,43 @@ class SystemService:
         """Whether the loaded setup runs against emulated hardware."""
         return bool(self._setup and self._setup.get('emulated'))
 
+    def reservoir_ids(self) -> list:
+        """Reservoir ids wired in the current setup's manifold (sorted).
+
+        Empty when no setup is loaded. Used by the GUI to restrict the
+        experiment design's reservoir-id inputs to the setup's hardware.
+        """
+        if not self._setup:
+            return []
+        manifold = (self._setup.get('hamilton', {})
+                    or {}).get('reservoir_a_manifold', [])
+        ids = [e['id'] for e in manifold
+               if isinstance(e, dict) and 'id' in e]
+        return sorted(ids)
+
+    def laser_options(self) -> list:
+        """Laser lines (wavelengths) defined in the setup's monet config.
+
+        Empty when no setup is loaded or monet/the config is unavailable
+        (e.g. monet not installed or mocked in tests). Used by the GUI to
+        offer the experiment design's ``laser`` field as a dropdown.
+        """
+        name = self.get_monet_setup()
+        if not name:
+            return []
+        try:
+            import monet
+        except Exception:
+            return []
+        configs = getattr(monet, 'CONFIGS', None)
+        if not isinstance(configs, dict):
+            return []
+        lasers = (configs.get(name) or {}).get('lasers') \
+            if isinstance(configs.get(name), dict) else None
+        if not isinstance(lasers, dict):
+            return []
+        return sorted(lasers.keys())
+
     # --- Connection ----------------------------------------------------
 
     def connection_states(self) -> dict:
@@ -198,8 +235,8 @@ class SystemService:
 
         For an emulated setup an :class:`EmulatedIlluminationSystem` is built.
         Otherwise a real :class:`PycroFlow.illumination.IlluminationSystem`
-        is built; its monet control loads when a protocol carrying an
-        illumination ``setup`` is assigned.
+        is built, given the microscope setup's monet config name; its monet
+        control loads lazily on first laser use.
 
         Returns
         -------
@@ -211,7 +248,8 @@ class SystemService:
             self.illumination_system = EmulatedIlluminationSystem()
         else:
             import PycroFlow.illumination as il
-            self.illumination_system = il.IlluminationSystem()
+            self.illumination_system = il.IlluminationSystem(
+                setup=self.get_monet_setup())
         return self.illumination_system
 
     # --- Fluid ---------------------------------------------------------

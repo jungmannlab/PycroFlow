@@ -780,8 +780,10 @@ class ProtocolBuilder:
 
         res_idcs = {name: nr for nr, name in reservoirs.items()}
 
-        washbuf1 = config["fluid"]["settings"]["wash_buffer_1"]
-        washbuf2 = config["fluid"]["settings"].get("wash_buffer_2")
+        # The wash buffers are defined in the experiment block (not repeated
+        # in fluid.settings).
+        washbuf1 = experiment["wash_buffer_1"]
+        washbuf2 = experiment.get("wash_buffer_2")
 
         # self.create_step_pumpout(volume=volumes['wash_vol_pre'])
         # self.create_step_inject(

@@ -20,11 +20,18 @@ from PycroFlow.gui.widgets.dnd import YamlDropMixin
 
 class ExperimentDesignTab(YamlDropMixin, QWidget):
     def __init__(self, experiment_service, on_translated=None,
-                 on_design_loaded=None, parent=None):
+                 on_design_loaded=None, reservoir_ids_provider=None,
+                 laser_options_provider=None, parent=None):
         super().__init__(parent)
         self._svc = experiment_service
         self._on_translated = on_translated
         self._on_design_loaded = on_design_loaded
+        # Callable returning the current setup's valid reservoir ids, used to
+        # restrict the reservoir-id dropdowns. None -> free-text ids.
+        self._reservoir_ids_provider = reservoir_ids_provider
+        # Callable returning the setup's monet laser lines, for the laser
+        # dropdown. None -> only the current value is offered.
+        self._laser_options_provider = laser_options_provider
         self._form = None
         self._build_ui()
         self.enable_yaml_drop()
@@ -53,9 +60,36 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
         self._set_form({})
 
     def _set_form(self, data):
-        self._form = SchemaForm(ExperimentDesign, data)
+        self._form = SchemaForm(
+            ExperimentDesign, data, context=self._editor_context(data))
         self.scroll.setWidget(self._form)
         self._wire_save_dir_hint()
+
+    def _editor_context(self, data):
+        """Dynamic dropdown options for the schema form.
+
+        ``reservoir_names`` (the names defined in this design) feed the
+        imager/buffer dropdowns and update live as the reservoir table is
+        edited; ``reservoir_ids`` (from the loaded setup) restrict the
+        reservoir-id inputs, and ``lasers`` (from the setup's monet config)
+        the laser dropdown (both snapshot at form-build time).
+        """
+        settings = ((data or {}).get('fluid', {}) or {}).get('settings', {})
+        names = list((settings.get('reservoir_names') or {}).values())
+        return {
+            'reservoir_names': names,
+            'reservoir_ids': self._call_provider(self._reservoir_ids_provider),
+            'lasers': self._call_provider(self._laser_options_provider),
+        }
+
+    @staticmethod
+    def _call_provider(provider):
+        if provider is None:
+            return []
+        try:
+            return list(provider() or [])
+        except Exception:
+            return []
 
     def _wire_save_dir_hint(self):
         """Show the resolved absolute save_dir beside the edit box.

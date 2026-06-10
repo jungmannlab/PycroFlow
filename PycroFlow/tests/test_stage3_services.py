@@ -200,6 +200,32 @@ class TestSystemService(unittest.TestCase):
         self.assertIs(result, sentinel)
         self.assertIs(svc.illumination_system, sentinel)
 
+    def test_laser_options_from_monet_config(self):
+        import sys
+        import types
+        svc = SystemService()
+        svc.load_setup('Mercury')
+        fake = types.ModuleType('monet')
+        fake.CONFIGS = {'Mercury': {'lasers': {640: {}, 488: {}, 561: {}}}}
+        with patch.dict(sys.modules, {'monet': fake}):
+            self.assertEqual(svc.laser_options(), [488, 561, 640])
+
+    def test_laser_options_empty_without_real_config(self):
+        # Emulator has no monet config (and monet may be mocked) -> empty.
+        svc = SystemService()
+        svc.load_setup('Emulator')
+        self.assertEqual(svc.laser_options(), [])
+        # No setup at all -> empty too.
+        self.assertEqual(SystemService().laser_options(), [])
+
+    def test_connect_illumination_passes_monet_setup(self):
+        # The monet config name is taken from the chosen microscope setup.
+        svc = SystemService()
+        svc.load_setup('Mercury')   # non-emulated -> real illumination path
+        with patch('PycroFlow.illumination.IlluminationSystem') as IS:
+            svc.connect_illumination()
+        IS.assert_called_once_with(setup='Mercury')
+
     def test_connect_fluid_requires_setup(self):
         svc = SystemService()
         with self.assertRaises(RuntimeError):

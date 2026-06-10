@@ -28,8 +28,18 @@ from PycroFlow.orchestration import AbstractSystem
 
 
 class IlluminationSystem(AbstractSystem):
-    def __init__(self):
+    def __init__(self, setup=None):
+        """Build the illumination system.
+
+        Parameters
+        ----------
+        setup : str, optional
+            The monet config name (a ``monet.CONFIGS`` key) for this
+            microscope — supplied from the chosen microscope setup. monet's
+            laser control loads lazily on first use (:meth:`_ensure_monet`).
+        """
         self._paused = False
+        self._monet_setup = setup
 
     def set_laser(self, laser):
         """Set the current laser and activate it.
@@ -176,8 +186,13 @@ class IlluminationSystem(AbstractSystem):
         """
         if getattr(self, "instrument", None) is not None:
             return
-        params = getattr(self, "parameters", None) or {}
-        setup = params.get("setup")
+        # The monet config name comes from the microscope setup (passed at
+        # construction). Fall back to a protocol-level 'setup' parameter only
+        # for back-compat with older designs that still carry illu.parameters.
+        setup = self._monet_setup
+        if not setup:
+            params = getattr(self, "parameters", None) or {}
+            setup = params.get("setup")
         if setup:
             self._load_monet_control(setup)
 

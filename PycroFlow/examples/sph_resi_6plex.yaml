@@ -26,8 +26,6 @@ fluid:
     vol_reagent: 20
     vol_remove_before_flush: 200
     wait_after_pickup: 0
-    wash_buffer_1: C+
-    wash_buffer_2: null
     reservoir_names:
       1: A1-c3
       2: A1-c2
@@ -76,11 +74,8 @@ img:
     t_exp: 100
 
 illu:
-  parameters:
-    setup: Mercury
-    channel_group: Filter turret
-    filter: 1-R640
-    ROI: [512, 512, 512, 512]
+  # No 'parameters' block: the monet config name comes from the chosen
+  # microscope setup, not the design.
   settings:
     laser: 642
     power_acq: 70

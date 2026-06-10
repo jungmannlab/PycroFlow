@@ -626,6 +626,195 @@ class TestSchemaForm(unittest.TestCase):
         form = SchemaForm(FluidParameters, {})
         self.assertEqual(form.to_dict()['mode'], 'tubing_ignore')
 
+    def test_form_labels_are_left_aligned(self):
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QFormLayout
+        from PycroFlow.gui.widgets.schema_form import SchemaForm
+        from PycroFlow.schemas.experiment_design import FluidParameters
+        form = SchemaForm(FluidParameters, {})
+        lay = form.layout()
+        self.assertIsInstance(lay, QFormLayout)
+        self.assertTrue(
+            bool(lay.labelAlignment() & Qt.AlignmentFlag.AlignLeft))
+
+    def test_mode_is_dropdown(self):
+        from PycroFlow.gui.widgets.schema_form import SchemaForm, _ChoiceEditor
+        from PycroFlow.schemas.experiment_design import FluidParameters
+        form = SchemaForm(FluidParameters, {})
+        ed = form.field_editor('mode')
+        self.assertIsInstance(ed, _ChoiceEditor)
+        items = [ed._combo.itemText(i) for i in range(ed._combo.count())]
+        self.assertEqual(set(items), {'tubing_ignore', 'tubing_stack'})
+        self.assertEqual(ed.get_value(), 'tubing_ignore')
+
+    def test_imager_fields_are_name_dropdowns(self):
+        from PycroFlow.gui.widgets.schema_form import SchemaForm, _ChoiceEditor
+        from PycroFlow.schemas.experiment_design import SphResiExperiment
+        form = SchemaForm(
+            SphResiExperiment,
+            {'type': 'SPH-RESI', 'wash_buffer_1': 'R1', 'blocker': 'R2',
+             'blocker_incubation': 5, 'round0': None, 'target-rounds': {}},
+            context={'reservoir_names': ['R1', 'R2', 'C+']},
+            skip_fields={'type'})
+        ed = form.field_editor('wash_buffer_1')
+        self.assertIsInstance(ed, _ChoiceEditor)
+        items = [ed._combo.itemText(i) for i in range(ed._combo.count())]
+        self.assertIn('R1', items)
+        self.assertIn('C+', items)
+        self.assertIn('', items)   # the None option
+
+    def test_laser_is_dropdown_from_monet_lasers(self):
+        from PycroFlow.gui.widgets.schema_form import SchemaForm, _ChoiceEditor
+        from PycroFlow.schemas.experiment_design import IlluSettings
+        form = SchemaForm(IlluSettings, {'laser': 642, 'power_acq': 70},
+                          context={'lasers': [488, 561, 640, 642]})
+        ed = form.field_editor('laser')
+        self.assertIsInstance(ed, _ChoiceEditor)
+        items = [ed._combo.itemText(i) for i in range(ed._combo.count())]
+        self.assertEqual(items, ['488', '561', '640', '642'])
+        # The selected laser round-trips back to an int.
+        self.assertEqual(form.to_dict()['laser'], 642)
+        self.assertIsInstance(form.to_dict()['laser'], int)
+
+    def test_imager_dropdowns_update_live_on_reservoir_edit(self):
+        from PycroFlow.gui.widgets.schema_form import SchemaForm
+        from PycroFlow.schemas.experiment_design import FluidSettings
+        form = SchemaForm(FluidSettings, {
+            'vol_wash': 10, 'reservoir_names': {1: 'R1', 2: 'R2'},
+            'experiment': {'type': 'Exchange', 'wash_buffer': 'R1'}},
+            context={'reservoir_names': ['R1', 'R2'],
+                     'reservoir_ids': [1, 2, 3]})
+        wb = form.field_editor('experiment')._form.field_editor('wash_buffer')
+        self.assertIn(
+            'R2', [wb._combo.itemText(i) for i in range(wb._combo.count())])
+        # Rename reservoir 2 in the table -> the imager dropdown updates.
+        name_cell = form.field_editor('reservoir_names')._rows[1][1]
+        name_cell.setText('NEWDYE')
+        items = [wb._combo.itemText(i) for i in range(wb._combo.count())]
+        self.assertIn('NEWDYE', items)
+        self.assertNotIn('R2', items)
+
+    def test_exchange_imagers_are_addremove_dropdowns(self):
+        from PycroFlow.gui.widgets.schema_form import (
+            SchemaForm, _ListChoiceEditor, _ChoiceEditor)
+        from PycroFlow.schemas.experiment_design import ExchangeExperiment
+        form = SchemaForm(
+            ExchangeExperiment,
+            {'type': 'Exchange', 'wash_buffer': 'C+',
+             'imagers': ['R1', 'R2']},
+            context={'reservoir_names': ['R1', 'R2', 'R3', 'C+']},
+            skip_fields={'type'})
+        ed = form.field_editor('imagers')
+        self.assertIsInstance(ed, _ListChoiceEditor)
+        self.assertEqual(len(ed._items), 2)
+        # Box is titled 'rounds' with a per-row 'imager round {k}' label.
+        self.assertEqual(ed.title(), 'rounds')
+        self.assertEqual(
+            [lbl.text() for _, _, lbl in ed._items],
+            ['imager round 1', 'imager round 2'])
+        # Each round is a reservoir-name dropdown.
+        row0 = ed._items[0][1]
+        self.assertIsInstance(row0, _ChoiceEditor)
+        self.assertIn('R3', [row0._combo.itemText(i)
+                             for i in range(row0._combo.count())])
+        # Add / remove rows like the RESI rounds; labels renumber.
+        ed._add_item('R3')
+        self.assertEqual(form.to_dict()['imagers'], ['R1', 'R2', 'R3'])
+        self.assertEqual(ed._items[-1][2].text(), 'imager round 3')
+        ed._remove(ed._items[0])
+        self.assertEqual(form.to_dict()['imagers'], ['R2', 'R3'])
+        self.assertEqual(
+            [lbl.text() for _, _, lbl in ed._items],
+            ['imager round 1', 'imager round 2'])
+
+    def test_exchange_field_order_initial_imager_before_rounds(self):
+        from PycroFlow.schemas.experiment_design import ExchangeExperiment
+        fields = [f for f in ExchangeExperiment.model_fields if f != 'type']
+        self.assertEqual(
+            fields, ['wash_buffer', 'initial_imager', 'imagers'])
+
+    def test_exchange_imager_rows_update_live_on_reservoir_edit(self):
+        from PycroFlow.gui.widgets.schema_form import SchemaForm
+        from PycroFlow.schemas.experiment_design import FluidSettings
+        data = {
+            'vol_wash': 10, 'reservoir_names': {1: 'R1', 2: 'R2'},
+            'experiment': {'type': 'Exchange', 'wash_buffer': 'R1',
+                           'imagers': ['R1']}}
+        form = SchemaForm(FluidSettings, data, context={
+            'reservoir_names': ['R1', 'R2'], 'reservoir_ids': [1, 2, 3]})
+        imagers = form.field_editor('experiment')._form.field_editor('imagers')
+        row0 = imagers._items[0][1]
+        self.assertIn('R2', [row0._combo.itemText(i)
+                             for i in range(row0._combo.count())])
+        # Rename reservoir 2 -> the imager dropdown options follow.
+        form.field_editor('reservoir_names')._rows[1][1].setText('NEWDYE')
+        self.assertIn('NEWDYE', [row0._combo.itemText(i)
+                                 for i in range(row0._combo.count())])
+
+    def test_experiment_type_not_duplicated(self):
+        # The union selector supplies 'type'; the variant sub-form must not
+        # render a separate 'type' editor, but to_dict still carries it.
+        from PycroFlow.gui.widgets.schema_form import SchemaForm
+        from PycroFlow.schemas.experiment_design import FluidSettings
+        form = SchemaForm(FluidSettings, {
+            'vol_wash': 10, 'reservoir_names': {1: 'R1'},
+            'experiment': {'type': 'Exchange', 'wash_buffer': 'R1'}},
+            context={'reservoir_names': ['R1']})
+        union = form.field_editor('experiment')
+        self.assertNotIn('type', union._form._editors)
+        self.assertEqual(union.get_value()['type'], 'Exchange')
+
+    def test_special_names_id_first_and_roundtrips(self):
+        from PycroFlow.gui.widgets.schema_form import SchemaForm
+        from PycroFlow.schemas.experiment_design import FluidSettings
+        form = SchemaForm(FluidSettings, {
+            'vol_wash': 10, 'reservoir_names': {1: 'R1', 7: 'C+'},
+            'special_names': {'flushbuffer_a': 7},
+            'experiment': {'type': 'Exchange', 'wash_buffer': 'R1'}},
+            context={'reservoir_names': ['R1', 'C+'],
+                     'reservoir_ids': [1, 7]})
+        sn = form.field_editor('special_names')
+        self.assertTrue(sn._dvf)   # the id (value) is shown first
+        # Stored mapping is still name -> id.
+        self.assertEqual(
+            form.to_dict()['special_names'], {'flushbuffer_a': 7})
+
+    def test_reservoir_id_dropdown_restricted_to_setup(self):
+        from PyQt6.QtWidgets import QComboBox
+        from PycroFlow.gui.widgets.schema_form import SchemaForm
+        from PycroFlow.schemas.experiment_design import FluidSettings
+        form = SchemaForm(FluidSettings, {
+            'vol_wash': 10, 'reservoir_names': {1: 'R1'},
+            'experiment': {'type': 'Exchange', 'wash_buffer': 'R1'}},
+            context={'reservoir_names': ['R1'], 'reservoir_ids': [1, 2, 3]})
+        rn = form.field_editor('reservoir_names')
+        key_w = rn._rows[0][0]
+        self.assertIsInstance(key_w, QComboBox)
+        items = [key_w.itemText(i) for i in range(key_w.count())]
+        self.assertEqual(set(items), {'1', '2', '3'})
+
+    def test_cleaning_reservoirs_tooltip(self):
+        from PycroFlow.gui.widgets.schema_form import SchemaForm
+        from PycroFlow.schemas.experiment_design import FluidSettings
+        form = SchemaForm(FluidSettings, {
+            'vol_wash': 10, 'reservoir_names': {1: 'R1'},
+            'experiment': {'type': 'Exchange', 'wash_buffer': 'R1'}},
+            context={'reservoir_names': ['R1']})
+        self.assertIn(
+            'omma', form.field_editor('cleaning_reservoirs').toolTip())
+
+    def test_units_shown_next_to_inputs(self):
+        from PyQt6.QtWidgets import QLabel
+        from PycroFlow.gui.widgets.schema_form import SchemaForm
+        from PycroFlow.schemas.experiment_design import FluidParameters
+        form = SchemaForm(FluidParameters, {})
+        vel = form.field_editor('max_velocity')
+        self.assertIn(
+            'µl/min', [lbl.text() for lbl in vel.findChildren(QLabel)])
+        # A unitless field gets no unit label.
+        ef = form.field_editor('extractionfactor')
+        self.assertEqual([lbl.text() for lbl in ef.findChildren(QLabel)], [])
+
 
 @unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
 class TestExperimentDesignTab(unittest.TestCase):
@@ -661,6 +850,23 @@ class TestExperimentDesignTab(unittest.TestCase):
         tab = ExperimentDesignTab(svc)
         tab.on_yaml_dropped(path)
         self.assertIsNotNone(svc.experiment_design)
+
+    def test_reservoir_ids_provider_feeds_form(self):
+        from PyQt6.QtWidgets import QComboBox
+        from PycroFlow.services import ExperimentService
+        from PycroFlow.gui.tabs.experiment_design_tab import (
+            ExperimentDesignTab)
+        self.addCleanup(os.chdir, os.getcwd())   # load_design_path chdirs
+        _, path = _example_design()
+        tab = ExperimentDesignTab(
+            ExperimentService(),
+            reservoir_ids_provider=lambda: [1, 2, 3, 4, 5, 6, 7])
+        tab.load_design_path(path)
+        settings = tab._form.field_editor('fluid')._form.field_editor(
+            'settings')._form
+        rn = settings.field_editor('reservoir_names')
+        key_w = rn._rows[0][0]
+        self.assertIsInstance(key_w, QComboBox)
 
     def test_save_dir_absolute_path_hint(self):
         from PycroFlow.services import ExperimentService

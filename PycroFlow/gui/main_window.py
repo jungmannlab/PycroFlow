@@ -79,7 +79,9 @@ class PycroFlowMainWindow(QMainWindow):
         self.design_tab = ExperimentDesignTab(
             self._experiment_service,
             on_translated=self._on_translated,
-            on_design_loaded=self._on_design_changed)
+            on_design_loaded=self._on_design_changed,
+            reservoir_ids_provider=self._system_service.reservoir_ids,
+            laser_options_provider=self._system_service.laser_options)
         self.run_sequence_tab = ExperimentTab(
             self._experiment_service, self._bridge)
         self.fluid_tab = FluidTab(

@@ -30,6 +30,50 @@ class TestExperimentDesignSchema(unittest.TestCase):
         model = validate_experiment_design(design)
         self.assertEqual(model.fluid.settings.experiment.type, 'SPH-RESI')
 
+    def test_fields_declare_units(self):
+        from PycroFlow.schemas.experiment_design import (
+            field_unit, FluidParameters, FluidSettings, ImgSettings,
+            IlluSettings, ResiRound)
+
+        def u(model, field):
+            return field_unit(model.model_fields[field])
+
+        self.assertEqual(u(FluidParameters, 'max_velocity'), 'µl/min')
+        self.assertEqual(u(FluidParameters, 'clean_delay'), 's')
+        self.assertEqual(u(FluidParameters, 'inject_in_to_out_delay'), 's')
+        self.assertEqual(u(FluidSettings, 'vol_wash'), 'µl')
+        self.assertEqual(u(ResiRound, 'adapter_incubation'), 'min')
+        self.assertEqual(u(ImgSettings, 't_exp'), 'ms')
+        self.assertEqual(u(IlluSettings, 'power_acq'), 'mW')
+        self.assertEqual(u(IlluSettings, 'warmup_delay'), 's')
+        # Unitless fields report None.
+        self.assertIsNone(u(FluidParameters, 'extractionfactor'))
+
+    def test_fluid_settings_reordered_and_wash_buffers_removed(self):
+        from PycroFlow.schemas.experiment_design import FluidSettings
+        fields = list(FluidSettings.model_fields)
+        # Wash buffers live only in the experiment block now.
+        self.assertNotIn('wash_buffer_1', fields)
+        self.assertNotIn('wash_buffer_2', fields)
+        # Reservoir tables first; volumes then cleaning above experiment.
+        self.assertEqual(fields[:2], ['reservoir_names', 'special_names'])
+        self.assertEqual(fields[-2:], ['cleaning_reservoirs', 'experiment'])
+
+    def test_illu_section_has_no_parameters(self):
+        from PycroFlow.schemas.experiment_design import IlluSection
+        # The illu 'parameters' block is gone — the monet config name comes
+        # from the microscope setup, not the design.
+        self.assertNotIn('parameters', IlluSection.model_fields)
+        # The example (no longer carrying illu.parameters) still validates.
+        model = validate_experiment_design(_example_design())
+        self.assertEqual(model.illu.settings.laser, 642)
+
+    def test_units_do_not_break_validation(self):
+        # json_schema_extra is metadata only — the example still validates and
+        # round-trips through model_dump(by_alias=True).
+        model = validate_experiment_design(_example_design())
+        self.assertEqual(model.fluid.parameters.max_velocity, 10000)
+
     def test_accepts_exchange(self):
         design = {
             'base_name': 'x',
