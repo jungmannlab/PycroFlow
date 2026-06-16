@@ -123,14 +123,21 @@ class PycroFlowMainWindow(QMainWindow):
     def _on_setup_changed(self, name):
         if not name:
             return
+        # Switching setups: release any existing connections first, so the
+        # live hardware can never disagree with the selected setup. Disconnect
+        # before load_setup so each subsystem is released in its own setup's
+        # context (e.g. the emulated-serial wrapper for an emulated setup).
+        self._system_service.disconnect_all()
+        self._mirror_systems()
         try:
             self._system_service.load_setup(name)
         except Exception as exc:
             QMessageBox.critical(self, "Setup load failed", "{}".format(exc))
+            self._refresh_status()
             return
         self.monet_tab.set_setup(self._system_service.get_monet_setup())
         self._refresh_status()
-        # If a design is already loaded, (re)connect for the new setup.
+        # If a design is already loaded, connect for the new setup.
         if self._experiment_service.experiment_design:
             self._autoconnect()
 

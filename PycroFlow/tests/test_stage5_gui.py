@@ -815,6 +815,24 @@ class TestConnectionFlow(unittest.TestCase):
             {'fluid': False, 'imaging': False, 'illumination': False})
         self.assertIn('not connected', w.status_label.text())
 
+    def test_setup_change_disconnects_systems(self):
+        from unittest.mock import patch
+        w = self._win()
+        w._on_setup_changed('Emulator')
+        w.imaging_tab._on_connect_clicked()       # connect (no design needed)
+        self.assertIsNotNone(w._system_service.imaging_system)
+        # Changing the setup disconnects existing systems first, so the live
+        # hardware never disagrees with the selected setup. With no design
+        # loaded there is nothing to reconnect, so it stays disconnected.
+        with patch.object(
+                w._system_service, 'disconnect_all',
+                wraps=w._system_service.disconnect_all) as da:
+            w._on_setup_changed('Emulator')
+        da.assert_called_once()
+        self.assertEqual(
+            w._system_service.connection_states(),
+            {'fluid': False, 'imaging': False, 'illumination': False})
+
     def test_connect_disconnects_first(self):
         from unittest.mock import patch
         w = self._win()
