@@ -217,6 +217,34 @@ class TestEmulatedFluidOps(unittest.TestCase):
         with self.assertRaises(ValueError):
             svc.clean_tubings()
 
+    def test_disconnect_releases_systems(self):
+        from PycroFlow.services import SystemService
+        svc = SystemService()
+        svc.load_setup('Emulator')
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200},
+            'settings': {'reservoir_names': {1: 'R1'},
+                         'special_names': {'flushbuffer_a': 1}},
+        })
+        svc.connect_imaging()
+        svc.connect_illumination()
+        self.assertEqual(
+            svc.connection_states(),
+            {'fluid': True, 'imaging': True, 'illumination': True})
+        svc.disconnect_all()
+        self.assertEqual(
+            svc.connection_states(),
+            {'fluid': False, 'imaging': False, 'illumination': False})
+        # Idempotent: disconnecting again is a safe no-op.
+        svc.disconnect_all()
+        # And the hardware is free to reconnect afterwards.
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200},
+            'settings': {'reservoir_names': {1: 'R1'},
+                         'special_names': {'flushbuffer_a': 1}},
+        })
+        self.assertTrue(svc.connection_states()['fluid'])
+
     def test_inject_step_duration_estimate(self):
         fluid = self._connected().fluid_system
         # inject of 1000 µl at 200 µl/min -> ~2*1000/200 = 10 min = 600 s.

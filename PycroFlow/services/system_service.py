@@ -252,6 +252,63 @@ class SystemService:
                 setup=self.get_monet_setup())
         return self.illumination_system
 
+    # --- Disconnection -------------------------------------------------
+
+    def disconnect_fluid(self) -> None:
+        """Release the fluid (Hamilton serial) connection. No-op if absent."""
+        if self.fluid_system is None:
+            return
+        try:
+            import PycroFlow.hamilton_architecture as ha
+            if self.is_emulated():
+                from PycroFlow.tests.emulators import patch_serial
+                with patch_serial():
+                    ha.disconnect()
+            else:
+                ha.disconnect()
+        except Exception as exc:
+            logger.warning("fluid disconnect failed: {!r}".format(exc))
+        self.fluid_system = None
+
+    def disconnect_imaging(self) -> None:
+        """Release the imaging system (and its MM Core lock)."""
+        if self.imaging_system is None:
+            return
+        try:
+            if hasattr(self.imaging_system, 'close'):
+                self.imaging_system.close()
+        except Exception as exc:
+            logger.warning("imaging disconnect failed: {!r}".format(exc))
+        self.imaging_system = None
+
+    def disconnect_illumination(self) -> None:
+        """Release the illumination system (closes monet if it exposes one)."""
+        if self.illumination_system is None:
+            return
+        try:
+            for name in ('close', 'shutdown', 'disconnect'):
+                fn = getattr(self.illumination_system, name, None)
+                if callable(fn):
+                    fn()
+                    break
+        except Exception as exc:
+            logger.warning("illumination disconnect failed: {!r}".format(exc))
+        self.illumination_system = None
+
+    def disconnect(self, key: str) -> None:
+        """Disconnect one subsystem ('fluid'/'imaging'/'illumination')."""
+        {
+            'fluid': self.disconnect_fluid,
+            'imaging': self.disconnect_imaging,
+            'illumination': self.disconnect_illumination,
+        }[key]()
+
+    def disconnect_all(self) -> None:
+        """Disconnect every connected subsystem."""
+        self.disconnect_fluid()
+        self.disconnect_imaging()
+        self.disconnect_illumination()
+
     # --- Fluid ---------------------------------------------------------
 
     def fill_tubings(self) -> None:
