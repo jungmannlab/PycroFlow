@@ -144,19 +144,33 @@ class ExperimentTab(YamlDropMixin, QWidget):
         layout.addLayout(controls)
 
         # --- progress
-        # A grid keeps the three bars aligned: column 0 = label, column 1 =
-        # bar (the only stretching column, so all bars are the same width),
-        # column 2 = the right-aligned current/total count.
+        # A grid keeps the bars aligned: column 0 = label, column 1 = bar (the
+        # only stretching column, so all bars share width and right edge),
+        # column 2 = the right-aligned current/total count. The bars show only
+        # the percentage; the verbose elapsed/remaining estimates live in a
+        # single summary line below (in-bar text is unreliable on macOS's
+        # minimal progress-bar style and made the bars' right edges ragged).
         prog_box = QGroupBox("Progress")
         prog_grid = QGridLayout(prog_box)
         prog_grid.setColumnStretch(1, 1)
+        # Time summary (top, centered): estimated total before the run;
+        # elapsed / remaining / total (overall and current-round) while it
+        # runs. In-bar text is unreliable on macOS's minimal progress-bar
+        # style and made the bars' right edges ragged, so the verbose
+        # estimates live here rather than inside the bars.
+        self.total_estimate_label = QLabel("")
+        self.total_estimate_label.setStyleSheet("color: gray;")
+        self.total_estimate_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        prog_grid.addWidget(self.total_estimate_label, 0, 0, 1, 3)
+        # A grid keeps the bars aligned: column 0 = label, column 1 = bar (the
+        # only stretching column, so all bars share width and right edge),
+        # column 2 = the right-aligned current/total count.
         self.overall_bar, self.overall_count, _ = self._add_bar(
-            prog_grid, 0, "Overall")
-        self.round_bar, self.round_count, _ = self._add_bar(
-            prog_grid, 1, "Rounds in Experiment")
+            prog_grid, 1, "Overall")
         # Steps performed within the round currently being executed.
         self.current_round_bar, self.current_round_count, _ = self._add_bar(
             prog_grid, 2, "Steps in Round")
+        # Round counter + per-subsystem step status on one line.
         self.step_status = QLabel("—")
         self.step_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         prog_grid.addWidget(self.step_status, 3, 0, 1, 3)
@@ -169,12 +183,6 @@ class ExperimentTab(YamlDropMixin, QWidget):
                 prog_grid, 4 + i, _SYSTEM_LABELS[system])
             self.substep_bars[system] = (name, bar, count)
             self._set_substep_visible(system, False)
-        # Estimated total run time (shown once a protocol is loaded, before
-        # and during the run). The Overall / Steps-in-Round bars additionally
-        # show the time *remaining* in their %-format while running.
-        self.total_estimate_label = QLabel("")
-        self.total_estimate_label.setStyleSheet("color: gray;")
-        prog_grid.addWidget(self.total_estimate_label, 7, 0, 1, 3)
         layout.addWidget(prog_box)
 
         # --- per-subsystem step lists (side by side) + parameters below
@@ -376,21 +384,26 @@ class ExperimentTab(YamlDropMixin, QWidget):
         else:
             self.total_estimate_label.setText("")
 
-    def _bar_eta_format(self, remaining, elapsed=0.0):
-        """Progress-bar format string with elapsed / remaining time.
+    def _update_time_summary(self, overall_remaining, round_remaining):
+        """Refresh the single elapsed / remaining / total time line.
 
-        Always keeps the percentage; appends ``<t> elapsed`` once the run has
-        started and ``~<t> left`` while work remains. Falls back to plain
-        ``%p%`` when no timing estimate is available.
+        Before the run (or with no timing estimate) it shows just the total
+        estimate; once running it shows elapsed, remaining and total for the
+        whole run, plus elapsed / remaining for the current round.
         """
-        if self._total_duration <= 0:
-            return "%p%"
-        parts = ["%p%"]
-        if elapsed and elapsed > 0:
-            parts.append("{} elapsed".format(format_duration(elapsed)))
-        if remaining > 0:
-            parts.append("~{} left".format(format_duration(remaining)))
-        return "  ·  ".join(parts)
+        elapsed = self._overall_sw.elapsed()
+        if self._total_duration <= 0 or elapsed <= 0:
+            self._update_total_estimate_label()
+            return
+        txt = "Overall: {} elapsed · ~{} left · ~{} total".format(
+            format_duration(elapsed), format_duration(overall_remaining),
+            format_duration(self._total_duration))
+        round_elapsed = self._round_sw.elapsed()
+        if round_remaining > 0 or round_elapsed > 0:
+            txt += "        Round: {} elapsed · ~{} left".format(
+                format_duration(round_elapsed),
+                format_duration(round_remaining))
+        self.total_estimate_label.setText(txt)
 
     def _compute_levels(self):
         """Assign each step a logical 'time' for cross-system correlation.
@@ -516,11 +529,13 @@ class ExperimentTab(YamlDropMixin, QWidget):
         pct = int(100 * done / total) if total else 0
         self.overall_bar.setValue(pct)
         self.overall_count.setText("{}/{}".format(done, total))
-        self.overall_bar.setFormat(self._bar_eta_format(
-            estimate_remaining(self._durations, prog),
-            self._overall_sw.elapsed()))
 
+        done_rounds, total_rounds = self._round_counts(prog.get('img'))
         parts = []
+        if total_rounds:
+            # 1-based number of the round currently executing.
+            current_round = min(done_rounds + 1, total_rounds)
+            parts.append("Round {}/{}".format(current_round, total_rounds))
         for key in _SYSTEMS:
             if key in prog:
                 cur, tot = prog[key]
@@ -529,8 +544,10 @@ class ExperimentTab(YamlDropMixin, QWidget):
                         key, cur, tot, self._step_name(key, cur)))
         self.step_status.setText("      ".join(parts))
 
-        done_rounds, total_rounds = self._update_round_bar(prog.get('img'))
-        self._update_current_round_bar(prog, done_rounds, total_rounds)
+        round_remaining = self._update_current_round_bar(
+            prog, done_rounds, total_rounds)
+        self._update_time_summary(
+            estimate_remaining(self._durations, prog), round_remaining)
         self._update_substep_bars()
         self._shade_steps(prog)
 
@@ -572,7 +589,12 @@ class ExperimentTab(YamlDropMixin, QWidget):
             return "done"
         return "—"
 
-    def _update_round_bar(self, img_prog):
+    def _round_counts(self, img_prog):
+        """(completed_rounds, total_rounds) from the imaging acquisitions.
+
+        Each ``acquire`` step is one round; the number already passed by the
+        imaging handler gives the completed-round count.
+        """
         protocol = self._service.protocol or {}
         img = protocol.get('img', {})
         entries = (
@@ -582,25 +604,22 @@ class ExperimentTab(YamlDropMixin, QWidget):
             if isinstance(e, dict) and e.get('$type') == 'acquire']
         total_rounds = len(acquire_idx)
         if not total_rounds:
-            self.round_bar.setValue(0)
-            self.round_count.setText("—")
             return 0, 0
         cur = img_prog[0] if img_prog else 0
         done_rounds = sum(1 for i in acquire_idx if i < cur)
-        self.round_bar.setValue(int(100 * done_rounds / total_rounds))
-        self.round_count.setText("{}/{}".format(done_rounds, total_rounds))
         return done_rounds, total_rounds
 
     def _update_current_round_bar(self, prog, done_rounds, total_rounds):
         """Show step progress within the round currently being executed.
 
         Counts, across all subsystems, the steps belonging to the in-progress
-        round (index ``done_rounds``) and how many of those are done.
+        round (index ``done_rounds``) and how many of those are done. Returns
+        the estimated seconds of work left in the round (for the time line).
         """
         if not total_rounds:
             self.current_round_bar.setValue(0)
             self.current_round_count.setText("—")
-            return
+            return 0.0
         current = min(done_rounds, total_rounds)
         # Restart the round stopwatch whenever execution moves to a new round,
         # so its elapsed reading is time spent in the *current* round.
@@ -624,8 +643,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
         pct = int(100 * done / total) if total else 0
         self.current_round_bar.setValue(pct)
         self.current_round_count.setText("{}/{}".format(done, total))
-        self.current_round_bar.setFormat(
-            self._bar_eta_format(remaining, self._round_sw.elapsed()))
+        return remaining
 
     def _shade_steps(self, prog):
         active = self._service.state in _ACTIVE_STATES

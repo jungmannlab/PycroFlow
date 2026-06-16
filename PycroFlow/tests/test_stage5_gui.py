@@ -216,9 +216,10 @@ class TestMainWindow(unittest.TestCase):
         # overall: done 1+1+0=2 / total 3+2+0=5 = 40%, count shown on the right
         self.assertEqual(tab.overall_bar.value(), 40)
         self.assertEqual(tab.overall_count.text(), '2/5')
-        # rounds: 2 acquires, img cur=1 -> 1 done (idx 0) of 2 = 50%
-        self.assertEqual(tab.round_bar.value(), 50)
-        self.assertEqual(tab.round_count.text(), '1/2')
+        # rounds: 2 acquires, img cur=1 -> imaging the 2nd round of 2, shown as
+        # a "Round k/N" prefix on the status line (no separate rounds bar).
+        self.assertFalse(hasattr(tab, 'round_bar'))
+        self.assertIn('Round 2/2', tab.step_status.text())
         # per-subsystem status: centered, current step name in brackets
         from PyQt6.QtCore import Qt
         # fluid cur=1 -> entries[1] is the 'signal' step
@@ -282,24 +283,28 @@ class TestMainWindow(unittest.TestCase):
         }
         svc.progress.return_value = {
             'fluid': (0, 2), 'img': (0, 1), 'illu': (0, 0)}
+        svc.step_progress.return_value = {}
         tab = ExperimentTab(svc, MagicMock(name='bridge'))
         tab._populate_steps()
         # Total shown up front (before/at the start of the run).
-        self.assertIn('~4m', tab.total_estimate_label.text())
-        # Nothing done yet -> the Overall bar shows the full time remaining.
+        self.assertIn(
+            'Estimated sequence duration: ~4m',
+            tab.total_estimate_label.text())
+        # Once running, the single time line shows elapsed / remaining / total.
+        tab._on_state_changed(ExperimentState.LOADED, ExperimentState.RUNNING)
         tab._poll_progress()
-        self.assertIn('~4m left', tab.overall_bar.format())
+        self.assertIn('elapsed', tab.total_estimate_label.text())
+        self.assertIn('~4m left', tab.total_estimate_label.text())
         # After the first fluid incubate, remaining drops to 60 + 120 = 3m.
         svc.progress.return_value = {
             'fluid': (1, 2), 'img': (0, 1), 'illu': (0, 0)}
         tab._poll_progress()
-        self.assertIn('~3m left', tab.overall_bar.format())
-        # The three estimate bars stay horizontally aligned (same grid column).
+        self.assertIn('~3m left', tab.total_estimate_label.text())
+        # The two progress bars stay horizontally aligned (same grid column).
         tab.resize(900, 700)
         tab.show()
         self.app.processEvents()
-        geoms = [tab.overall_bar.geometry(), tab.round_bar.geometry(),
-                 tab.current_round_bar.geometry()]
+        geoms = [tab.overall_bar.geometry(), tab.current_round_bar.geometry()]
         self.assertEqual(len({g.x() for g in geoms}), 1)
         self.assertEqual(len({g.width() for g in geoms}), 1)
 
@@ -322,12 +327,14 @@ class TestMainWindow(unittest.TestCase):
         svc.step_progress.return_value = {}
         tab = ExperimentTab(svc, MagicMock(name='bridge'))
         tab._populate_steps()
-        # Entering RUNNING starts the stopwatches; the bars then show elapsed.
+        # Entering RUNNING starts the stopwatches; the time line then shows
+        # both the overall and the current-round elapsed readings.
         tab._on_state_changed(ExperimentState.LOADED, ExperimentState.RUNNING)
         time.sleep(0.02)
         tab._poll_progress()
-        self.assertIn('elapsed', tab.overall_bar.format())
-        self.assertIn('elapsed', tab.current_round_bar.format())
+        self.assertIn('Overall:', tab.total_estimate_label.text())
+        self.assertIn('Round:', tab.total_estimate_label.text())
+        self.assertEqual(tab.total_estimate_label.text().count('elapsed'), 2)
         # Pausing freezes the elapsed reading.
         tab._on_state_changed(ExperimentState.RUNNING, ExperimentState.PAUSED)
         frozen = tab._overall_sw.elapsed()
