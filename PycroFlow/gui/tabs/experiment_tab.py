@@ -11,6 +11,7 @@ step's parameters in the editable box below, labelled with which list it came
 from.
 """
 import ast
+import time
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QBrush
@@ -52,6 +53,35 @@ _FINISHED_COLOR = QColor("#e8f5e9")   # light green — completed
 _ACTIVE_COLOR = QColor("#fff59d")     # amber — currently executing
 
 
+class _Stopwatch:
+    """Monotonic stopwatch that accumulates running time across pauses.
+
+    :meth:`start` is idempotent (a second start while running is a no-op), so
+    it is safe to drive from repeated state-change notifications.
+    """
+
+    def __init__(self):
+        self._accum = 0.0
+        self._since = None
+
+    def reset(self):
+        self._accum = 0.0
+        self._since = None
+
+    def start(self):
+        if self._since is None:
+            self._since = time.monotonic()
+
+    def pause(self):
+        if self._since is not None:
+            self._accum += time.monotonic() - self._since
+            self._since = None
+
+    def elapsed(self):
+        running = (time.monotonic() - self._since) if self._since else 0.0
+        return self._accum + running
+
+
 class ExperimentTab(YamlDropMixin, QWidget):
     def __init__(self, service, bridge, parent=None):
         super().__init__(parent)
@@ -73,6 +103,12 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # whenever a protocol is (re)populated.
         self._durations = {s: [] for s in _SYSTEMS}
         self._total_duration = 0.0
+        # Wall-clock stopwatches for the elapsed-time readouts: one for the
+        # whole run, one reset at the start of each round. Both accumulate
+        # only while RUNNING (frozen on pause/finish).
+        self._overall_sw = _Stopwatch()
+        self._round_sw = _Stopwatch()
+        self._round_index_seen = -1
         # The step whose parameters are shown (the last one clicked).
         self._current_sys = None
         self._current_row = -1
@@ -280,6 +316,14 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # so the view always reflects the active protocol.
         if new is ExperimentState.LOADED:
             self._populate_steps()
+        # Drive the elapsed-time stopwatches: they run only while steps
+        # actually execute (RUNNING), and freeze on pause/finish/abort.
+        if new is ExperimentState.RUNNING:
+            self._overall_sw.start()
+            self._round_sw.start()
+        else:
+            self._overall_sw.pause()
+            self._round_sw.pause()
         # Poll for live progress while the orchestrator runs; one immediate
         # update so the bars reflect the new state right away.
         if new in _ACTIVE_STATES:
@@ -313,6 +357,9 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._levels = self._compute_levels()
         self._durations = estimate_durations(protocol)
         self._total_duration = estimate_total_duration(protocol)
+        self._overall_sw.reset()
+        self._round_sw.reset()
+        self._round_index_seen = -1
         self._update_total_estimate_label()
         self._current_sys = None
         self._current_row = -1
@@ -329,11 +376,21 @@ class ExperimentTab(YamlDropMixin, QWidget):
         else:
             self.total_estimate_label.setText("")
 
-    def _bar_eta_format(self, remaining):
-        """Progress-bar format string, appending '~<time> left' when known."""
-        if self._total_duration > 0 and remaining > 0:
-            return "%p%  ·  ~{} left".format(format_duration(remaining))
-        return "%p%"
+    def _bar_eta_format(self, remaining, elapsed=0.0):
+        """Progress-bar format string with elapsed / remaining time.
+
+        Always keeps the percentage; appends ``<t> elapsed`` once the run has
+        started and ``~<t> left`` while work remains. Falls back to plain
+        ``%p%`` when no timing estimate is available.
+        """
+        if self._total_duration <= 0:
+            return "%p%"
+        parts = ["%p%"]
+        if elapsed and elapsed > 0:
+            parts.append("{} elapsed".format(format_duration(elapsed)))
+        if remaining > 0:
+            parts.append("~{} left".format(format_duration(remaining)))
+        return "  ·  ".join(parts)
 
     def _compute_levels(self):
         """Assign each step a logical 'time' for cross-system correlation.
@@ -459,8 +516,9 @@ class ExperimentTab(YamlDropMixin, QWidget):
         pct = int(100 * done / total) if total else 0
         self.overall_bar.setValue(pct)
         self.overall_count.setText("{}/{}".format(done, total))
-        self.overall_bar.setFormat(
-            self._bar_eta_format(estimate_remaining(self._durations, prog)))
+        self.overall_bar.setFormat(self._bar_eta_format(
+            estimate_remaining(self._durations, prog),
+            self._overall_sw.elapsed()))
 
         parts = []
         for key in _SYSTEMS:
@@ -544,6 +602,13 @@ class ExperimentTab(YamlDropMixin, QWidget):
             self.current_round_count.setText("—")
             return
         current = min(done_rounds, total_rounds)
+        # Restart the round stopwatch whenever execution moves to a new round,
+        # so its elapsed reading is time spent in the *current* round.
+        if current != self._round_index_seen:
+            self._round_index_seen = current
+            self._round_sw.reset()
+            if self._service.state is ExperimentState.RUNNING:
+                self._round_sw.start()
         done = total = 0
         remaining = 0.0
         for system in _SYSTEMS:
@@ -559,7 +624,8 @@ class ExperimentTab(YamlDropMixin, QWidget):
         pct = int(100 * done / total) if total else 0
         self.current_round_bar.setValue(pct)
         self.current_round_count.setText("{}/{}".format(done, total))
-        self.current_round_bar.setFormat(self._bar_eta_format(remaining))
+        self.current_round_bar.setFormat(
+            self._bar_eta_format(remaining, self._round_sw.elapsed()))
 
     def _shade_steps(self, prog):
         active = self._service.state in _ACTIVE_STATES

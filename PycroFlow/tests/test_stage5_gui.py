@@ -294,6 +294,45 @@ class TestMainWindow(unittest.TestCase):
             'fluid': (1, 2), 'img': (0, 1), 'illu': (0, 0)}
         tab._poll_progress()
         self.assertIn('~3m left', tab.overall_bar.format())
+        # The three estimate bars stay horizontally aligned (same grid column).
+        tab.resize(900, 700)
+        tab.show()
+        self.app.processEvents()
+        geoms = [tab.overall_bar.geometry(), tab.round_bar.geometry(),
+                 tab.current_round_bar.geometry()]
+        self.assertEqual(len({g.x() for g in geoms}), 1)
+        self.assertEqual(len({g.width() for g in geoms}), 1)
+
+    def test_elapsed_time_shown_and_frozen_on_pause(self):
+        import time
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+        svc = MagicMock(name='service')
+        svc.state = ExperimentState.RUNNING
+        svc.protocol = {
+            'fluid': {'protocol_entries': [
+                {'$type': 'incubate', 'duration': 60}]},
+            'img': {'protocol_entries': [
+                {'$type': 'acquire', 'frames': 1000, 't_exp': 120}]},
+            'illu': {'protocol_entries': []},
+        }
+        svc.progress.return_value = {
+            'fluid': (0, 1), 'img': (0, 1), 'illu': (0, 0)}
+        svc.step_progress.return_value = {}
+        tab = ExperimentTab(svc, MagicMock(name='bridge'))
+        tab._populate_steps()
+        # Entering RUNNING starts the stopwatches; the bars then show elapsed.
+        tab._on_state_changed(ExperimentState.LOADED, ExperimentState.RUNNING)
+        time.sleep(0.02)
+        tab._poll_progress()
+        self.assertIn('elapsed', tab.overall_bar.format())
+        self.assertIn('elapsed', tab.current_round_bar.format())
+        # Pausing freezes the elapsed reading.
+        tab._on_state_changed(ExperimentState.RUNNING, ExperimentState.PAUSED)
+        frozen = tab._overall_sw.elapsed()
+        time.sleep(0.02)
+        self.assertAlmostEqual(frozen, tab._overall_sw.elapsed(), places=2)
 
     def test_within_step_bars(self):
         from unittest.mock import MagicMock
@@ -917,6 +956,45 @@ class TestExperimentDesignTab(unittest.TestCase):
         # Absolute path -> no hint shown.
         line.setText(os.path.abspath('subdir'))
         self.assertEqual(tab._save_dir_hint.text(), '')
+
+    def test_duration_estimate_is_automatic_no_button(self):
+        from PycroFlow.services import ExperimentService
+        from PycroFlow.gui.tabs.experiment_design_tab import (
+            ExperimentDesignTab)
+        self.addCleanup(os.chdir, os.getcwd())   # load_design_path chdirs
+        _, path = _example_design()
+        tab = ExperimentDesignTab(ExperimentService())
+        # The explicit button is gone — estimation is live.
+        self.assertFalse(hasattr(tab, 'estimate_btn'))
+        tab.load_design_path(path)
+        tab._recompute_estimate()   # fire the debounced recompute directly
+        self.assertIn('Estimated duration: ~', tab.estimate_label.text())
+
+    def test_incomplete_design_estimate_is_graceful(self):
+        from PycroFlow.services import ExperimentService
+        from PycroFlow.gui.tabs.experiment_design_tab import (
+            ExperimentDesignTab)
+        # Empty default form cannot compile; the label says so, no exception.
+        tab = ExperimentDesignTab(ExperimentService())
+        tab._recompute_estimate()
+        self.assertIn('incomplete', tab.estimate_label.text())
+
+    def test_sections_are_collapsible_without_dropping_data(self):
+        from PycroFlow.services import ExperimentService
+        from PycroFlow.gui.tabs.experiment_design_tab import (
+            ExperimentDesignTab)
+        from PycroFlow.gui.widgets.schema_form import _ModelEditor
+        self.addCleanup(os.chdir, os.getcwd())
+        _, path = _example_design()
+        tab = ExperimentDesignTab(ExperimentService())
+        tab.load_design_path(path)
+        sections = tab._form.findChildren(_ModelEditor)
+        self.assertTrue(sections)
+        self.assertTrue(all(s.isCheckable() for s in sections))
+        # Collapsing a section hides its body but keeps the value readable.
+        fluid = tab._form.field_editor('fluid')
+        fluid.setChecked(False)
+        self.assertIn('fluid', tab._form.to_dict())
 
 
 @unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")

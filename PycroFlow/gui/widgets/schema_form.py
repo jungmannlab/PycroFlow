@@ -648,15 +648,25 @@ def _make_editor(ann, optional, value, label, meta, context):
 
 
 class _ModelEditor(QGroupBox):
-    """A nested BaseModel rendered as a titled sub-form."""
+    """A nested BaseModel rendered as a titled, collapsible sub-form.
+
+    The group box is checkable purely as a collapse toggle: unchecking hides
+    the body to save space. It never affects the data — :meth:`get_value`
+    always reads the (still-populated) sub-form back.
+    """
 
     def __init__(self, model_cls, value, title, context=None, parent=None):
         super().__init__(title, parent)
         self.is_block = True
         self.is_optional = False
+        self.setCheckable(True)
+        self.setChecked(True)
+        self.setToolTip("Click the section title's checkbox to collapse it.")
         lay = QVBoxLayout(self)
         self._form = SchemaForm(model_cls, value or {}, context=context)
         lay.addWidget(self._form)
+        # Collapse/expand the body with the check state (data is unaffected).
+        self.toggled.connect(self._form.setVisible)
 
     def get_value(self):
         return self._form.to_dict()

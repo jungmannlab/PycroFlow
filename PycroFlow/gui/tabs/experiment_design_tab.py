@@ -8,9 +8,11 @@ target / RESI rounds), and **Translate** it into the Run Sequence tab via
 import os
 
 import yaml
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
-    QFileDialog, QMessageBox,
+    QFileDialog, QMessageBox, QAbstractButton, QCheckBox, QComboBox,
+    QLineEdit, QAbstractSpinBox,
 )
 
 from PycroFlow.schemas.experiment_design import ExperimentDesign
@@ -43,12 +45,10 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
         self.load_btn = QPushButton("Load…")
         self.save_btn = QPushButton("Save…")
         self.translate_btn = QPushButton("Translate → Run Sequence")
-        self.estimate_btn = QPushButton("Estimate duration")
-        for b in (self.load_btn, self.save_btn, self.translate_btn,
-                  self.estimate_btn):
+        for b in (self.load_btn, self.save_btn, self.translate_btn):
             controls.addWidget(b)
-        # Estimated run time from the current design (compiled on demand, so
-        # it reflects unsaved edits without committing them to the run).
+        # Estimated run time, recomputed live from the current (unsaved)
+        # design whenever a field changes — see _connect_estimate_signals.
         self.estimate_label = QLabel("")
         self.estimate_label.setStyleSheet("color: gray;")
         controls.addWidget(self.estimate_label)
@@ -59,10 +59,16 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
         self.scroll.setWidgetResizable(True)
         layout.addWidget(self.scroll)
 
+        # Debounce: edits arrive in bursts (typing), so coalesce them into one
+        # recompute shortly after the last change rather than per keystroke.
+        self._estimate_timer = QTimer(self)
+        self._estimate_timer.setSingleShot(True)
+        self._estimate_timer.setInterval(300)
+        self._estimate_timer.timeout.connect(self._recompute_estimate)
+
         self.load_btn.clicked.connect(self._on_load)
         self.save_btn.clicked.connect(self._on_save)
         self.translate_btn.clicked.connect(self._on_translate)
-        self.estimate_btn.clicked.connect(self._on_estimate)
 
         # Start from an empty form (scalar defaults filled in by the schema).
         self._set_form({})
@@ -72,6 +78,8 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             ExperimentDesign, data, context=self._editor_context(data))
         self.scroll.setWidget(self._form)
         self._wire_save_dir_hint()
+        self._connect_estimate_signals()
+        self._schedule_estimate()
 
     def _editor_context(self, data):
         """Dynamic dropdown options for the schema form.
@@ -173,35 +181,69 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             QMessageBox.critical(
                 self, "Translation failed", "{}".format(exc))
             return
-        self._update_estimate()
+        self._schedule_estimate()
         if self._on_translated is not None:
             self._on_translated()
 
-    def _on_estimate(self):
-        self._update_estimate(notify=True)
+    # --- live duration estimate --------------------------------------
 
-    def _update_estimate(self, notify=False):
+    def _schedule_estimate(self):
+        """(Re)arm the debounce timer that recomputes the estimate."""
+        self._estimate_timer.start()
+
+    def _connect_estimate_signals(self):
+        """Hook every input in the form so edits re-trigger the estimate.
+
+        Walks the current form's widget tree and connects the usual editing
+        signals to :meth:`_schedule_estimate`. Each widget is hooked once
+        (guarded by a dynamic property); add/remove-row buttons are hooked too
+        so structural edits recompute, and :meth:`_recompute_estimate` re-walks
+        afterwards to pick up any freshly created rows.
+        """
+        if self._form is None:
+            return
+        for w in [self._form] + self._form.findChildren(QWidget):
+            if w.property('_estimate_hooked'):
+                continue
+            hooked = True
+            if isinstance(w, QAbstractSpinBox):
+                w.valueChanged.connect(self._schedule_estimate)
+            elif isinstance(w, QComboBox):
+                w.currentIndexChanged.connect(self._schedule_estimate)
+                w.editTextChanged.connect(self._schedule_estimate)
+            elif isinstance(w, QLineEdit):
+                w.textChanged.connect(self._schedule_estimate)
+            elif isinstance(w, QCheckBox):
+                w.toggled.connect(self._schedule_estimate)
+            elif isinstance(w, QAbstractButton):
+                # Add/remove-row buttons change the design's structure.
+                w.clicked.connect(self._schedule_estimate)
+            else:
+                hooked = False
+            if hooked:
+                w.setProperty('_estimate_hooked', True)
+
+    def _recompute_estimate(self):
         """Compile the current design and show its estimated run time.
 
         Builds the Run Sequence from the in-editor design without committing
-        it (so it reflects unsaved edits), then estimates the total duration.
-        On failure the label is cleared; with ``notify`` an explanation is
-        also shown, so the explicit "Estimate duration" button reports why.
+        it (so it reflects unsaved edits). While the design is incomplete or
+        invalid the build raises; that is expected mid-edit, so we just note
+        it in the label instead of interrupting with a dialog.
         """
         from PycroFlow.protocols import ProtocolBuilder
         from PycroFlow.protocols.timing import (
             estimate_total_duration, format_duration)
         from PycroFlow.schemas import validate_experiment_design
+        # New list/dict rows may have appeared since the last hook pass.
+        self._connect_estimate_signals()
         try:
             design = validate_experiment_design(
                 self._form.to_dict()).model_dump(by_alias=True)
             protocol = ProtocolBuilder().build_protocol(design)
             total = estimate_total_duration(protocol)
-        except Exception as exc:
-            self.estimate_label.setText("")
-            if notify:
-                QMessageBox.warning(
-                    self, "Cannot estimate duration", "{}".format(exc))
+        except Exception:
+            self.estimate_label.setText("Estimated duration: — (incomplete)")
             return
         self.estimate_label.setText(
             "Estimated duration: ~{}".format(format_duration(total)))
