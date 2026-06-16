@@ -70,9 +70,12 @@ class PycroFlowMainWindow(QMainWindow):
         tb.addWidget(self.setup_combo)
         self.act_connect = QAction("Connect", self)
         tb.addAction(self.act_connect)
+        self.act_disconnect = QAction("Disconnect", self)
+        tb.addAction(self.act_disconnect)
 
         self.setup_combo.currentTextChanged.connect(self._on_setup_changed)
         self.act_connect.triggered.connect(self._reconnect_all)
+        self.act_disconnect.triggered.connect(self._disconnect_all)
 
     def _build_tabs(self):
         self.tabs = QTabWidget()
@@ -141,6 +144,7 @@ class PycroFlowMainWindow(QMainWindow):
     def _lock_hardware(self, locked):
         self.setup_combo.setEnabled(not locked)
         self.act_connect.setEnabled(not locked)
+        self.act_disconnect.setEnabled(not locked)
         self.fluid_tab.set_run_lock(locked)
         self.imaging_tab.set_run_lock(locked)
         self.monet_tab.set_run_lock(locked)
@@ -170,6 +174,12 @@ class PycroFlowMainWindow(QMainWindow):
             return
         for key in ('illumination', 'imaging', 'fluid'):
             self._connect_system(key, warn_missing=False)
+
+    def _disconnect_all(self):
+        """Toolbar Disconnect: release every subsystem's connection."""
+        self._system_service.disconnect_all()
+        self._mirror_systems()
+        self._refresh_status()
 
     def _connect_system(self, key, warn_missing=True):
         if self._system_service.setup is None:

@@ -721,6 +721,7 @@ class TestConnectionFlow(unittest.TestCase):
         self.assertFalse(w.monet_tab._embed_container.isEnabled())
         self.assertFalse(w.setup_combo.isEnabled())
         self.assertFalse(w.act_connect.isEnabled())
+        self.assertFalse(w.act_disconnect.isEnabled())
         # STOP stays available during a run.
         self.assertTrue(w.fluid_tab.stop_btn.isEnabled())
 
