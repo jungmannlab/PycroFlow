@@ -729,6 +729,36 @@ class TestConnectionFlow(unittest.TestCase):
         self.assertTrue(w.fluid_tab.connect_btn.isEnabled())
         self.assertTrue(w.monet_tab._embed_container.isEnabled())
         self.assertTrue(w.setup_combo.isEnabled())
+        self.assertTrue(w.act_disconnect.isEnabled())
+
+    def test_toolbar_disconnect_releases_all_systems(self):
+        import PycroFlow
+        w = self._win()
+        w._on_setup_changed('Emulator')
+        path = os.path.join(
+            os.path.dirname(PycroFlow.__file__), 'examples',
+            'sph_resi_6plex.yaml')
+        w.design_tab.load_design_path(path)
+        self.assertTrue(all(w._system_service.connection_states().values()))
+        w.act_disconnect.trigger()
+        self.assertEqual(
+            w._system_service.connection_states(),
+            {'fluid': False, 'imaging': False, 'illumination': False})
+        self.assertIn('not connected', w.status_label.text())
+
+    def test_connect_disconnects_first(self):
+        from unittest.mock import patch
+        w = self._win()
+        w._on_setup_changed('Emulator')
+        w.imaging_tab._on_connect_clicked()       # initial connect
+        self.assertIsNotNone(w._system_service.imaging_system)
+        # Reconnecting frees the existing handle first.
+        with patch.object(
+                w._system_service, 'disconnect',
+                wraps=w._system_service.disconnect) as dc:
+            w.imaging_tab._on_connect_clicked()
+        dc.assert_any_call('imaging')
+        self.assertIsNotNone(w._system_service.imaging_system)
 
     def test_finished_run_unlocks_hardware(self):
         from PycroFlow.services import ExperimentState

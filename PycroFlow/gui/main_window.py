@@ -156,14 +156,13 @@ class PycroFlowMainWindow(QMainWindow):
                 self._connect_system(key, warn_missing=False)
 
     def _reconnect_all(self):
-        """Manual toolbar Connect: (re)connect every subsystem for the
-        current setup.
+        """(Re)connect every subsystem for the current setup.
 
-        Unlike :meth:`_autoconnect` (run automatically on design / setup
-        load), this does *not* skip already-connected subsystems — so after
-        switching to a different setup it re-targets the hardware even though
-        the previous setup's systems are still attached. Mirrors what the
-        per-tab Connect buttons do, but for all subsystems at once.
+        Used by the toolbar Connect button and on design load. Unlike
+        :meth:`_autoconnect`, it does *not* skip already-connected subsystems
+        — each :meth:`_connect_system` disconnects first — so switching setups
+        or loading a new design re-targets the hardware with fresh connections
+        rather than leaving the previous ones attached.
         """
         if self._system_service.setup is None:
             QMessageBox.warning(
@@ -183,6 +182,10 @@ class PycroFlowMainWindow(QMainWindow):
         call = self._connect_call(key, warn_missing)
         if call is None:
             return
+        # Free any existing connection for this subsystem before reconnecting,
+        # so loading a new design / switching setups never collides with a
+        # stale, still-open hardware handle.
+        self._system_service.disconnect(key)
         self._connecting.add(key)
         self._set_tab_connecting(key)
 
