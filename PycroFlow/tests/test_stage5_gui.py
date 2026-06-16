@@ -634,6 +634,41 @@ class TestConnectionFlow(unittest.TestCase):
         self.assertIsNotNone(w._system_service.imaging_system)
         self.assertEqual(w.imaging_tab.status_label.text(), 'connected')
 
+    def test_toolbar_connect_reconnects_when_already_connected(self):
+        from unittest.mock import patch
+        import PycroFlow
+        w = self._win()
+        w._on_setup_changed('Emulator')
+        path = os.path.join(
+            os.path.dirname(PycroFlow.__file__), 'examples',
+            'sph_resi_6plex.yaml')
+        w.design_tab.load_design_path(path)   # autoconnects all subsystems
+        self.assertEqual(
+            w._system_service.connection_states(),
+            {'fluid': True, 'imaging': True, 'illumination': True})
+        # _autoconnect skips already-connected subsystems (no-op here)...
+        with patch.object(
+                w, '_connect_system', wraps=w._connect_system) as auto:
+            w._autoconnect()
+        auto.assert_not_called()
+        # ...but the toolbar Connect re-targets every subsystem regardless, so
+        # picking a different setup and hitting Connect actually reconnects.
+        with patch.object(
+                w, '_connect_system', wraps=w._connect_system) as manual:
+            w.act_connect.trigger()
+        self.assertEqual(
+            {c.args[0] for c in manual.call_args_list},
+            {'fluid', 'imaging', 'illumination'})
+
+    def test_toolbar_connect_warns_without_setup(self):
+        from unittest.mock import patch
+        from PycroFlow.gui import main_window as mw
+        w = self._win()
+        w._system_service._setup = None   # simulate no setup loaded
+        with patch.object(mw.QMessageBox, 'warning') as warn:
+            w.act_connect.trigger()
+        warn.assert_called_once()
+
     def test_hardware_locked_during_run(self):
         from PycroFlow.services import ExperimentState
         w = self._win()

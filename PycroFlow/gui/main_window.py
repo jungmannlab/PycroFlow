@@ -72,7 +72,7 @@ class PycroFlowMainWindow(QMainWindow):
         tb.addAction(self.act_connect)
 
         self.setup_combo.currentTextChanged.connect(self._on_setup_changed)
-        self.act_connect.triggered.connect(self._autoconnect)
+        self.act_connect.triggered.connect(self._reconnect_all)
 
     def _build_tabs(self):
         self.tabs = QTabWidget()
@@ -154,6 +154,23 @@ class PycroFlowMainWindow(QMainWindow):
         for key in ('illumination', 'imaging', 'fluid'):
             if not self._is_connected(key):
                 self._connect_system(key, warn_missing=False)
+
+    def _reconnect_all(self):
+        """Manual toolbar Connect: (re)connect every subsystem for the
+        current setup.
+
+        Unlike :meth:`_autoconnect` (run automatically on design / setup
+        load), this does *not* skip already-connected subsystems — so after
+        switching to a different setup it re-targets the hardware even though
+        the previous setup's systems are still attached. Mirrors what the
+        per-tab Connect buttons do, but for all subsystems at once.
+        """
+        if self._system_service.setup is None:
+            QMessageBox.warning(
+                self, "No setup", "Select a microscope setup first.")
+            return
+        for key in ('illumination', 'imaging', 'fluid'):
+            self._connect_system(key, warn_missing=False)
 
     def _connect_system(self, key, warn_missing=True):
         if self._system_service.setup is None:
