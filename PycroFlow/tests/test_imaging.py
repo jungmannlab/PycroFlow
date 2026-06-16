@@ -77,6 +77,25 @@ class TestImaging(unittest.TestCase):
         self.assertTrue(self.mock_acquisition.called)
         self.assertTrue(os.path.isdir(isy.config['save_dir']))
 
+    def test_create_savedir_appends_when_folder_exists(self):
+        """An existing target folder gets the first free _1/_2 suffix rather
+        than erroring — so loading a design twice never fails on the dir."""
+        import types
+        name = 'savedir_collision_test'
+
+        def make():
+            o = types.SimpleNamespace(
+                config={'save_dir': TEST_OUTPUT_DIR, 'base_name': name})
+            pim.ImagingSystem.create_savedir(o)
+            return o.config['save_dir']
+
+        p0, p1, p2 = make(), make(), make()
+        self.assertEqual(p0, os.path.join(TEST_OUTPUT_DIR, name))
+        self.assertEqual(p1, os.path.join(TEST_OUTPUT_DIR, name + '_1'))
+        self.assertEqual(p2, os.path.join(TEST_OUTPUT_DIR, name + '_2'))
+        for p in (p0, p1, p2):
+            self.assertTrue(os.path.isdir(p))
+
     def test_02(self):
         """Executing an 'acquire' entry drives a pycromanager Acquisition."""
         isy = pim.ImagingSystem(_make_config())

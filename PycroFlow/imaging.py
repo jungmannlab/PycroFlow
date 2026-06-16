@@ -181,18 +181,16 @@ class ImagingSystem(AbstractSystem):
         logger.debug("Imaging system is set up and ready.")
 
     def create_savedir(self):
-        # sdir = os.path.join(
-        #     self.config['save_dir'],
-        #     datetime.now().strftime('%y%m%d')
-        #     + '_' + self.config['base_name'])
-        sdir = os.path.join(self.config["save_dir"], self.config["base_name"])
-        if not os.path.exists(sdir):
-            os.mkdir(sdir)
-        else:
-            ndirs = len([it for it in os.listdir() if sdir in it])
-            sdir += "_{:d}".format(ndirs + 1)
-            os.mkdir(sdir)
-
+        # Target folder = save_dir / base_name. If it already exists, append
+        # the first free "_1", "_2", … suffix so a re-run never collides with
+        # (or writes into) a previous run's folder, and never raises.
+        base = os.path.join(self.config["save_dir"], self.config["base_name"])
+        sdir = base
+        n = 0
+        while os.path.exists(sdir):
+            n += 1
+            sdir = "{}_{:d}".format(base, n)
+        os.makedirs(sdir)
         self.config["save_dir"] = sdir
 
     def create_starttime(self):
