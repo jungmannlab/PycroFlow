@@ -980,6 +980,7 @@ class TestExperimentDesignTab(unittest.TestCase):
         self.assertIn('incomplete', tab.estimate_label.text())
 
     def test_sections_are_collapsible_without_dropping_data(self):
+        from PyQt6.QtCore import Qt
         from PycroFlow.services import ExperimentService
         from PycroFlow.gui.tabs.experiment_design_tab import (
             ExperimentDesignTab)
@@ -990,11 +991,20 @@ class TestExperimentDesignTab(unittest.TestCase):
         tab.load_design_path(path)
         sections = tab._form.findChildren(_ModelEditor)
         self.assertTrue(sections)
-        self.assertTrue(all(s.isCheckable() for s in sections))
-        # Collapsing a section hides its body but keeps the value readable.
+        # Each section has an arrow toggle, expanded (▾) by default.
+        self.assertTrue(all(hasattr(s, '_toggle') for s in sections))
         fluid = tab._form.field_editor('fluid')
-        fluid.setChecked(False)
+        self.assertEqual(fluid._toggle.arrowType(), Qt.ArrowType.DownArrow)
+        # Collapsing flips the arrow and hides the body but keeps the value.
+        # isVisibleTo() reflects the explicit hide without needing show().
+        fluid._toggle.setChecked(False)
+        self.assertEqual(fluid._toggle.arrowType(), Qt.ArrowType.RightArrow)
+        self.assertFalse(fluid._form.isVisibleTo(fluid))
         self.assertIn('fluid', tab._form.to_dict())
+        # Re-expanding restores the arrow and the body.
+        fluid._toggle.setChecked(True)
+        self.assertEqual(fluid._toggle.arrowType(), Qt.ArrowType.DownArrow)
+        self.assertTrue(fluid._form.isVisibleTo(fluid))
 
 
 @unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")

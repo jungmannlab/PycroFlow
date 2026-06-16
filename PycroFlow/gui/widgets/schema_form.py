@@ -18,7 +18,7 @@ from typing import Union, get_args, get_origin
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QLabel,
-    QLineEdit, QCheckBox, QComboBox, QPushButton, QGridLayout,
+    QLineEdit, QCheckBox, QComboBox, QPushButton, QGridLayout, QToolButton,
 )
 
 from pydantic import BaseModel
@@ -650,23 +650,37 @@ def _make_editor(ann, optional, value, label, meta, context):
 class _ModelEditor(QGroupBox):
     """A nested BaseModel rendered as a titled, collapsible sub-form.
 
-    The group box is checkable purely as a collapse toggle: unchecking hides
-    the body to save space. It never affects the data — :meth:`get_value`
-    always reads the (still-populated) sub-form back.
+    A ▾/▸ arrow toggle in the section header expands/collapses the body to
+    save space. Collapsing is purely visual — it never affects the data, as
+    :meth:`get_value` always reads the (still-populated) sub-form back.
     """
 
     def __init__(self, model_cls, value, title, context=None, parent=None):
         super().__init__(title, parent)
         self.is_block = True
         self.is_optional = False
-        self.setCheckable(True)
-        self.setChecked(True)
-        self.setToolTip("Click the section title's checkbox to collapse it.")
         lay = QVBoxLayout(self)
+        # Header row with the collapse arrow; flat/auto-raised so it reads as
+        # a disclosure triangle rather than a button.
+        self._toggle = QToolButton()
+        self._toggle.setAutoRaise(True)
+        self._toggle.setCheckable(True)
+        self._toggle.setChecked(True)
+        self._toggle.setArrowType(Qt.ArrowType.DownArrow)
+        self._toggle.setToolTip("Collapse / expand this section.")
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.addWidget(self._toggle)
+        header.addStretch()
+        lay.addLayout(header)
         self._form = SchemaForm(model_cls, value or {}, context=context)
         lay.addWidget(self._form)
-        # Collapse/expand the body with the check state (data is unaffected).
-        self.toggled.connect(self._form.setVisible)
+        self._toggle.toggled.connect(self._set_expanded)
+
+    def _set_expanded(self, expanded):
+        self._toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        self._form.setVisible(expanded)
 
     def get_value(self):
         return self._form.to_dict()
