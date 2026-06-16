@@ -50,6 +50,10 @@ _CAN_ABORT = {ExperimentState.ORCHESTRATING, ExperimentState.RUNNING,
 # Loading a new run sequence is only allowed when nothing is running.
 _CAN_LOAD = {ExperimentState.IDLE, ExperimentState.LOADED,
              ExperimentState.FINISHED, ExperimentState.ABORTED}
+# Clearing the loaded run sequence is allowed when one is loaded but not
+# running (nothing to clear in IDLE).
+_CAN_CLEAR = {ExperimentState.LOADED, ExperimentState.FINISHED,
+              ExperimentState.ABORTED}
 
 # Step-list shading.
 _FINISHED_COLOR = QColor("#e8f5e9")   # light green — completed
@@ -136,12 +140,13 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # --- run controls
         controls = QHBoxLayout()
         self.load_btn = QPushButton("Load run sequence…")
+        self.clear_btn = QPushButton("Clear")
         self.start_btn = QPushButton("Start")
         # One button toggles Pause/Resume depending on the run state.
         self.pause_resume_btn = QPushButton("Pause")
         self.abort_btn = QPushButton("Abort")
-        for b in (self.load_btn, self.start_btn, self.pause_resume_btn,
-                  self.abort_btn):
+        for b in (self.load_btn, self.clear_btn, self.start_btn,
+                  self.pause_resume_btn, self.abort_btn):
             controls.addWidget(b)
         controls.addStretch()
         layout.addLayout(controls)
@@ -267,6 +272,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.apply_btn.clicked.connect(self._on_apply)
         self._poll_timer.timeout.connect(self._poll_progress)
         self.load_btn.clicked.connect(self._on_load)
+        self.clear_btn.clicked.connect(self._on_clear)
         self.start_btn.clicked.connect(self._on_start)
         self.pause_resume_btn.clicked.connect(self._on_pause_resume)
         self.abort_btn.clicked.connect(self._on_abort)
@@ -278,6 +284,14 @@ class ExperimentTab(YamlDropMixin, QWidget):
             self, "Load Run Sequence YAML", "", "YAML files (*.yaml *.yml)")
         if path:
             self.load_protocol_path(path)
+
+    def _on_clear(self):
+        reply = QMessageBox.question(
+            self, "Clear run sequence",
+            "Unload the current run sequence? This clears the loaded steps "
+            "and progress (the hardware connections stay).")
+        if reply == QMessageBox.StandardButton.Yes:
+            self._service.clear_protocol()
 
     def _on_start(self):
         self._service.start()
@@ -303,6 +317,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
     def _refresh_controls(self, state):
         """Enable/disable + relabel the run controls for the given state."""
         self.load_btn.setEnabled(state in _CAN_LOAD)
+        self.clear_btn.setEnabled(state in _CAN_CLEAR)
         self.start_btn.setEnabled(state in _CAN_START)
         self.abort_btn.setEnabled(state in _CAN_ABORT)
         # Centring on the current step only makes sense while one is running.
@@ -324,9 +339,13 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._refresh_controls(new)
         # Repopulate the step lists whenever a protocol becomes loaded,
         # regardless of how it was loaded (toolbar, drag&drop, programmatic),
-        # so the view always reflects the active protocol.
+        # so the view always reflects the active protocol. Clearing it
+        # (-> IDLE) empties the lists and resets the progress display.
         if new is ExperimentState.LOADED:
             self._populate_steps()
+        elif new is ExperimentState.IDLE:
+            self._populate_steps()
+            self._reset_progress_display()
         # Drive the elapsed-time stopwatches: they run only while steps
         # actually execute (RUNNING), and freeze on pause/finish/abort.
         if new is ExperimentState.RUNNING:
@@ -377,6 +396,16 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.step_table.setRowCount(0)
         self.step_param_label.setText("Select a step above to view it.")
         self.apply_btn.setEnabled(False)
+
+    def _reset_progress_display(self):
+        """Zero the progress bars / counters / status (used when cleared)."""
+        self.overall_bar.setValue(0)
+        self.overall_count.setText("0/0")
+        self.current_round_bar.setValue(0)
+        self.current_round_count.setText("0/0")
+        self.step_status.setText("—")
+        for system in _SYSTEMS:
+            self._set_substep_visible(system, False)
 
     def _update_total_estimate_label(self):
         """Show the estimated total run time (or clear it when unknown)."""

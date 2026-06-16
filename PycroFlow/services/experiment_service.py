@@ -259,6 +259,33 @@ class ExperimentService:
         self._orchestrator.abort_protocol()
         self._set_state(ExperimentState.ABORTED)
 
+    def clear_design(self) -> None:
+        """Forget the loaded experiment design.
+
+        Independent of the run sequence: a compiled protocol stays loaded.
+        """
+        self._experiment_design = None
+
+    def clear_protocol(self) -> None:
+        """Unload the current run sequence and reset to IDLE.
+
+        Refused while an experiment is active (abort it first); the running
+        orchestrator owns the hardware.
+        """
+        if self._state in (
+            ExperimentState.ORCHESTRATING,
+            ExperimentState.RUNNING,
+            ExperimentState.PAUSED,
+        ):
+            raise RuntimeError(
+                "cannot clear the run sequence while an experiment is active "
+                "(state={!r}); abort first".format(self._state)
+            )
+        self._protocol = None
+        self._orchestrator = None
+        self._orchestrator_systems = None
+        self._set_state(ExperimentState.IDLE)
+
     def end(self) -> None:
         """Gracefully end the orchestrator (handler threads stop after
         completing in-flight work)."""

@@ -44,8 +44,10 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
         controls = QHBoxLayout()
         self.load_btn = QPushButton("Load…")
         self.save_btn = QPushButton("Save…")
+        self.clear_btn = QPushButton("Clear")
         self.translate_btn = QPushButton("Translate → Run Sequence")
-        for b in (self.load_btn, self.save_btn, self.translate_btn):
+        for b in (self.load_btn, self.save_btn, self.clear_btn,
+                  self.translate_btn):
             controls.addWidget(b)
         # Estimated run time, recomputed live from the current (unsaved)
         # design whenever a field changes — see _connect_estimate_signals.
@@ -68,6 +70,7 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
 
         self.load_btn.clicked.connect(self._on_load)
         self.save_btn.clicked.connect(self._on_save)
+        self.clear_btn.clicked.connect(self._on_clear)
         self.translate_btn.clicked.connect(self._on_translate)
 
         # Start from an empty form (scalar defaults filled in by the schema).
@@ -142,6 +145,15 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             self, "Load experiment design", "", "YAML files (*.yaml *.yml)")
         if path:
             self.load_design_path(path)
+
+    def _on_clear(self):
+        reply = QMessageBox.question(
+            self, "Clear experiment design",
+            "Discard the current experiment design and reset the editor to "
+            "an empty design? Unsaved changes will be lost.")
+        if reply == QMessageBox.StandardButton.Yes:
+            self._svc.clear_design()
+            self._set_form({})
 
     def load_design_path(self, path):
         """Load + validate a design YAML and show it in the editor."""

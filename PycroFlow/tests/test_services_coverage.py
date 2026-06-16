@@ -78,6 +78,30 @@ class ExperimentLifecycleTest(unittest.TestCase):
         build.assert_called_once()
         self.assertEqual(svc.state, ExperimentState.RUNNING)
 
+    def test_clear_protocol_resets_to_idle(self):
+        svc = _loaded_service_with_mock_orchestrator()
+        self.assertEqual(svc.state, ExperimentState.LOADED)
+        svc.clear_protocol()
+        self.assertEqual(svc.state, ExperimentState.IDLE)
+        self.assertIsNone(svc.protocol)
+        self.assertIsNone(svc._orchestrator)
+
+    def test_clear_protocol_refused_while_active(self):
+        svc = _loaded_service_with_mock_orchestrator()
+        svc.start()
+        self.assertEqual(svc.state, ExperimentState.RUNNING)
+        with self.assertRaises(RuntimeError):
+            svc.clear_protocol()
+        self.assertIsNotNone(svc.protocol)
+
+    def test_clear_design_forgets_design_only(self):
+        svc = _loaded_service_with_mock_orchestrator()
+        svc._experiment_design = {'base_name': 'x'}
+        svc.clear_design()
+        self.assertIsNone(svc.experiment_design)
+        # The loaded run sequence is untouched.
+        self.assertIsNotNone(svc.protocol)
+
     def test_start_after_aborted_rebuilds_and_runs(self):
         svc = _loaded_service_with_mock_orchestrator()
         svc.start()

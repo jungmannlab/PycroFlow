@@ -380,6 +380,74 @@ class TestMainWindow(unittest.TestCase):
         self.assertFalse(tab.pause_resume_btn.isEnabled())
         self.assertFalse(tab.abort_btn.isEnabled())
 
+    def test_clear_button_enabled_only_when_loaded_not_running(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+        svc = MagicMock(name='service')
+        svc.state = ExperimentState.IDLE
+        tab = ExperimentTab(svc, MagicMock(name='bridge'))
+        for state, enabled in (
+            (ExperimentState.IDLE, False),
+            (ExperimentState.LOADED, True),
+            (ExperimentState.RUNNING, False),
+            (ExperimentState.FINISHED, True),
+            (ExperimentState.ABORTED, True),
+        ):
+            tab._refresh_controls(state)
+            self.assertEqual(tab.clear_btn.isEnabled(), enabled, state)
+
+    def test_clear_run_sequence_empties_view(self):
+        from unittest.mock import MagicMock, patch
+        from PyQt6.QtWidgets import QMessageBox
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+        svc = MagicMock(name='service')
+        svc.state = ExperimentState.LOADED
+        svc.protocol = {
+            'fluid': {'protocol_entries': [
+                {'$type': 'incubate', 'duration': 1}]},
+            'img': {'protocol_entries': []},
+            'illu': {'protocol_entries': []},
+        }
+        svc.progress.return_value = {
+            'fluid': (1, 1), 'img': (0, 0), 'illu': (0, 0)}
+        svc.step_progress.return_value = {}
+        tab = ExperimentTab(svc, MagicMock(name='bridge'))
+        tab._populate_steps()
+        tab._poll_progress()
+        self.assertGreater(tab.step_lists['fluid'].count(), 0)
+        # Confirming the dialog clears the run sequence via the service.
+        with patch(
+                'PycroFlow.gui.tabs.experiment_tab.QMessageBox.question',
+                return_value=QMessageBox.StandardButton.Yes):
+            tab._on_clear()
+        svc.clear_protocol.assert_called_once()
+        # The bridge is mocked here, so drive the resulting IDLE transition
+        # ourselves: with no orchestrator, progress() reports nothing and the
+        # view empties / the bars reset.
+        svc.protocol = None
+        svc.progress.return_value = {}
+        svc.state = ExperimentState.IDLE
+        tab._on_state_changed(ExperimentState.LOADED, ExperimentState.IDLE)
+        self.assertEqual(tab.step_lists['fluid'].count(), 0)
+        self.assertEqual(tab.overall_count.text(), '0/0')
+        self.assertEqual(tab.step_status.text(), '—')
+
+    def test_clear_run_sequence_cancelled_keeps_it(self):
+        from unittest.mock import MagicMock, patch
+        from PyQt6.QtWidgets import QMessageBox
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+        svc = MagicMock(name='service')
+        svc.state = ExperimentState.LOADED
+        tab = ExperimentTab(svc, MagicMock(name='bridge'))
+        with patch(
+                'PycroFlow.gui.tabs.experiment_tab.QMessageBox.question',
+                return_value=QMessageBox.StandardButton.No):
+            tab._on_clear()
+        svc.clear_protocol.assert_not_called()
+
     def test_within_step_bars(self):
         from unittest.mock import MagicMock
         from PycroFlow.services import ExperimentState
@@ -1131,6 +1199,29 @@ class TestExperimentDesignTab(unittest.TestCase):
         fluid._toggle.setChecked(True)
         self.assertEqual(fluid._toggle.arrowType(), Qt.ArrowType.DownArrow)
         self.assertTrue(fluid._form.isVisibleTo(fluid))
+
+    def test_clear_resets_design_and_form(self):
+        from unittest.mock import patch
+        from PycroFlow.services import ExperimentService
+        from PycroFlow.gui.tabs import experiment_design_tab as edt
+        from PycroFlow.gui.tabs.experiment_design_tab import (
+            ExperimentDesignTab)
+        self.addCleanup(os.chdir, os.getcwd())
+        _, path = _example_design()
+        svc = ExperimentService()
+        tab = ExperimentDesignTab(svc)
+        tab.load_design_path(path)
+        self.assertIsNotNone(svc.experiment_design)
+        loaded_name = tab._form.to_dict().get('base_name')
+        self.assertTrue(loaded_name)
+        # Confirming clears the service design and rebuilds an empty form.
+        with patch.object(
+                edt.QMessageBox, 'question',
+                return_value=edt.QMessageBox.StandardButton.Yes):
+            tab._on_clear()
+        self.assertIsNone(svc.experiment_design)
+        self.assertNotEqual(
+            tab._form.to_dict().get('base_name'), loaded_name)
 
 
 @unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
