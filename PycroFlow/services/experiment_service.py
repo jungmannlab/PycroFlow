@@ -214,12 +214,20 @@ class ExperimentService:
 
     def start(self, system_steps: Optional[Dict] = None) -> None:
         self._require_orchestrator()
-        if self._state == ExperimentState.LOADED:
-            # Rebuild only if hardware was connected after load/translate
-            # (otherwise the handlers see system=None and the protocol
-            # silently finishes immediately). Skipping the rebuild when
-            # systems are unchanged preserves an externally-set orchestrator.
-            if self._current_systems() != self._orchestrator_systems:
+        if self._state in (
+            ExperimentState.LOADED,
+            ExperimentState.FINISHED,
+            ExperimentState.ABORTED,
+        ):
+            # A finished/aborted run leaves dead handler threads and set
+            # finished/abort flags, so always rebuild for a fresh run from
+            # those states. From LOADED, rebuild only if hardware was
+            # connected after load/translate (otherwise the handlers see
+            # system=None and the protocol silently finishes immediately);
+            # skipping it when systems are unchanged preserves an
+            # externally-set orchestrator.
+            if (self._state is not ExperimentState.LOADED
+                    or self._current_systems() != self._orchestrator_systems):
                 self._build_orchestrator()
             if not any(self._current_systems()):
                 logger.warning(

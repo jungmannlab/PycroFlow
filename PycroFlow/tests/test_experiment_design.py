@@ -202,6 +202,21 @@ class TestEmulatedFluidOps(unittest.TestCase):
                 side_effect=AssertionError("input() must not be called")):
             svc.clean_tubings()
 
+    def test_clean_tubings_without_reservoirs_raises(self):
+        # An empty/unresolved cleaning_reservoirs would pump nothing — clean
+        # must raise (so the GUI reports it) instead of silently completing.
+        from PycroFlow.services import SystemService
+        svc = SystemService()
+        svc.load_setup('Emulator')
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200, 'clean_velocity': 200},
+            'settings': {'reservoir_names': {1: 'R1', 7: 'C+'},
+                         'special_names': {'flushbuffer_a': 7},
+                         'cleaning_reservoirs': []},
+        })
+        with self.assertRaises(ValueError):
+            svc.clean_tubings()
+
     def test_inject_step_duration_estimate(self):
         fluid = self._connected().fluid_system
         # inject of 1000 µl at 200 µl/min -> ~2*1000/200 = 10 min = 600 s.

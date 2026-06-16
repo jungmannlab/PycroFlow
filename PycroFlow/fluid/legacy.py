@@ -1151,6 +1151,18 @@ class LegacyArchitecture(AbstractSystem):
 
         logger.debug(f"Cleaning Reservoirs: {cleaning_reservoirs}")
         logger.debug(f"reservoir_a: {self.reservoir_a.items()}")
+        # Without a cleaning-liquid source the chain/individual passes have
+        # nothing to pump, so the whole procedure would silently do nothing.
+        # Surface that as an error (the GUI shows it in a dialog) rather than
+        # printing "complete" with no movement. A pre-empty-only run
+        # (max_reservoir_vol set) is still allowed.
+        if not cleaning_reservoirs and max_reservoir_vol is None:
+            raise ValueError(
+                "No cleaning reservoirs available — nothing would be pumped. "
+                "Set 'cleaning_reservoirs' in the experiment design's fluid "
+                "settings to reservoir ids (e.g. [12]) or special names "
+                "(e.g. ['h2o']) that are defined in special_names."
+            )
         res_to_clean = [
             rid
             for rid in self.reservoir_a.keys()

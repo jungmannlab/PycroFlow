@@ -341,6 +341,45 @@ class TestMainWindow(unittest.TestCase):
         time.sleep(0.02)
         self.assertAlmostEqual(frozen, tab._overall_sw.elapsed(), places=2)
 
+    def test_poll_ends_run_when_finished(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+        svc = MagicMock(name='service')
+        svc.state = ExperimentState.RUNNING
+        svc.protocol = {
+            'fluid': {'protocol_entries': [{'$type': 'incubate'}]},
+            'img': {'protocol_entries': []},
+            'illu': {'protocol_entries': []},
+        }
+        svc.progress.return_value = {
+            'fluid': (1, 1), 'img': (0, 0), 'illu': (0, 0)}
+        svc.step_progress.return_value = {}
+        svc.is_finished.return_value = True
+        tab = ExperimentTab(svc, MagicMock(name='bridge'))
+        tab._populate_steps()
+        # Polling notices completion and ends the run (-> FINISHED).
+        tab._poll_progress()
+        svc.end.assert_called_once()
+        # While still running but not finished, it does not end.
+        svc.end.reset_mock()
+        svc.is_finished.return_value = False
+        tab._poll_progress()
+        svc.end.assert_not_called()
+
+    def test_controls_reset_after_run_finishes(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+        svc = MagicMock(name='service')
+        svc.state = ExperimentState.FINISHED
+        tab = ExperimentTab(svc, MagicMock(name='bridge'))
+        tab._refresh_controls(ExperimentState.FINISHED)
+        # Back to a "not running" state: Start available, Pause/Abort off.
+        self.assertTrue(tab.start_btn.isEnabled())
+        self.assertFalse(tab.pause_resume_btn.isEnabled())
+        self.assertFalse(tab.abort_btn.isEnabled())
+
     def test_within_step_bars(self):
         from unittest.mock import MagicMock
         from PycroFlow.services import ExperimentState
@@ -690,6 +729,20 @@ class TestConnectionFlow(unittest.TestCase):
         self.assertTrue(w.fluid_tab.connect_btn.isEnabled())
         self.assertTrue(w.monet_tab._embed_container.isEnabled())
         self.assertTrue(w.setup_combo.isEnabled())
+
+    def test_finished_run_unlocks_hardware(self):
+        from PycroFlow.services import ExperimentState
+        w = self._win()
+        w._experiment_service._set_state(ExperimentState.RUNNING)
+        self.assertFalse(w.setup_combo.isEnabled())
+        # Completing the run re-enables the fluid / imaging / monet tabs and
+        # the toolbar, like an abort does.
+        w._experiment_service._set_state(ExperimentState.FINISHED)
+        self.assertTrue(w.fluid_tab.connect_btn.isEnabled())
+        self.assertTrue(w.imaging_tab.connect_btn.isEnabled())
+        self.assertTrue(w.monet_tab._embed_container.isEnabled())
+        self.assertTrue(w.setup_combo.isEnabled())
+        self.assertTrue(w.act_connect.isEnabled())
 
 
 def _example_design():

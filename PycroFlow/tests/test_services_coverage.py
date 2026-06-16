@@ -21,7 +21,7 @@ _MINIMAL = {'fluid': {'protocol_entries': []}}
 
 def _loaded_service_with_mock_orchestrator():
     svc = ExperimentService()
-    svc.load_protocol(_MINIMAL)          # builds a real (unstarted) orchestrator
+    svc.load_protocol(_MINIMAL)        # builds a real (unstarted) orchestrator
     svc._orchestrator = MagicMock(name='orchestrator')  # swap in a stub
     return svc
 
@@ -65,6 +65,28 @@ class ExperimentLifecycleTest(unittest.TestCase):
 
     def test_end_without_orchestrator_noop(self):
         ExperimentService().end()  # must not raise
+
+    def test_start_after_finished_rebuilds_and_runs(self):
+        # A finished run can be relaunched: start() rebuilds a fresh
+        # orchestrator (old handler threads have exited) and runs again.
+        svc = _loaded_service_with_mock_orchestrator()
+        svc.start()
+        svc.end()
+        self.assertEqual(svc.state, ExperimentState.FINISHED)
+        with patch.object(svc, '_build_orchestrator') as build:
+            svc.start()
+        build.assert_called_once()
+        self.assertEqual(svc.state, ExperimentState.RUNNING)
+
+    def test_start_after_aborted_rebuilds_and_runs(self):
+        svc = _loaded_service_with_mock_orchestrator()
+        svc.start()
+        svc.abort()
+        self.assertEqual(svc.state, ExperimentState.ABORTED)
+        with patch.object(svc, '_build_orchestrator') as build:
+            svc.start()
+        build.assert_called_once()
+        self.assertEqual(svc.state, ExperimentState.RUNNING)
 
     def test_is_finished_delegates(self):
         svc = _loaded_service_with_mock_orchestrator()

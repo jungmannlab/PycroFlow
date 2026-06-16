@@ -39,9 +39,12 @@ _CENTER = QAbstractItemView.ScrollHint.PositionAtCenter
 _ACTIVE_STATES = {ExperimentState.ORCHESTRATING, ExperimentState.RUNNING,
                   ExperimentState.PAUSED}
 
-# Which run controls are enabled in each experiment state.
+# Which run controls are enabled in each experiment state. Start is also
+# available after a run finished/aborted, to launch a fresh run of the same
+# loaded sequence (the service rebuilds the orchestrator for it).
 _CAN_START = {ExperimentState.LOADED, ExperimentState.ORCHESTRATING,
-              ExperimentState.PAUSED}
+              ExperimentState.PAUSED, ExperimentState.FINISHED,
+              ExperimentState.ABORTED}
 _CAN_ABORT = {ExperimentState.ORCHESTRATING, ExperimentState.RUNNING,
               ExperimentState.PAUSED}
 # Loading a new run sequence is only allowed when nothing is running.
@@ -550,6 +553,20 @@ class ExperimentTab(YamlDropMixin, QWidget):
             estimate_remaining(self._durations, prog), round_remaining)
         self._update_substep_bars()
         self._shade_steps(prog)
+        self._check_finished()
+
+    def _check_finished(self):
+        """Leave the running state once every subsystem has finished.
+
+        The orchestrator runs to completion on its own threads but does not
+        announce it; we detect it here (the poll already runs while RUNNING)
+        and call ``end()``, which transitions to FINISHED. That re-enables the
+        run controls and unlocks the hardware tabs via the usual state-change
+        handlers.
+        """
+        if (self._service.state is ExperimentState.RUNNING
+                and self._service.is_finished()):
+            self._service.end()
 
     def _set_substep_visible(self, system, visible):
         for w in self.substep_bars[system]:
