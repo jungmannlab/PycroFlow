@@ -135,7 +135,10 @@ class PycroFlowMainWindow(QMainWindow):
             self._autoconnect()
 
     def _on_design_changed(self):
-        self._autoconnect()
+        # A freshly loaded design gets clean connections: reconnect every
+        # subsystem (which disconnects first), so any prior design's hardware
+        # handles are released before the new ones are opened.
+        self._reconnect_all()
 
     def _on_experiment_state(self, old, new):
         """Lock/unlock manual hardware access on experiment state changes."""
