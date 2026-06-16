@@ -22,6 +22,9 @@ from PyQt6.QtWidgets import (
 
 from PycroFlow.services.experiment_service import ExperimentState
 from PycroFlow.gui.widgets.dnd import YamlDropMixin
+from PycroFlow.protocols.timing import (
+    estimate_durations, estimate_total_duration, estimate_remaining,
+    format_duration)
 
 
 # The subsystems, in display order.
@@ -65,6 +68,11 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # happens-before graph), used to correlate concurrent steps across
         # systems. {system: [level per entry]}.
         self._levels = {s: [] for s in _SYSTEMS}
+        # Estimated per-entry durations (seconds) per system, and their total,
+        # used for the time-remaining / total-duration estimates. Refreshed
+        # whenever a protocol is (re)populated.
+        self._durations = {s: [] for s in _SYSTEMS}
+        self._total_duration = 0.0
         # The step whose parameters are shown (the last one clicked).
         self._current_sys = None
         self._current_row = -1
@@ -125,6 +133,12 @@ class ExperimentTab(YamlDropMixin, QWidget):
                 prog_grid, 4 + i, _SYSTEM_LABELS[system])
             self.substep_bars[system] = (name, bar, count)
             self._set_substep_visible(system, False)
+        # Estimated total run time (shown once a protocol is loaded, before
+        # and during the run). The Overall / Steps-in-Round bars additionally
+        # show the time *remaining* in their %-format while running.
+        self.total_estimate_label = QLabel("")
+        self.total_estimate_label.setStyleSheet("color: gray;")
+        prog_grid.addWidget(self.total_estimate_label, 7, 0, 1, 3)
         layout.addWidget(prog_box)
 
         # --- per-subsystem step lists (side by side) + parameters below
@@ -297,11 +311,29 @@ class ExperimentTab(YamlDropMixin, QWidget):
                     else '?')
                 lst.addItem("{:d}: {}".format(i, type_))
         self._levels = self._compute_levels()
+        self._durations = estimate_durations(protocol)
+        self._total_duration = estimate_total_duration(protocol)
+        self._update_total_estimate_label()
         self._current_sys = None
         self._current_row = -1
         self.step_table.setRowCount(0)
         self.step_param_label.setText("Select a step above to view it.")
         self.apply_btn.setEnabled(False)
+
+    def _update_total_estimate_label(self):
+        """Show the estimated total run time (or clear it when unknown)."""
+        if self._total_duration > 0:
+            self.total_estimate_label.setText(
+                "Estimated sequence duration: ~{}".format(
+                    format_duration(self._total_duration)))
+        else:
+            self.total_estimate_label.setText("")
+
+    def _bar_eta_format(self, remaining):
+        """Progress-bar format string, appending '~<time> left' when known."""
+        if self._total_duration > 0 and remaining > 0:
+            return "%p%  ·  ~{} left".format(format_duration(remaining))
+        return "%p%"
 
     def _compute_levels(self):
         """Assign each step a logical 'time' for cross-system correlation.
@@ -427,6 +459,8 @@ class ExperimentTab(YamlDropMixin, QWidget):
         pct = int(100 * done / total) if total else 0
         self.overall_bar.setValue(pct)
         self.overall_count.setText("{}/{}".format(done, total))
+        self.overall_bar.setFormat(
+            self._bar_eta_format(estimate_remaining(self._durations, prog)))
 
         parts = []
         for key in _SYSTEMS:
@@ -511,16 +545,21 @@ class ExperimentTab(YamlDropMixin, QWidget):
             return
         current = min(done_rounds, total_rounds)
         done = total = 0
+        remaining = 0.0
         for system in _SYSTEMS:
             cur = prog.get(system, (0, 0))[0]
+            durs = self._durations.get(system, [])
             for idx, rnd in enumerate(self._round_of.get(system, [])):
                 if rnd == current:
                     total += 1
                     if idx < cur:
                         done += 1
+                    elif idx < len(durs):
+                        remaining += durs[idx]
         pct = int(100 * done / total) if total else 0
         self.current_round_bar.setValue(pct)
         self.current_round_count.setText("{}/{}".format(done, total))
+        self.current_round_bar.setFormat(self._bar_eta_format(remaining))
 
     def _shade_steps(self, prog):
         active = self._service.state in _ACTIVE_STATES

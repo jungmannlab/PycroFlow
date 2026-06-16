@@ -265,6 +265,36 @@ class TestMainWindow(unittest.TestCase):
         self.assertEqual(tab.current_round_bar.value(), 25)
         self.assertEqual(tab.current_round_count.text(), '1/4')
 
+    def test_duration_estimate_display(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+        svc = MagicMock(name='service')
+        svc.state = ExperimentState.RUNNING
+        # fluid: 60 + 60 = 120 s; img: 1000 * 120 ms = 120 s; total 240 s = 4m.
+        svc.protocol = {
+            'fluid': {'protocol_entries': [
+                {'$type': 'incubate', 'duration': 60},
+                {'$type': 'incubate', 'duration': 60}]},
+            'img': {'protocol_entries': [
+                {'$type': 'acquire', 'frames': 1000, 't_exp': 120}]},
+            'illu': {'protocol_entries': []},
+        }
+        svc.progress.return_value = {
+            'fluid': (0, 2), 'img': (0, 1), 'illu': (0, 0)}
+        tab = ExperimentTab(svc, MagicMock(name='bridge'))
+        tab._populate_steps()
+        # Total shown up front (before/at the start of the run).
+        self.assertIn('~4m', tab.total_estimate_label.text())
+        # Nothing done yet -> the Overall bar shows the full time remaining.
+        tab._poll_progress()
+        self.assertIn('~4m left', tab.overall_bar.format())
+        # After the first fluid incubate, remaining drops to 60 + 120 = 3m.
+        svc.progress.return_value = {
+            'fluid': (1, 2), 'img': (0, 1), 'illu': (0, 0)}
+        tab._poll_progress()
+        self.assertIn('~3m left', tab.overall_bar.format())
+
     def test_within_step_bars(self):
         from unittest.mock import MagicMock
         from PycroFlow.services import ExperimentState

@@ -43,8 +43,15 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
         self.load_btn = QPushButton("Load…")
         self.save_btn = QPushButton("Save…")
         self.translate_btn = QPushButton("Translate → Run Sequence")
-        for b in (self.load_btn, self.save_btn, self.translate_btn):
+        self.estimate_btn = QPushButton("Estimate duration")
+        for b in (self.load_btn, self.save_btn, self.translate_btn,
+                  self.estimate_btn):
             controls.addWidget(b)
+        # Estimated run time from the current design (compiled on demand, so
+        # it reflects unsaved edits without committing them to the run).
+        self.estimate_label = QLabel("")
+        self.estimate_label.setStyleSheet("color: gray;")
+        controls.addWidget(self.estimate_label)
         controls.addStretch()
         layout.addLayout(controls)
 
@@ -55,6 +62,7 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
         self.load_btn.clicked.connect(self._on_load)
         self.save_btn.clicked.connect(self._on_save)
         self.translate_btn.clicked.connect(self._on_translate)
+        self.estimate_btn.clicked.connect(self._on_estimate)
 
         # Start from an empty form (scalar defaults filled in by the schema).
         self._set_form({})
@@ -165,5 +173,35 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             QMessageBox.critical(
                 self, "Translation failed", "{}".format(exc))
             return
+        self._update_estimate()
         if self._on_translated is not None:
             self._on_translated()
+
+    def _on_estimate(self):
+        self._update_estimate(notify=True)
+
+    def _update_estimate(self, notify=False):
+        """Compile the current design and show its estimated run time.
+
+        Builds the Run Sequence from the in-editor design without committing
+        it (so it reflects unsaved edits), then estimates the total duration.
+        On failure the label is cleared; with ``notify`` an explanation is
+        also shown, so the explicit "Estimate duration" button reports why.
+        """
+        from PycroFlow.protocols import ProtocolBuilder
+        from PycroFlow.protocols.timing import (
+            estimate_total_duration, format_duration)
+        from PycroFlow.schemas import validate_experiment_design
+        try:
+            design = validate_experiment_design(
+                self._form.to_dict()).model_dump(by_alias=True)
+            protocol = ProtocolBuilder().build_protocol(design)
+            total = estimate_total_duration(protocol)
+        except Exception as exc:
+            self.estimate_label.setText("")
+            if notify:
+                QMessageBox.warning(
+                    self, "Cannot estimate duration", "{}".format(exc))
+            return
+        self.estimate_label.setText(
+            "Estimated duration: ~{}".format(format_duration(total)))
