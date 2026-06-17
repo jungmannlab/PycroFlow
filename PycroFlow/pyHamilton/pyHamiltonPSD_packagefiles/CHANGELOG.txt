@@ -1,0 +1,22 @@
+Change Log
+===========
+
+1.0.0 (21/05/2021)
+------------------
+- First Release
+
+1.0.1 (09/06/2021)
+------------------
+- Small correction
+
+1.0.2 (15/06/2021)
+------------------
+- Small correction
+
+1.1.0 (23/07/2021)
+------------------
+- Adding new scripts for syringe movement and velocity speed
+  -> syringeMovement(..)
+  -> velocityConfiguration(..)
+  -> setMaximumMicroStepVelocityPerMinute(..) - used only for PSD smooth flow
+- Method definePump is updated, it has a new parameter called 'syringe'

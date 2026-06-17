@@ -1,0 +1,142 @@
+<!-- Confluence Storage Format. Upload as a page via the REST API
+     (body.storage.value) or your Confluence import tooling. See
+     docs/confluence/README.md for instructions. Suggested page title:
+     "PycroFlow — Overview". -->
+<ac:structured-macro ac:name="info">
+  <ac:rich-text-body>
+    <p>This page is generated from the PycroFlow repository documentation
+    (<code>README.md</code>, <code>ARCHITECTURE.md</code>, <code>docs/</code>).
+    When in doubt, the repository is the source of truth.</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<ac:structured-macro ac:name="toc">
+  <ac:parameter ac:name="maxLevel">3</ac:parameter>
+</ac:structured-macro>
+
+<h1>What PycroFlow is</h1>
+<p>PycroFlow is a Python framework that coordinates the three subsystems of an
+automated fluorescence-microscopy experiment so they run as one timed,
+abortable sequence:</p>
+<ul>
+  <li><strong>Fluid handling</strong> — Hamilton MVP rotary valves and PSD
+  syringe pumps, driven over serial, exchange imager/buffer solutions through
+  the sample chamber.</li>
+  <li><strong>Image acquisition</strong> — Micro-Manager (via pycromanager),
+  including Perfect Focus System (PFS) monitoring.</li>
+  <li><strong>Illumination</strong> — laser power and wavelength control via the
+  <em>monet</em> sibling project.</li>
+</ul>
+<p>It targets <strong>Windows 10</strong> with hardware serial communication and
+runs on <strong>Python 3.10+</strong>. It is used in production for
+Exchange-PAINT, MERPAINT, and related multiplexed DNA-PAINT experiments.</p>
+
+<h1>What it can do</h1>
+<p>Experiment types are dispatched through a registry in the protocol builder:</p>
+<table>
+  <tbody>
+    <tr><th>Type</th><th>Description</th></tr>
+    <tr><td><code>Exchange</code></td><td>Exchange-PAINT: sequentially image a series of imagers, washing between rounds.</td></tr>
+    <tr><td><code>MERPAINT</code></td><td>Adapter/eraser hybridization rounds with imaging in between.</td></tr>
+    <tr><td><code>SPH-RESI</code></td><td>Resolution-enhancement rounds with adapter labelling and blocking per target.</td></tr>
+    <tr><td><code>FlushTest</code></td><td>A diagnostic sequence for testing fluid delivery.</td></tr>
+  </tbody>
+</table>
+<p>Experiments support <strong>pause / resume / abort</strong> and survive focus
+loss (PFS monitoring can pause and rewind the protocol).</p>
+
+<h1>How it is built</h1>
+<h2>Orchestration</h2>
+<p>A <code>ProtocolOrchestrator</code> runs one daemon thread per subsystem
+(fluid, imaging, illumination). The threads stay in step using a
+<strong>signal / wait-for-signal</strong> protocol: one subsystem emits a named
+signal (e.g. <em>"fluid round 1 done"</em>) and another waits for it before
+proceeding. Waiting is event-backed (no busy polling) with a hard timeout.</p>
+
+<h2>Protocols</h2>
+<p>A high-level experiment description is transformed by the
+<code>ProtocolBuilder</code> into per-subsystem lists of typed steps (each a dict
+with a <code>$type</code> field, e.g. <code>inject</code>, <code>acquire</code>,
+<code>set power</code>, <code>signal</code>, <code>wait for signal</code>). Steps
+are validated against a schema and serialized to <strong>YAML</strong>, which can
+be inspected and hand-edited before a run.</p>
+
+<h2>Hardware</h2>
+<table>
+  <tbody>
+    <tr><th>Subsystem</th><th>Hardware / driver</th></tr>
+    <tr><td>Fluid</td><td>Hamilton MVP valves + PSD syringe pumps, in-house serial driver (<code>pyHamilton</code>); topology defined in YAML configs.</td></tr>
+    <tr><td>Imaging</td><td>Micro-Manager Core/Studio via pycromanager; PFS focus monitoring.</td></tr>
+    <tr><td>Illumination</td><td>monet (laser power/wavelength, shutter, beam path).</td></tr>
+    <tr><td>Spill sensor</td><td>Optional Arduino-based wet/dry sensor that can pause a run on a detected spill.</td></tr>
+  </tbody>
+</table>
+
+<h2>Frontends</h2>
+<ul>
+  <li><strong><code>pycroflow</code></strong> — an interactive command-line
+  interface (the workhorse in the lab; full control over fluid, imaging and
+  illumination).</li>
+  <li><strong><code>pycroflow-gui</code></strong> — a tabbed Qt GUI (PyQt6),
+  launched with <code>pycroflow-gui</code> or
+  <code>python -m PycroFlow.gui</code>.</li>
+</ul>
+<p>Both frontends sit on the same frontend-agnostic <strong>services</strong>
+layer (experiment lifecycle and manual hardware control), so neither reaches
+into orchestration internals.</p>
+
+<h3>The Qt GUI tabs</h3>
+<p>A toolbar (Load protocol / Start / Pause / Abort) sits above four tabs:</p>
+<table>
+  <tbody>
+    <tr><th>Tab</th><th>What it shows / does</th></tr>
+    <tr><td><strong>Experiment</strong></td><td>The main control surface: load a protocol, Start / Pause / Resume / Abort, a live experiment-state label, the fluid protocol step list, and a log pane.</td></tr>
+    <tr><td><strong>Fluid</strong></td><td>Fluid-system status and manual fluid control: <em>Fill tubings</em>, <em>Clean tubings</em> (using config defaults), and <em>Stop all moves</em>.</td></tr>
+    <tr><td><strong>Imaging</strong></td><td>Read-only imaging status: connection, PFS status, last acquisition.</td></tr>
+    <tr><td><strong>Monet</strong></td><td>Embeds monet's own laser-control window in-process, so PycroFlow imaging and monet share one Micro-Manager connection (no two-process conflict).</td></tr>
+  </tbody>
+</table>
+<ac:structured-macro ac:name="note">
+  <ac:rich-text-body>
+    <p><strong>Monet tab.</strong> PycroFlow's GUI and monet are both on PyQt6,
+    so monet's window embeds directly in the Monet tab. If monet isn't installed,
+    the tab shows a placeholder instead of failing.</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+<ac:structured-macro ac:name="info">
+  <ac:rich-text-body>
+    <p>The GUI currently exposes a <strong>subset</strong> of the CLI. For
+    parameterised cleaning (specific reservoirs/volumes), manual
+    <code>inject</code>/<code>deliver</code>/<code>set_valves</code>, or direct
+    <code>laser</code>/<code>power</code> commands, use the
+    <code>pycroflow</code> CLI.</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<h1>Installation</h1>
+<ac:structured-macro ac:name="code">
+  <ac:parameter ac:name="language">bash</ac:parameter>
+  <ac:plain-text-body><![CDATA[# Lab Windows box (real hardware)
+pip install -e ".[hardware]"
+
+# Developer machine / CI (vendor SDKs mocked in tests)
+pip install -e ".[dev]"
+
+# Qt GUI frontend (PyQt6)
+pip install -e ".[gui]"]]></ac:plain-text-body>
+</ac:structured-macro>
+<p>Console scripts <code>pycroflow</code> (CLI) and <code>pycroflow-gui</code>
+(GUI) are installed. All dependencies are declared in
+<code>pyproject.toml</code>.</p>
+
+<h1>Where to go next</h1>
+<ul>
+  <li><strong>Running an Experiment</strong> — the step-by-step lab workflow
+  (see the companion Confluence page).</li>
+  <li><code>docs/quickstart.md</code> — installation and first-protocol
+  walkthrough in the repository.</li>
+  <li><code>docs/architecture.md</code> and <code>ARCHITECTURE.md</code> — module
+  map, subsystem abstractions, threading model.</li>
+  <li><code>docs/adr/</code> — architecture decision records explaining the major
+  design choices.</li>
+</ul>

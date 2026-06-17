@@ -1,0 +1,919 @@
+{
+  "reservoir_vols": {
+    "1": 96,
+    "2": 96,
+    "3": 96,
+    "4": 96,
+    "5": 96,
+    "6": 9005
+  },
+  "steps": {
+    "fluid": [
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-0"
+      },
+      {
+        "$type": "pump_out",
+        "extractionfactor": 1,
+        "volume": 1
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "reservoir_id": 6,
+        "volume": 1800
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "extractionfactor": 0,
+        "reservoir_id": 6,
+        "volume": 1
+      },
+      {
+        "$type": "signal",
+        "value": "done flushing img-0"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round dark-0"
+      },
+      {
+        "$type": "pump_out",
+        "extractionfactor": 1,
+        "volume": 1
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "reservoir_id": 1,
+        "volume": 95
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "extractionfactor": 0,
+        "reservoir_id": 1,
+        "volume": 1
+      },
+      {
+        "$type": "signal",
+        "value": "done flushing img-1"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-1"
+      },
+      {
+        "$type": "pump_out",
+        "extractionfactor": 1,
+        "volume": 1
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "reservoir_id": 6,
+        "volume": 1800
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "extractionfactor": 0,
+        "reservoir_id": 6,
+        "volume": 1
+      },
+      {
+        "$type": "signal",
+        "value": "done flushing img-dark-1"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-dark-1"
+      },
+      {
+        "$type": "pump_out",
+        "extractionfactor": 1,
+        "volume": 1
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "reservoir_id": 2,
+        "volume": 95
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "extractionfactor": 0,
+        "reservoir_id": 2,
+        "volume": 1
+      },
+      {
+        "$type": "signal",
+        "value": "done flushing img-2"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-2"
+      },
+      {
+        "$type": "pump_out",
+        "extractionfactor": 1,
+        "volume": 1
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "reservoir_id": 6,
+        "volume": 1800
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "extractionfactor": 0,
+        "reservoir_id": 6,
+        "volume": 1
+      },
+      {
+        "$type": "signal",
+        "value": "done flushing img-dark-2"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-dark-2"
+      },
+      {
+        "$type": "pump_out",
+        "extractionfactor": 1,
+        "volume": 1
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "reservoir_id": 3,
+        "volume": 95
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "extractionfactor": 0,
+        "reservoir_id": 3,
+        "volume": 1
+      },
+      {
+        "$type": "signal",
+        "value": "done flushing img-3"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-3"
+      },
+      {
+        "$type": "pump_out",
+        "extractionfactor": 1,
+        "volume": 1
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "reservoir_id": 6,
+        "volume": 1800
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "extractionfactor": 0,
+        "reservoir_id": 6,
+        "volume": 1
+      },
+      {
+        "$type": "signal",
+        "value": "done flushing img-dark-3"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-dark-3"
+      },
+      {
+        "$type": "pump_out",
+        "extractionfactor": 1,
+        "volume": 1
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "reservoir_id": 4,
+        "volume": 95
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "extractionfactor": 0,
+        "reservoir_id": 4,
+        "volume": 1
+      },
+      {
+        "$type": "signal",
+        "value": "done flushing img-4"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-4"
+      },
+      {
+        "$type": "pump_out",
+        "extractionfactor": 1,
+        "volume": 1
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "reservoir_id": 6,
+        "volume": 1800
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "extractionfactor": 0,
+        "reservoir_id": 6,
+        "volume": 1
+      },
+      {
+        "$type": "signal",
+        "value": "done flushing img-dark-4"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-dark-4"
+      },
+      {
+        "$type": "pump_out",
+        "extractionfactor": 1,
+        "volume": 1
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "reservoir_id": 5,
+        "volume": 95
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "extractionfactor": 0,
+        "reservoir_id": 5,
+        "volume": 1
+      },
+      {
+        "$type": "signal",
+        "value": "done flushing img-5"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-5"
+      }
+    ],
+    "illu": [
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "for imaging Her3",
+        "power": 30,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": true
+      },
+      {
+        "$type": "signal",
+        "value": "done setting power round img-0"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-0"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "",
+        "power": 1,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": false
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-0"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "for imaging Her3",
+        "power": 30,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": true
+      },
+      {
+        "$type": "signal",
+        "value": "done setting power round dark-0"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round dark-0"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "",
+        "power": 1,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": false
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-1"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "for imaging EGFR",
+        "power": 30,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": true
+      },
+      {
+        "$type": "signal",
+        "value": "done setting power round img-1"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-1"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "",
+        "power": 1,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": false
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-dark-1"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "for imaging EGFR",
+        "power": 30,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": true
+      },
+      {
+        "$type": "signal",
+        "value": "done setting power round img-dark-1"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-dark-1"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "",
+        "power": 1,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": false
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-2"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "for imaging 5T4",
+        "power": 30,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": true
+      },
+      {
+        "$type": "signal",
+        "value": "done setting power round img-2"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-2"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "",
+        "power": 1,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": false
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-dark-2"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "for imaging 5T4",
+        "power": 30,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": true
+      },
+      {
+        "$type": "signal",
+        "value": "done setting power round img-dark-2"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-dark-2"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "",
+        "power": 1,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": false
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-3"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "for imaging AXL",
+        "power": 30,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": true
+      },
+      {
+        "$type": "signal",
+        "value": "done setting power round img-3"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-3"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "",
+        "power": 1,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": false
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-dark-3"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "for imaging AXL",
+        "power": 30,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": true
+      },
+      {
+        "$type": "signal",
+        "value": "done setting power round img-dark-3"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-dark-3"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "",
+        "power": 1,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": false
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-4"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "for imaging Her2",
+        "power": 30,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": true
+      },
+      {
+        "$type": "signal",
+        "value": "done setting power round img-4"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-4"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "",
+        "power": 1,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": false
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-dark-4"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "for imaging Her2",
+        "power": 30,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": true
+      },
+      {
+        "$type": "signal",
+        "value": "done setting power round img-dark-4"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-dark-4"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "",
+        "power": 1,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": false
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-5"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "for imaging PDL1",
+        "power": 30,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": true
+      },
+      {
+        "$type": "signal",
+        "value": "done setting power round img-5"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "done imaging round img-5"
+      },
+      {
+        "$type": "set power",
+        "laser": 560,
+        "message": "",
+        "power": 1,
+        "warmup_delay": 5
+      },
+      {
+        "$type": "set shutter",
+        "state": false
+      },
+      {
+        "$type": "laser enable",
+        "laser": "all",
+        "state": false
+      },
+      {
+        "$type": "set shutter",
+        "state": false
+      }
+    ],
+    "img": [
+      {
+        "$type": "wait for signal",
+        "target": "illu",
+        "value": "done setting power round img-0"
+      },
+      {
+        "$type": "acquire",
+        "frames": 15,
+        "message": "round_img-0-Her3",
+        "name": "Her3",
+        "t_exp": 75
+      },
+      {
+        "$type": "signal",
+        "value": "done imaging round img-0"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-0"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "illu",
+        "value": "done setting power round dark-0"
+      },
+      {
+        "$type": "acquire",
+        "frames": 50,
+        "message": "round_dark-0-Her3",
+        "name": "Her3 (dark frames)",
+        "t_exp": 75
+      },
+      {
+        "$type": "signal",
+        "value": "done imaging round dark-0"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-1"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "illu",
+        "value": "done setting power round img-1"
+      },
+      {
+        "$type": "acquire",
+        "frames": 15,
+        "message": "round_img-1-EGFR",
+        "name": "EGFR",
+        "t_exp": 75
+      },
+      {
+        "$type": "signal",
+        "value": "done imaging round img-1"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-dark-1"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "illu",
+        "value": "done setting power round img-dark-1"
+      },
+      {
+        "$type": "acquire",
+        "frames": 50,
+        "message": "round_img-dark-1-EGFR",
+        "name": "EGFR (dark frames)",
+        "t_exp": 75
+      },
+      {
+        "$type": "signal",
+        "value": "done imaging round img-dark-1"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-2"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "illu",
+        "value": "done setting power round img-2"
+      },
+      {
+        "$type": "acquire",
+        "frames": 15,
+        "message": "round_img-2-5T4",
+        "name": "5T4",
+        "t_exp": 75
+      },
+      {
+        "$type": "signal",
+        "value": "done imaging round img-2"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-dark-2"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "illu",
+        "value": "done setting power round img-dark-2"
+      },
+      {
+        "$type": "acquire",
+        "frames": 50,
+        "message": "round_img-dark-2-5T4",
+        "name": "5T4 (dark frames)",
+        "t_exp": 75
+      },
+      {
+        "$type": "signal",
+        "value": "done imaging round img-dark-2"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-3"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "illu",
+        "value": "done setting power round img-3"
+      },
+      {
+        "$type": "acquire",
+        "frames": 15,
+        "message": "round_img-3-AXL",
+        "name": "AXL",
+        "t_exp": 75
+      },
+      {
+        "$type": "signal",
+        "value": "done imaging round img-3"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-dark-3"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "illu",
+        "value": "done setting power round img-dark-3"
+      },
+      {
+        "$type": "acquire",
+        "frames": 50,
+        "message": "round_img-dark-3-AXL",
+        "name": "AXL (dark frames)",
+        "t_exp": 75
+      },
+      {
+        "$type": "signal",
+        "value": "done imaging round img-dark-3"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-4"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "illu",
+        "value": "done setting power round img-4"
+      },
+      {
+        "$type": "acquire",
+        "frames": 15,
+        "message": "round_img-4-Her2",
+        "name": "Her2",
+        "t_exp": 75
+      },
+      {
+        "$type": "signal",
+        "value": "done imaging round img-4"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-dark-4"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "illu",
+        "value": "done setting power round img-dark-4"
+      },
+      {
+        "$type": "acquire",
+        "frames": 50,
+        "message": "round_img-dark-4-Her2",
+        "name": "Her2 (dark frames)",
+        "t_exp": 75
+      },
+      {
+        "$type": "signal",
+        "value": "done imaging round img-dark-4"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "fluid",
+        "value": "done flushing img-5"
+      },
+      {
+        "$type": "wait for signal",
+        "target": "illu",
+        "value": "done setting power round img-5"
+      },
+      {
+        "$type": "acquire",
+        "frames": 15,
+        "message": "round_img-5-PDL1",
+        "name": "PDL1",
+        "t_exp": 75
+      },
+      {
+        "$type": "signal",
+        "value": "done imaging round img-5"
+      }
+    ]
+  }
+}

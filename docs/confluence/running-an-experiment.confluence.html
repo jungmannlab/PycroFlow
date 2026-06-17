@@ -1,0 +1,247 @@
+<!-- Confluence Storage Format. Upload as a page via the REST API
+     (body.storage.value) or your Confluence import tooling. See
+     docs/confluence/README.md for instructions. Suggested page title:
+     "PycroFlow — Running an Experiment". -->
+<ac:structured-macro ac:name="info">
+  <ac:rich-text-body>
+    <p>This workflow combines the lab standard operating procedures with the
+    current PycroFlow command-line interface. Buffer recipes, volumes, reservoir
+    numbers and COM ports are <strong>lab- and setup-specific</strong> — the
+    values below are typical examples; adjust them to your rig.</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<ac:structured-macro ac:name="toc">
+  <ac:parameter ac:name="maxLevel">2</ac:parameter>
+</ac:structured-macro>
+
+<h1>Overview</h1>
+<p>A run is driven from a single <code>pycroflow</code> command-line session that
+orchestrates fluid exchange, acquisition, and illumination. The high-level shape
+of a session is:</p>
+<ol>
+  <li>Prepare buffers and passivate tubes / tubings.</li>
+  <li>Edit <code>start_experiment.py</code> for this experiment.</li>
+  <li>Launch PycroFlow, fill the tubings, load imagers.</li>
+  <li>Mount the sample and needles, find positions.</li>
+  <li><code>start_protocol</code> and let it run.</li>
+  <li>Clean the tubings and shut down.</li>
+</ol>
+
+<h1>1. Before you start: passivate tubes</h1>
+<p>Passivation reduces non-specific binding of imagers to the reservoir tubes.</p>
+<ul>
+  <li>Use DNA low-bind tubes.</li>
+  <li><strong>DyBE DNA-PAINT flavour only:</strong> first fill with ~1&#160;ml
+  antibody-incubation buffer <em>without</em> salmon sperm DNA; invert 6×;
+  incubate ≥ 30&#160;min; remove liquid. (Skip this step for other DNA-PAINT
+  flavours.)</li>
+  <li>Fill with ~1&#160;ml imaging buffer + 0.1% BSA + 0.1% Tween-20; invert 6×;
+  remove liquid.</li>
+  <li>Prepare ~1&#160;ml of each imaging mix (one passivated tube per imaging
+  round).</li>
+</ul>
+
+<h1>2. Power up and prepare software</h1>
+<ol>
+  <li>Switch on the fluidics power supply (pumps) and the microscope.</li>
+  <li>Start <strong>Micro-Manager</strong> and configure it (and
+  <strong>monet</strong>) exactly as for a manual experiment.</li>
+  <li>Into the folder where data will be stored, copy <code>execute pycroflow</code>
+  (the launcher shortcut) and <code>start_experiment.py</code> from a previous
+  run.</li>
+</ol>
+
+<h1>3. Configure <code>start_experiment.py</code></h1>
+<p>Open <code>start_experiment.py</code> and adjust the settings block at the top.
+The most commonly changed parameters:</p>
+<table>
+  <tbody>
+    <tr><th>Parameter</th><th>Meaning</th></tr>
+    <tr><td><code>experiment_name</code></td><td>Base name for the output folder and generated protocol file.</td></tr>
+    <tr><td><code>reservoir_names</code></td><td>Map of tubing/connector position → solution name. By lab convention reservoir 6 is the wash buffer — do not repurpose it.</td></tr>
+    <tr><td><code>initial_target</code></td><td>Name of the imager already present in the sample (no exchange needed for round 1), or <code>None</code>.</td></tr>
+    <tr><td><code>target_sequence</code></td><td>Ordered list of targets to image. Omit the <code>initial_target</code>. All names must appear in <code>reservoir_names</code>.</td></tr>
+    <tr><td><code>exposure_time</code></td><td>Camera exposure in ms.</td></tr>
+    <tr><td><code>n_frames</code></td><td>Frames per acquisition.</td></tr>
+    <tr><td><code>use_mm_positions</code></td><td><code>True</code> to acquire at all Micro-Manager position-list positions.</td></tr>
+    <tr><td><code>laser</code>, <code>sample_power</code></td><td>Illumination line (nm) and sample power (mW).</td></tr>
+    <tr><td><code>wash_volume</code>, <code>imager_volume</code>, <code>volume_reduction_for_xchg</code></td><td>Fluidic volumes (µl). The sample chamber must hold at least <code>volume_reduction_for_xchg</code> above the output needle.</td></tr>
+  </tbody>
+</table>
+<p>Save the file when done. The connection topology and fluidic parameters lower
+in the file rarely change between runs on the same rig.</p>
+
+<h1>4. Launch PycroFlow and prime the tubings</h1>
+<p>Start the CLI by double-clicking <code>execute pycroflow</code> (or running
+<code>pycroflow</code>). Loading the interface auto-generates a timestamped YAML
+protocol file (named with the experiment name and creation time).</p>
+
+<h2>Passivate the tubings</h2>
+<ol>
+  <li>Connect tubes of incubation/passivation buffer to the reservoirs you will
+  use.</li>
+  <li>Run <code>fill_tubings</code> twice to pull buffer through and passivate the
+  lines; incubate ~15&#160;min.</li>
+  <li>Remove the passivation tubes and run <code>fill_tubings</code> again to empty
+  the lines.</li>
+</ol>
+
+<h2>Load imagers</h2>
+<ol>
+  <li>Insert the imager tubes. Each imager's position must match its
+  <code>reservoir_names</code> entry in <code>start_experiment.py</code>.</li>
+  <li>If an imager is already in the sample, set it as <code>initial_target</code>
+  (then you don't connect its tube).</li>
+  <li>Run <code>fill_tubings</code> once more to fill the lines with the correct
+  imager and buffer.</li>
+  <li>Run <code>start_orchestration</code> to start the subsystem threads.</li>
+</ol>
+
+<h1>5. (Optional) Adjust acquisition per target</h1>
+<p>To change settings for specific rounds without re-running
+<code>start_experiment.py</code>:</p>
+<ol>
+  <li>Open the auto-generated YAML protocol (experiment name + date/time in the
+  file name).</li>
+  <li>Steps are grouped by subsystem (<code>fluid</code>, <code>img</code>,
+  <code>illu</code>). To change frames for <em>TargetC</em>, find the
+  <code>img</code> entry with <code>$type: acquire</code> and a
+  <code>message</code> like <em>"imaging round N - TargetC"</em> and edit
+  <code>frames</code>. To change power, find the <code>illu</code> entry with
+  <code>$type: set power</code> for that target.</li>
+  <li>Save the YAML.</li>
+  <li>In the CLI, run <code>load_protocol &lt;filename&gt;.yaml</code>.</li>
+</ol>
+
+<h1>6. Mount the sample and start</h1>
+<ol>
+  <li>Connect the <strong>input needle (blue)</strong> and
+  <strong>output needle (red)</strong> to the sample. Immerse the blue needle
+  deeper than the red one in the liquid.</li>
+  <li>Put the sample on the scope (e.g. a single-channel slide with ~300&#160;µl
+  of the first imaging mix).</li>
+  <li><code>find positions</code> in Micro-Manager if using
+  <code>use_mm_positions</code>.</li>
+  <li>Run <code>start_protocol</code>.</li>
+  <li>Monitor the run. When the CLI reports that the last protocol entry of all
+  subsystems has been performed, run <code>help</code> to return to a normal
+  prompt.</li>
+</ol>
+<ac:structured-macro ac:name="note">
+  <ac:rich-text-body>
+    <p>While running you can <code>pause_protocol</code>,
+    <code>resume_protocol</code>, or <code>abort_protocol</code>. The Perfect
+    Focus System is monitored automatically and can pause/rewind the protocol if
+    focus is lost.</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<h1>7. Clean the tubings</h1>
+<ol>
+  <li>Recover any imagers you still need (otherwise they go to waste).</li>
+  <li>Exchange the sample buffer (e.g. for 20% EtOH) and put both needles into
+  the same waste/falcon tube so the output can suck up what the input
+  dispenses.</li>
+  <li>Run <code>help clean_tubings</code> to review parameters, then clean. The
+  current parameters are:</li>
+</ol>
+<table>
+  <tbody>
+    <tr><th>Parameter</th><th>Meaning</th></tr>
+    <tr><td><code>extra_vol</code></td><td>Volume (µl) on top of the tubing volume to push through each path (default 100). May be given positionally as the first argument.</td></tr>
+    <tr><td><code>cleaning_reservoirs</code></td><td>Reservoir ID, or comma-separated list, of the cleaning-liquid tanks, in order. Defaults to the config.</td></tr>
+    <tr><td><code>velocity</code></td><td>Pump velocity in µl/min (default: <code>clean_velocity</code> / <code>max_velocity</code> from config).</td></tr>
+    <tr><td><code>mode</code></td><td><code>chain</code> (default; shuttle one fill volume through all reservoirs then out the needle) or <code>individual</code> (fresh liquid per reservoir; more thorough).</td></tr>
+    <tr><td><code>max_reservoir_vol</code></td><td>If set, each reservoir is first emptied (up to this volume) through the needle before cleaning.</td></tr>
+  </tbody>
+</table>
+<ac:structured-macro ac:name="code">
+  <ac:parameter ac:name="language">text</ac:parameter>
+  <ac:plain-text-body><![CDATA[# Example: clean with EtOH at reservoir 6, emptying tubes that hold up to 1500 ul first
+(PycroFlow) clean_tubings 200 cleaning_reservoirs=6 max_reservoir_vol=1500
+
+# Example: a light flush (50 ul extra) through reservoir 6
+(PycroFlow) clean_tubings extra_vol=50 cleaning_reservoirs=6]]></ac:plain-text-body>
+</ac:structured-macro>
+<p>During cleaning: all reservoir tubes are emptied (if
+<code>max_reservoir_vol</code> is set), then filled with cleaning liquid, pushed
+out the blue input needle, and drawn via the red output needle into waste.</p>
+<ac:structured-macro ac:name="note">
+  <ac:rich-text-body>
+    <p>Older lab notes reference <code>reservoir_vol=...</code> and
+    <code>empty_finally=...</code>; those were renamed/removed. Use
+    <code>max_reservoir_vol</code> and <code>mode</code> as above, and run
+    <code>help clean_tubings</code> for the authoritative list on your installed
+    version.</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<h1>8. Shut down</h1>
+<ol>
+  <li><code>exit</code> the CLI.</li>
+  <li>(If cleaning in stages) relaunch <code>execute pycroflow</code>,
+  <code>start_orchestration</code>, and repeat <code>clean_tubings</code> with the
+  next cleaning liquid (e.g. H₂O + 0.02% NaN₃, then Ethanol), then
+  <code>exit</code> again.</li>
+  <li>Switch off all lasers (in monet: <em>laser all off</em>).</li>
+  <li>Switch off the pump power supply and the microscope.</li>
+  <li>Everything else is the same as for a normal microscopy experiment.</li>
+</ol>
+
+<h1>Alternative: driving the run from the Qt GUI</h1>
+<p>Instead of the CLI, you can use the tabbed Qt GUI. Launch it with
+<code>pycroflow-gui</code> (or <code>python -m PycroFlow.gui</code>). The physical
+preparation — passivation, connecting tubes, mounting the sample and needles,
+buffer exchange — is identical to the CLI procedure above; only the software
+control surface differs.</p>
+<table>
+  <tbody>
+    <tr><th>Tab</th><th>Use during a run</th></tr>
+    <tr><td><strong>Experiment</strong></td><td>Load the protocol, then Start / Pause / Resume / Abort. The state label and log pane show progress; the step list shows the fluid protocol.</td></tr>
+    <tr><td><strong>Fluid</strong></td><td><em>Fill tubings</em> for priming/passivation, <em>Stop all moves</em> as an emergency stop, and <em>Clean tubings</em> (with the configuration's default parameters).</td></tr>
+    <tr><td><strong>Imaging</strong></td><td>Check connection / PFS status (read-only).</td></tr>
+    <tr><td><strong>Monet</strong></td><td>Laser control, embedded in-process (monet and PycroFlow share one Micro-Manager connection).</td></tr>
+  </tbody>
+</table>
+<p>A typical GUI run: <em>Fill tubings</em> (Fluid tab) to prime → load the
+protocol and <em>Start</em> (Experiment tab) → monitor in the log → <em>Clean
+tubings</em> (Fluid tab) when finished.</p>
+<ac:structured-macro ac:name="info">
+  <ac:rich-text-body>
+    <p>The GUI exposes a <strong>subset</strong> of the CLI. For
+    <strong>parameterised cleaning</strong> (specific
+    <code>cleaning_reservoirs</code> / <code>extra_vol</code> /
+    <code>max_reservoir_vol</code>), manual <code>inject</code> /
+    <code>deliver</code> / <code>set_valves</code>, or direct
+    <code>laser</code> / <code>power</code> commands, use the <code>pycroflow</code>
+    CLI. The GUI's <em>Clean tubings</em> button uses the configuration defaults.</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+<ac:structured-macro ac:name="note">
+  <ac:rich-text-body>
+    <p><strong>Monet tab.</strong> Both PycroFlow's GUI and monet are on PyQt6,
+    so monet's laser-control window embeds directly in the Monet tab and shares
+    PycroFlow's Micro-Manager connection. If monet isn't installed, the tab shows
+    a placeholder instead of failing.</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<h1>CLI command quick reference</h1>
+<table>
+  <tbody>
+    <tr><th>Command</th><th>What it does</th></tr>
+    <tr><td><code>fill_tubings</code></td><td>Fill the tubings from their reservoirs (used for priming and passivation).</td></tr>
+    <tr><td><code>start_orchestration</code></td><td>Start the per-subsystem threads (ready to run a protocol).</td></tr>
+    <tr><td><code>load_protocol &lt;file&gt;.yaml</code></td><td>Load a (possibly hand-edited) protocol YAML.</td></tr>
+    <tr><td><code>start_protocol</code></td><td>Run the loaded protocol. Optional start entries, e.g. <code>start_protocol fluid: 5, img: 2</code>.</td></tr>
+    <tr><td><code>pause_protocol</code> / <code>resume_protocol</code> / <code>abort_protocol</code></td><td>Pause, resume, or abort the running protocol.</td></tr>
+    <tr><td><code>get_protocol_iter</code> / <code>set_protocol_iter</code></td><td>Inspect or set the current step per subsystem.</td></tr>
+    <tr><td><code>is_protocol_done</code></td><td>Report whether all subsystems finished.</td></tr>
+    <tr><td><code>deliver</code> / <code>inject</code> / <code>set_valves</code> / <code>pump</code></td><td>Manual fluid operations.</td></tr>
+    <tr><td><code>laser</code> / <code>power</code></td><td>Manual illumination control.</td></tr>
+    <tr><td><code>clean_tubings</code></td><td>Clean all tubings (see parameters above).</td></tr>
+    <tr><td><code>help</code> / <code>help &lt;command&gt;</code></td><td>List commands / show detailed help for one.</td></tr>
+    <tr><td><code>exit</code></td><td>Cleanly stop orchestration and leave the CLI.</td></tr>
+  </tbody>
+</table>

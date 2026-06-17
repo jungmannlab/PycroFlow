@@ -1,2 +1,0 @@
-pycromanager==0.18.3
-arduino-python3===0.6

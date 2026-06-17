@@ -1,0 +1,982 @@
+"""
+address are unique to the whole system (same as serial address)
+
+
+"""
+
+import threading
+import time
+
+# import logging
+from loguru import logger
+
+import PycroFlow.pyHamilton as ham
+from PycroFlow.pyHamilton.mvp import MVP
+from PycroFlow.pyHamilton.util import PSDTypes
+from PycroFlow.pyHamilton.util import SyringeMovement as SyrMov
+from PycroFlow.pyHamilton.util import SyringeTypes as SyrTypes
+
+# logger = logging.getLogger(__name__)
+
+
+def map_valve_type(valve):
+    vmap = {
+        "1": "1",
+        "Y": "1",
+        "2": "2",
+        "T": "2",
+        "3-3": "2",
+        "3": "3",
+        "3-5": "3",
+        "4": "4",
+        "4-2": "4",
+        "4-5": "4",
+        "5": "5",
+        "6-5": "5",
+        "6": "6",
+        "8-5": "6",
+    }
+    return vmap[valve]
+
+
+class Reservoir:
+    """Representation of a fluid reservoir"""
+
+    def __init__(self, id, valve_pos):
+        self.id = id
+        self.valve_positions = valve_pos
+
+    def get_valve_positions(self):
+        return self.valve_positions
+
+    @property
+    def nvalves(self):
+        return len(self.valve_positions.keys())
+
+
+class ReservoirDict:
+    """A data structure containing multiple Reservoirs"""
+
+    def __init__(self):
+        self.reservoirs = {}
+
+    def add(self, reservoir):
+        """Add a reservoir to the dict.
+
+        Parameters
+        ----------
+        reservoir : Reservoir
+            The reservoir to add.
+        """
+        self.reservoirs[reservoir.id] = reservoir
+
+    @property
+    def len(self):
+        """Get the number of reservoirs"""
+        return len(self.reservoirs.keys())
+
+    def items(self):
+        """Get the entry items"""
+        return self.reservoirs.items()
+
+    def keys(self):
+        """Get the entry keys"""
+        return self.reservoirs.keys()
+
+    def values(self):
+        """Get the entry values"""
+        return self.reservoirs.values()
+
+    def get_reservoir_nvalves(self, res):
+        """Get the number of valves between a reservoir and the pump.
+
+        Parameters
+        ----------
+        res : int
+            The reservoir id.
+
+        Returns
+        -------
+        nvalves : int
+            The number of valves between this reservoir and the pump.
+        """
+        if isinstance(res, str):
+            # if coming from the input funciton, this might be a string
+            res = int(res)
+        return self.reservoirs[res].nvalves
+
+    def get_reservoir_valve_positions(self, res):
+        """Get the valve position dict for a given reservoir.
+
+        Parameters
+        ----------
+        res : int
+            The reservoir id.
+
+        Returns
+        -------
+        valve_positions : dict
+            The dict of valve address to valve position.
+        """
+        if isinstance(res, str):
+            # if coming from the input funciton, this might be a string
+            res = int(res)
+        return self.reservoirs[res].get_valve_positions()
+
+
+class TubingConfig:
+    """A data structure describing the tubing configuration"""
+
+    def __init__(self, config):
+        """Initialize the tubing configuration.
+
+        Parameters
+        ----------
+        config : dict
+            The tubing configuration.
+        """
+        logger.debug(
+            "initalized TubingConfig with config {:s}".format(str(config))
+        )
+        self.config = config
+
+    def set_special_names(self, special_names):
+        """Set special reservoir names.
+
+        Parameters
+        ----------
+        special_names : dict
+            Map from a special name to reservoir id.
+        """
+        self.special_names = special_names
+
+    def get(self, start, end):
+        """Get an entry volume.
+
+        Parameters
+        ----------
+        start : str
+            The starting point.
+        end : str
+            The end point.
+        """
+        return self.config[(start, end)]
+
+    def get_reservoir_to_pump(self, res_id, pump_name):
+        """Get the volume from a reservoir to the pump.
+
+        Parameters
+        ----------
+        res_id : int or str
+            The reservoir id, the special name for it, or the dict key
+            (e.g. ``'R2'``).
+        pump_name : str
+            The pump name (e.g. ``'a'`` for ``'pump_a'``).
+
+        Returns
+        -------
+        float
+            The volume in µl.
+        """
+        if isinstance(res_id, str):
+            if res_id in self.special_names.keys():
+                res = "R" + str(self.special_names[res_id])
+            else:
+                res = res_id
+        else:
+            res = "R" + str(res_id)
+        path = (res, "pump_" + pump_name)
+        if path in self.config.keys():
+            return self.config[path]
+        else:
+            # assemble the volume
+            logger.debug("assembling volumes along {:s}".format(str(path)))
+            vol = 0
+            searching = True
+            segstart = res
+            while searching:
+                segment = [k for k in self.config.keys() if k[0] == segstart]
+                logger.debug("found segment {:s}".format(str(segment)))
+                segment = segment[0]
+                vol += self.config[segment]
+                if segment[1] == path[1]:
+                    return vol
+                else:
+                    segstart = segment[1]
+
+    def get_reservoir_to_closest_valve(self, res_id):
+        """Scan the configuration for an entry from reservoir to
+        a valve, which must then be the closest one. Also check whether
+        the reservoir is directly connected to pump_a
+        """
+        logger.debug(
+            "getting closest valve to reservoir {:s}".format(str(res_id))
+        )
+        if isinstance(res_id, str):
+            if res_id in self.special_names.keys():
+                res = "R" + str(self.special_names[res_id])
+            else:
+                res = res_id
+        else:
+            res = "R" + str(res_id)
+        entries = [
+            ent
+            for ent in self.config.keys()
+            if ent[0] == res and "V" in ent[1]
+        ]
+        entries += [
+            ent
+            for ent in self.config.keys()
+            if ent[0] == res and "pump_a" in ent[1]
+        ]
+        logger.debug("found entries{:s}".format(str(entries)))
+        if len(entries) == 1:
+            return self.config[entries[0]]
+        elif len(entries) < 1:
+            raise KeyError(
+                "Cannot find any tubing configuation entry "
+                + "leading from {:s} to a valve".format(res)
+            )
+        else:
+            raise KeyError(
+                "Found multiple entries from res {:s}".format(res)
+                + " to a valve."
+            )
+
+    def set_reservoir_to_pump(self, res_id, pump_name, vol):
+        """Set the volume from a reservoir to the pump.
+
+        Parameters
+        ----------
+        res_id : int or str
+            The reservoir id, the special name for it, or the dict key
+            (e.g. ``'R2'``).
+        pump_name : str
+            The pump name (e.g. ``'a'`` for ``'pump_a'``).
+        vol : float
+            The volume in µl.
+        """
+        if isinstance(res_id, str):
+            if res_id in self.special_names.keys():
+                res = "R" + str(self.special_names[res_id])
+            else:
+                res = res_id
+        else:
+            res = "R" + str(res_id)
+        self.config[(res, "pump_" + pump_name)] = vol
+
+
+class Valve:
+    def __init__(self, address, instrument_type="4", valve_type="1"):
+        """Initialize a Valve instrument.
+
+        Parameters
+        ----------
+        address : str
+            Instrument address as set on the address switch, ``'0'`` to
+            ``'F'``.
+        instrument_type : str
+            One of ``['MVP']``.
+        valve_type : str
+            One of the following (as described in PSD3 manual, p. 15)::
+
+                val: alt   : description                           DIP Switch
+                '1': 'Y'   : 3-Port Y Valve                        OFF OFF OFF
+                '2': 'T', '3-3' : T-Port Valve                     ON  OFF OFF
+                '3': '3-5' : 3-Port Distribution Valve             OFF ON  OFF
+                '4': '4-2', '4-5': 4-Port Dist / 4-Port Wash Valve OFF OFF ON
+                '5': '6-5' : 6-Port Distribution Valve             OFF ON  ON
+                '6': '8-5' : 8-Port Distribution Valve             ON  ON  OFF
+
+            Hopefully the same as for PSD. However, it is unclear whether
+            these values actually need to be set, as they are set on the DIP
+            switch (PSD manual, p.15).
+        """
+        assert instrument_type in ["MVP"]
+
+        if instrument_type == "MVP":
+            self.mvp = MVP(str(address), instrument_type)
+
+        ham.communication.sendCommand(
+            self.mvp.asciiAddress,
+            self.mvp.command.initializeValve()
+            + self.mvp.command.enableValveMovement()
+            + self.mvp.command.enableHFactorCommandsAndQueries()
+            + self.mvp.command.executeCommandBuffer(),
+        )
+        valve_type = map_valve_type(valve_type)
+
+        # Default to private, never-set Events so direct hardware use
+        # (fill_tubings, calibration, manual control) before orchestration
+        # starts does not dereference a None flag. The orchestrator later
+        # replaces these with its shared events via
+        # ``_assign_multiprocess_events``.
+        self.pause_flag = threading.Event()
+        self.abort_flag = threading.Event()
+
+    def set_valve(self, pos, move_now=True):
+        """Set the valve position of the PSD.
+
+        Parameters
+        ----------
+        pos : str
+            One of ``'in'`` or ``'out'``, or a position between 1 and 8.
+        move_now : bool
+            Whether to execute the command now or later.
+
+        Returns
+        -------
+        cmd_ex_later : str
+            The command to execute later, only if ``move_now`` is True.
+        """
+        assert pos in ["in", "out", *list(range(1, 9))]
+
+        i = 0
+        while self.pause_flag.is_set():
+            if i == 0:
+                logger.debug(
+                    f"Pause Flag is set. Valve ascii "
+                    f"{self.mvp.asciiAddress} waiting for moving valve."
+                )
+            i += 1
+            if self.abort_flag.is_set():
+                logger.debug(
+                    f"Abort Flag is set additionally. Valve ascii "
+                    f"{self.mvp.asciiAddress} not moving valve."
+                )
+                return
+            time.sleep(0.02)
+        if i > 0:
+            logger.debug(
+                "Pause flag has been removed. Continuing to move valve"
+            )
+        if self.abort_flag.is_set():
+            logger.debug(
+                f"Abort Flag is set. Valve ascii "
+                f"{self.mvp.asciiAddress} not moving valve."
+            )
+            return
+
+        if pos == "in":
+            cmd = self.mvp.command.moveValveToInputPosition()
+        elif pos == "out":
+            cmd = self.mvp.command.moveValveToOutputPosition()
+        else:
+            cmd = self.mvp.command.moveValveInShortestDirection(pos)
+
+        if move_now:
+            ham.communication.sendCommand(
+                self.mvp.asciiAddress,
+                cmd + self.mvp.command.executeCommandBuffer(),
+                waitForPump=False,
+            )
+        else:
+            ham.communication.sendCommand(
+                self.mvp.asciiAddress, cmd, waitForPump=False
+            )
+            return self.mvp.command.executeCommandBuffer()
+
+    def wait_until_done(self):
+        """Wait until the valve is done moving.
+
+        Notes
+        -----
+        Uses pyHam functionality for now, therefore no timeout.
+        """
+        ham.communication.sendCommand(
+            self.mvp.asciiAddress, "Q", waitForPump=True
+        )
+
+    def get_status(self):
+        """Poll and return the status."""
+        return ham.communication.sendCommand(
+            self.mvp.asciiAddress, "Q", waitForPump=False
+        )
+
+
+class Pump:
+    current_volume = 0
+    target_volume = 0
+    valve_pos = None
+
+    def __init__(
+        self,
+        address,
+        syringe,
+        instrument_type="4",
+        valve_type="1",
+        resolution_mode=1,
+        output_pos=None,
+        input_pos=None,
+        waste_pos=None,
+        motorsteps_per_step=1,
+        speed_factor=1,
+        pause_flag=None,
+        abort_flag=None,
+    ):
+        """Initialize a PSD syringe pump.
+
+        Parameters
+        ----------
+        address : str
+            Instrument address as set on the address switch, ``'0'`` to
+            ``'F'``.
+        syringe : str
+            The syringe type/volume: ``'12.5u'``, ``'25u'``, ``'50u'``,
+            ``'100u'``, ``'125u'``, ``'250u'``, ``'500u'``, ``'1.0m'``,
+            ``'2.5m'``, ``'5.0m'``, ``'10m'``, ``'25m'`` or ``'50m'``.
+        instrument_type : str
+            One of ``'4'`` (PSD4), ``'6'`` (PSD6), ``'4sf'`` (PSD4 smooth
+            flow) or ``'6sf'`` (PSD6 smooth flow).
+        valve_type : str
+            One of::
+
+                '1': 3-Port Y Valve
+                '2': T-Port Valve
+                '3': 3-Port Distribution Valve
+                '4': 4-Port Distribution Valve 4-Port Wash Valve
+                '5': 6-Port Distribution Valve
+                '6': 8-Port Distribution Valve
+
+            However, it is unclear whether these values actually need to be
+            set, as they are set on the DIP switch (PSD manual, p.15).
+        resolution_mode : int
+            ``0`` for standard resolution (0-3000 steps), ``1`` for high
+            resolution mode (0-24000 steps). Not sure this can be freely
+            chosen or depends on hardware (but it is not the distinction
+            between PSD4 and PSD4 smooth flow!).
+        output_pos : int or str
+            The position for the syringe output. Value also depends on the
+            valve type.
+        input_pos : int or str
+            The position for the syringe input. If multiple inputs are used,
+            these need to be specified in the ``'valve_pos'`` of the
+            respective reservoirs in the config.
+        waste_pos : int or str, default: None
+            The position where waste is connected. This is the best position
+            for initialization.
+        motorsteps_per_step : {1, 2}
+            The OEM / high force PSD4 version internally counts in half steps
+            (command P6000 for full stroke pickup), while the CE version
+            counts in full steps (command D3000 for full stroke dispense).
+        """
+        assert instrument_type in [member.value for member in PSDTypes]
+        assert syringe in [member.value for member in SyrTypes]
+
+        # Default to private, never-set Events so direct hardware use
+        # (fill_tubings, calibration, manual control) before orchestration
+        # starts does not dereference a None flag. The orchestrator later
+        # replaces these with its shared events via
+        # ``_assign_multiprocess_events``.
+        if pause_flag is None:
+            pause_flag = threading.Event()
+        if abort_flag is None:
+            abort_flag = threading.Event()
+        ham.communication.pause_flag = pause_flag
+        ham.communication.abort_flag = abort_flag
+        self.pause_flag = pause_flag
+        self.abort_flag = abort_flag
+
+        self.psd = ham.PSD(str(address), instrument_type)
+        if output_pos == 1 or output_pos == "in":
+            init_cmd = "Y"
+            ham.communication.sendCommand(
+                self.psd.asciiAddress,
+                init_cmd
+                + self.psd.command.enableHFactorCommandsAndQueries()
+                + self.psd.command.executeCommandBuffer(),
+                waitForPump=True,
+            )
+            # 'Y' - we don't use internal 'in' and 'out' valve positions
+            init_cmd = "Z"
+        else:
+            init_cmd = "Z"
+
+        self.input_pos = input_pos
+        self.output_pos = output_pos
+        self.speed_factor = speed_factor
+
+        self.vol_change_when_done = 0
+
+        if waste_pos is not None:
+            self.set_valve(waste_pos)
+        ham.communication.sendCommand(
+            self.psd.asciiAddress,
+            init_cmd
+            + self.psd.command.enableHFactorCommandsAndQueries()
+            + self.psd.command.executeCommandBuffer(),
+            waitForPump=True,
+        )
+        # ham.communication.sendCommand(
+        #     self.psd.asciiAddress,
+        #     self.psd.command.standardHighResolutionSelection(resolution_mode),
+        #     waitForPump=True)
+        result = ham.communication.sendCommand(
+            self.psd.asciiAddress,
+            self.psd.command.syringeModeQuery(),
+            waitForPump=True,
+        )
+        resolution = result[3:4]
+        self.psd.setResolution(int(resolution))
+        self.psd.calculateSteps()
+        self.psd.calculateSyringeStroke()
+        self.psd.setVolume(syringe)
+        result = ham.communication.sendCommand(
+            self.psd.asciiAddress,
+            self.psd.command.syringeModeQuery(),
+            waitForPump=True,
+        )
+
+        self.psd.command.motorsteps_per_step = motorsteps_per_step
+
+        # syringe volume in µl
+        self.syringe_volume = float(syringe[:-1])
+        if syringe[-1] == "m":
+            self.syringe_volume *= 1000
+
+    def dispense(
+        self, vol, velocity=None, waitForPump=False, override_pause_flag=False
+    ):
+        """Initiate a dispense movement of the pump.
+
+        Parameters
+        ----------
+        vol : int
+            Volume in µl.
+        velocity : float
+            Velocity in µl per minute.
+        waitForPump : bool
+            If True, the function only returns when the movement is done.
+        """
+        i = 0
+        while self.pause_flag.is_set() and not override_pause_flag:
+            if i == 0:
+                logger.debug(
+                    f"Pause Flag is set. Pump ascii "
+                    f"{self.psd.asciiAddress} waiting before dispensing."
+                )
+            i += 1
+            if self.abort_flag.is_set():
+                logger.debug(
+                    f"Abort Flag is set additionally. Pump ascii "
+                    f"{self.psd.asciiAddress} not dispensing."
+                )
+                return
+            time.sleep(0.02)
+        if i > 0:
+            logger.debug("Pause flag has been removed. Continuing to dispense")
+        if self.abort_flag.is_set():
+            logger.debug(
+                f"Abort Flag is set. Pump ascii "
+                f"{self.psd.asciiAddress} not dispensing."
+            )
+            return
+
+        if velocity is not None:
+            logger.debug(
+                f"pump ascii {self.psd.asciiAddress} dispensing {vol:.1f} ul"
+            )
+            velocity = self.velocity_upm2sps(velocity)
+            cmd = self.psd.command.setMaximumVelocity(
+                int(velocity * self.speed_factor)
+            )
+        else:
+            logger.debug(
+                f"pump ascii {self.psd.asciiAddress} dispensing {vol:.1f} ul."
+            )
+            cmd = ""
+        cmd += self.psd.command.syringeMovement(
+            SyrMov.relativeDispense.value, vol
+        )
+        cmd += self.psd.command.executeCommandBuffer()
+        ham.communication.sendCommand(
+            self.psd.asciiAddress, cmd, waitForPump=waitForPump
+        )
+
+        self.target_volume -= vol
+        # else:
+        #     self.vol_change_when_done = -vol
+        logger.debug(
+            f"Pump {self.psd.asciiAddress} target vol: {self.target_volume}"
+        )
+
+        i = 0
+        while self.pause_flag.is_set() and not override_pause_flag:
+            if i == 0:
+                logger.debug(
+                    f"Pause Flag is set. Pump ascii "
+                    f"{self.psd.asciiAddress} waiting after dispensing."
+                )
+            i += 1
+            if self.abort_flag.is_set():
+                logger.debug(
+                    f"Abort Flag is set additionally. Pump ascii "
+                    f"{self.psd.asciiAddress} not dispensing."
+                )
+                return
+            time.sleep(0.02)
+        if i > 0:
+            logger.debug("Pause flag has been removed. Continuing to dispense")
+        if self.abort_flag.is_set():
+            logger.debug(
+                f"Abort Flag is set. Pump ascii "
+                f"{self.psd.asciiAddress} not dispensing."
+            )
+            return
+
+    def pickup(
+        self, vol, velocity=None, waitForPump=False, override_pause_flag=False
+    ):
+        """Initiate a pickup movement of the pump.
+
+        Parameters
+        ----------
+        vol : int
+            Volume in µl.
+        velocity : float
+            Velocity in µl per minute.
+        waitForPump : bool
+            If True, the function only returns when the movement is done.
+        """
+        i = 0
+        while self.pause_flag.is_set() and not override_pause_flag:
+            if i == 0:
+                logger.debug(
+                    f"Pause Flag is set. Pump ascii "
+                    f"{self.psd.asciiAddress} waiting for picking up."
+                )
+            i += 1
+            if self.abort_flag.is_set():
+                logger.debug(
+                    f"Abort Flag is set additionally. Pump ascii "
+                    f"{self.psd.asciiAddress} not picking up."
+                )
+                return
+            time.sleep(0.02)
+        if i > 0:
+            logger.debug("Pause flag has been removed. Continuing to pick up")
+        if self.abort_flag.is_set():
+            logger.debug(
+                f"Abort Flag is set. Pump ascii "
+                f"{self.psd.asciiAddress} not picking up."
+            )
+            return
+
+        logger.debug(
+            f"pump ascii {self.psd.asciiAddress} picking up {vol:.1f} ul"
+        )
+        if velocity is not None:
+            velocity = self.velocity_upm2sps(velocity)
+            cmd = self.psd.command.setMaximumVelocity(
+                int(velocity * self.speed_factor)
+            )
+        else:
+            cmd = ""
+        cmd += self.psd.command.syringeMovement(
+            SyrMov.relativePickup.value, vol
+        )
+        cmd += self.psd.command.executeCommandBuffer()
+        ham.communication.sendCommand(
+            self.psd.asciiAddress, cmd, waitForPump=waitForPump
+        )
+
+        # if waitForPump:
+        self.target_volume += vol
+        # else:
+        #     self.vol_change_when_done = vol
+
+        logger.debug(
+            f"Pump {self.psd.asciiAddress} target vol: {self.target_volume}"
+        )
+
+        i = 0
+        while self.pause_flag.is_set() and not override_pause_flag:
+            if i == 0:
+                logger.debug(
+                    f"Pause Flag is set. Pump ascii "
+                    f"{self.psd.asciiAddress} waiting after picking up."
+                )
+            i += 1
+            if self.abort_flag.is_set():
+                logger.debug(
+                    f"Abort Flag is set additionally. Pump ascii "
+                    f"{self.psd.asciiAddress} not picking up."
+                )
+                return
+            time.sleep(0.02)
+        if i > 0:
+            logger.debug("Pause flag has been removed. Continuing to pick up")
+        if self.abort_flag.is_set():
+            logger.debug(
+                f"Abort Flag is set. Pump ascii "
+                f"{self.psd.asciiAddress} not picking up."
+            )
+            return
+
+        logger.debug(
+            f"Pump {self.psd.asciiAddress} target vol: {self.target_volume}"
+        )
+
+    def velocity_sps2upm(self, velocity_sps):
+        """Convert velocity in steps per second to µl per minute.
+
+        Parameters
+        ----------
+        velocity_sps : int
+            Velocity in steps per second.
+
+        Returns
+        -------
+        velocity_upm : float
+            Velocity in µl per minute.
+        """
+        steps_per_ul = (
+            self.psd.command.steps * self.psd.command.motorsteps_per_step
+        ) / self.psd.command.maxVolum
+        seconds_per_minute = 60
+        velocity_upm = velocity_sps / steps_per_ul * seconds_per_minute
+        return velocity_upm
+
+    def velocity_upm2sps(self, velocity_upm):
+        """Convert velocity in µl per minute to steps per second.
+
+        Parameters
+        ----------
+        velocity_upm : float
+            Velocity in µl per minute.
+
+        Returns
+        -------
+        velocity_sps : int
+            Velocity in steps per second.
+        """
+        steps_per_ul = (
+            self.psd.command.steps * self.psd.command.motorsteps_per_step
+        ) / self.psd.command.maxVolum
+        seconds_per_minute = 60
+        velocity_sps = velocity_upm * steps_per_ul / seconds_per_minute
+        return int(velocity_sps)
+
+    def set_velocity(self, start_velocity, max_velocity, stop_velocity):
+        """Set movement start, max, and stop velocities.
+
+        Parameters
+        ----------
+        start_velocity : int
+            In ul/min, must be 50-1000 when converted into steps/s.
+        max_velocity : int
+            In ul/min, must be 2-5800 when converted into steps/s.
+        stop_velocity : int
+            In ul/min, must be 50-2700 when converted into steps/s.
+        """
+        start_velocity = self.velocity_upm2sps(start_velocity)
+        if start_velocity < 50 or start_velocity > 1000:
+            logger.error(
+                f"start_velocity "
+                f"{self.velocity_sps2upm(start_velocity)}um/min="
+                + f"{start_velocity}steps/s out of range (50-1000 steps/s)"
+            )
+        max_velocity = self.velocity_upm2sps(max_velocity)
+        if max_velocity < 2 or max_velocity > 5800:
+            logger.error(
+                f"max_velocity {self.velocity_sps2upm(max_velocity)}um/min="
+                + f"{max_velocity}steps/s out of range (2-5800 steps/s)"
+            )
+        stop_velocity = self.velocity_upm2sps(stop_velocity)
+        if stop_velocity < 50 or stop_velocity > 2700:
+            logger.error(
+                f"stop_velocity {self.velocity_sps2upm(stop_velocity)}um/min="
+                + f"{stop_velocity}steps/s out of range (50-2700 steps/s)"
+            )
+        ham.communication.sendCommand(
+            self.psd.asciiAddress,
+            self.psd.command.setStartVelocity(
+                int(start_velocity * self.speed_factor)
+            )
+            + self.psd.command.setMaximumVelocity(
+                int(max_velocity * self.speed_factor)
+            )
+            + self.psd.command.stopVelocity(
+                int(stop_velocity * self.speed_factor)
+            )
+            + self.psd.command.executeCommandBuffer(),
+            waitForPump=False,
+        )
+
+    def set_valve(self, pos, move_now=True):
+        """Set the valve position of the PSD.
+
+        Parameters
+        ----------
+        pos : str
+            One of ``'in'`` or ``'out'``, or other valve positions.
+        move_now : bool
+            Whether to execute the command now or later.
+
+        Returns
+        -------
+        cmd_ex_later : str
+            The command to execute later, only if ``move_now`` is True.
+        """
+        i = 0
+        while self.pause_flag.is_set():
+            if i == 0:
+                logger.debug(
+                    f"Pause Flag is set. Pump ascii "
+                    f"{self.psd.asciiAddress} waiting for moving valve."
+                )
+            i += 1
+            if self.abort_flag.is_set():
+                logger.debug(
+                    f"Abort Flag is set additionally. Pump ascii "
+                    f"{self.psd.asciiAddress} not moving valve."
+                )
+                return
+            time.sleep(0.02)
+        if i > 0:
+            logger.debug(
+                "Pause flag has been removed. Continuing to move valve"
+            )
+        if self.abort_flag.is_set():
+            logger.debug(
+                f"Abort Flag is set. Pump ascii "
+                f"{self.psd.asciiAddress} not moving valve."
+            )
+            return
+
+        assert pos in ["in", "out", *list(range(1, 9)), None]
+        if pos == "in":
+            pos = self.input_pos  # may be 'in', 'out', None, or a number
+        elif pos == "out":
+            pos = self.output_pos
+        if pos is None:
+            return
+        self.valve_pos = pos
+
+        logger.debug("setting valve to position" + str(pos))
+
+        if pos == "in":
+            cmd = self.psd.command.moveValveToInputPosition()
+        elif pos == "out":
+            cmd = self.psd.command.moveValveToOutputPosition()
+        else:
+            cmd = self.psd.command.moveValveInShortestDirection(pos)
+
+        if move_now:
+            ham.communication.sendCommand(
+                self.psd.asciiAddress,
+                cmd + self.psd.command.executeCommandBuffer(),
+                waitForPump=True,
+            )
+        else:
+            ham.communication.sendCommand(
+                self.psd.asciiAddress, cmd, waitForPump=False
+            )
+            return self.psd.command.executeCommandBuffer()
+
+    def wait_until_done(self):
+        """Wait until the pump is done moving.
+
+        Notes
+        -----
+        Uses pyHam functionality for now, therefore no timeout.
+        """
+        ham.communication.sendCommand(
+            self.psd.asciiAddress, "Q", waitForPump=True
+        )
+        # also set volumes
+        current_volume = self.get_current_volume()
+        if not (
+            self.pause_flag.is_set()
+            or ham.communication.abort_wait_response_flag.is_set()
+        ):
+            self.target_volume = current_volume
+        logger.debug(
+            f"Pump ascii {self.psd.asciiAddress} wud. "
+            f"current volume: {current_volume}, "
+            f"target_volume: {self.target_volume}"
+        )
+        # tic = time.time()
+        # while time.time() < tic + timeout:
+        #     time.sleep(.05)
+
+    def get_status(self):
+        """Poll and return the status."""
+        return ham.communication.sendCommand(
+            self.psd.asciiAddress, "Q", waitForPump=False
+        )
+
+    def get_current_volume(self):
+        """Poll the syringe volume position."""
+        response = ham.communication.sendCommand(
+            self.psd.asciiAddress,
+            self.psd.command.absoluteSyringePosition(),
+            waitForPump=True,
+        )
+        pos_steps = int(self.decode_response(response))
+        current_volume = (
+            pos_steps / self.psd.command.steps * self.syringe_volume
+        )
+        return current_volume
+
+    def stop_current_move(self):
+        """Stops the current movement. The pump needs to be
+        reinitialized after this (I thought after reading
+        the manual. But it works without).
+        """
+        ham.communication.sendCommand(
+            self.psd.asciiAddress,
+            self.psd.command.terminateCommandBuffer(),
+            waitForPump=False,
+        )
+
+    def resume_current_move(self):
+        """Resumes the move stopped previously"""
+        current_volume = self.get_current_volume()
+        missing_volume = self.target_volume - current_volume
+        logger.debug(
+            f"Pump {self.psd.asciiAddress} resuming. "
+            f"current_volume: {current_volume}, "
+            f"missing_volume: {missing_volume}, "
+            f"target_volume {self.target_volume}"
+        )
+        # offset target volume, as this will be changed by missing_volume
+        # in pickup or dispense
+        self.target_volume -= missing_volume
+        logger.debug(
+            f"Pump {self.psd.asciiAddress} after tvol offset. "
+            f"current_volume: {current_volume}, "
+            f"missing_volume: {missing_volume}, "
+            f"target_volume {self.target_volume}"
+        )
+        if missing_volume > 0:
+            self.pickup(missing_volume, override_pause_flag=True)
+        elif missing_volume < 0:
+            self.dispense(abs(missing_volume), override_pause_flag=True)
+        else:
+            pass
+        logger.debug(
+            f"Pump {self.psd.asciiAddress} after calling "
+            f"pickup/dispense. current_volume: {current_volume}, "
+            f"missing_volume: {missing_volume}, "
+            f"target_volume {self.target_volume}"
+        )
+
+    def decode_response(self, response):
+        """This should go into PyHamiltonPSD, but as they don't provide
+        it, let's keep it here for now.
+        A PSD reponse is built up as follows
+        "/[ADDR][StatusByte][Response][ETX]"
+        ADDR: PSD address (self.psd.asciiAddress)
+        StatusByte: see pyHamiltonPSD.communciation.statusBytesInfo
+            '@': Busy
+            '`': ready
+        ETX: End of transmission; have to check the ascii
+        """
+        etx = "\x03"
+        if "`" not in response:
+            raise ValueError("Not ready yet")
+        if etx not in response:
+            raise ValueError("Message not complete")
+        result = response[response.index("`") + 1 : response.index(etx)]
+        return result

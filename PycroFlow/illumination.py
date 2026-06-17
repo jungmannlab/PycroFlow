@@ -1,0 +1,326 @@
+"""
+illumination.py
+
+Provides illumination functionality to be used as a system
+in orchestration.
+
+illumination protocol e.g.
+protocol_illumination = [
+    {'$type': 'power', 'value': 1},
+    {'$type': 'wait for signal', 'target': 'fluid', 'value': 'round 1 done'},
+    {'$type': 'power', 'value': 50},
+    {'$type': 'wait for signal', 'target': 'imaging', 'value': 'round 1 done'},
+]
+"""
+
+import pprint
+import time
+
+import monet
+import monet.control as mco
+
+# import logging
+from loguru import logger
+
+from PycroFlow.orchestration import AbstractSystem
+
+# logger = logging.getLogger(__name__)
+
+
+class IlluminationSystem(AbstractSystem):
+    def __init__(self, setup=None):
+        """Build the illumination system.
+
+        Parameters
+        ----------
+        setup : str, optional
+            The monet config name (a ``monet.CONFIGS`` key) for this
+            microscope — supplied from the chosen microscope setup. monet's
+            laser control loads lazily on first use (:meth:`_ensure_monet`).
+        """
+        self._paused = False
+        self._monet_setup = setup
+
+    def set_laser(self, laser):
+        """Set the current laser and activate it.
+
+        Parameters
+        ----------
+        laser : int
+            The laser line to activate.
+        """
+        self._ensure_monet()
+        if self.instrument.laser:
+            if self.instrument.lasers[self.instrument.curr_laser].enabled:
+                print(
+                    f"WARNING: current laser {self.instrument.curr_laser}"
+                    + f" is still ON! Switching to laser {laser}."
+                )
+                logger.warning(
+                    f"WARNING: current laser {self.instrument.curr_laser}"
+                    + f" is still ON! Switching to laser {laser}."
+                )
+        try:
+            logger.debug("Setting laser {:s}.".format(str(laser)))
+            self.instrument.laser = laser
+            self.instrument.attenuator.set_wavelength(laser)
+
+            # set laser power back to the value for that laser
+            try:
+                self.set_sample_power(
+                    self.power_setvalues[self.instrument.curr_laser]
+                )
+            except (KeyError, AttributeError, ValueError) as exc:
+                logger.warning(
+                    "could not restore power for laser {!r}: {!r}".format(
+                        self.instrument.curr_laser, exc
+                    )
+                )
+
+            # activate
+            self.set_laser_enabled(laser, True)
+        except ValueError as e:
+            print(str(e))
+
+    def set_laser_enabled(self, laser, enabled=True):
+        """Set the activation state of a laser in the system"""
+        self._ensure_monet()
+        self.instrument.lasers[int(laser)].enabled = enabled
+
+    def set_laser_power(self, power):
+        try:
+            logger.debug("Setting laser power to ", int(power))
+            self.instrument.laserpower = int(power)
+        except ValueError as e:
+            print(str(e))
+
+    def set_sample_power(self, power, warmup_delay=0):
+        self._ensure_monet()
+        if int(power) != self.instrument.power:
+            logger.debug(
+                f"Changing sample power from "
+                f"{self.instrument.power} to {int(power)}"
+            )
+            try:
+                self.instrument.power = int(power)
+                self.power_setvalues[self.instrument.curr_laser] = int(power)
+            except ValueError as e:
+                print(str(e))
+            time.sleep(warmup_delay)
+        else:
+            logger.debug(f"Sample power remains at {int(power)}")
+
+    def set_attenuation(self, pos):
+        """Set the attenuation device to a position (float)"""
+        self._ensure_monet()
+        if pos.upper() == "HOME":
+            self.instrument.attenuator.home()
+        else:
+            pos = float(pos)
+            self.instrument.attenuator.set(pos)
+
+    def beampath_open(self):
+        """open shutter and set the correct light path positions"""
+        try:
+            self.instrument.beampath.positions = self.mprotocol["beampath"][
+                self.instrument.curr_laser
+            ]
+        except (KeyError, AttributeError, TypeError) as exc:
+            logger.warning("beampath_open failed: {!r}".format(exc))
+            return
+
+    def beampath_close(self):
+        """close shutter"""
+        try:
+            self.instrument.beampath.positions = self.mprotocol["beampath"][
+                "end"
+            ]
+        except (KeyError, AttributeError, TypeError) as exc:
+            logger.warning("beampath_close failed: {!r}".format(exc))
+            return
+
+    def log_status(self):
+        """Display the status of all available laser lines"""
+        for lsr in self.instrument.laser:
+            if self.instrument.lasers[lsr].enabled:
+                enbl = "on"
+            else:
+                enbl = "off"
+            pwr = self.power_setvalues[lsr]
+            logger.debug(f"Laser {lsr} is {enbl} and set to {pwr} mW.")
+        logger.debug(f"Currently active laser: {self.instrument.curr_laser}")
+        try:
+            logger.debug(
+                f"Current attenuator position: "
+                f"{self.instrument.attenuator.curr_pos()}"
+            )
+        except (AttributeError, RuntimeError) as exc:
+            logger.warning("attenuator status query failed: {!r}".format(exc))
+        try:
+            logger.debug(
+                f"Beam path positions: {self.instrument.beampath.positions}"
+            )
+        except (AttributeError, RuntimeError) as exc:
+            logger.warning("beampath positions query failed: {!r}".format(exc))
+        try:
+            print(
+                f"Autoshutter: "
+                f"{self.instrument.beampath.objects['shutter'].autoshutter}"
+            )
+        except (AttributeError, KeyError, RuntimeError) as exc:
+            logger.warning("autoshutter query failed: {!r}".format(exc))
+
+    def _assign_protocol(self, protocol):
+        self.protocol = protocol
+        self.parameters = protocol.get("parameters")
+        # monet / laser control loads lazily on first use (run start or a
+        # manual laser command), not here: building the orchestrator — e.g.
+        # translating an experiment design — must not open the lasers.
+
+    def _ensure_monet(self):
+        """Load monet's laser control on first use (idempotent).
+
+        Deferred out of :meth:`_assign_protocol` so compiling/translating a
+        protocol does not require the lasers; they are opened when
+        illumination is actually used.
+        """
+        if getattr(self, "instrument", None) is not None:
+            return
+        # The monet config name comes from the microscope setup (passed at
+        # construction). Fall back to a protocol-level 'setup' parameter only
+        # for back-compat with older designs that still carry illu.parameters.
+        setup = self._monet_setup
+        if not setup:
+            params = getattr(self, "parameters", None) or {}
+            setup = params.get("setup")
+        if setup:
+            self._load_monet_control(setup)
+
+    def _load_monet_control(self, mconfig_name):
+        """Load the monet illumination laser control and its configuration.
+
+        Parameters
+        ----------
+        mconfig_name : str
+            The name of the monet config to use (e.g. ``'Crick'``).
+        """
+        try:
+            mconfig = monet.CONFIGS[mconfig_name]
+        except KeyError as e:
+            print(
+                "Could not find "
+                + mconfig_name
+                + " in configurations. Aborting."
+            )
+            print("All configurations:")
+            pp = pprint.PrettyPrinter(indent=2)
+            pp.pprint(monet.CONFIGS)
+            raise e
+
+        try:
+            mprotocol = monet.PROTOCOLS[mconfig_name]
+        except KeyError:
+            print(
+                "Could not find "
+                + mconfig_name
+                + " in protocols. Not using laser control."
+            )
+            print("All protocols:")
+            pp = pprint.PrettyPrinter(indent=2)
+            pp.pprint(monet.PROTOCOLS)
+            mprotocol = None
+        self.mprotocol = mprotocol
+
+        if not hasattr(self, "instrument"):
+            self.instrument = mco.IlluminationLaserControl(
+                mconfig, auto_enable_lasers=False
+            )
+            try:
+                self.instrument.beampath.objects["shutter"].autoshutter = True
+            except (AttributeError, KeyError) as exc:
+                logger.warning(
+                    "could not enable autoshutter on "
+                    "initialization: {!r}".format(exc)
+                )
+        try:
+            self.instrument.load_calibration_database()
+        except Exception as exc:
+            logger.warning(
+                "load_calibration_database failed: {!r}".format(exc)
+            )
+            raise KeyError(
+                "Microscope illumination probably not calibrated yet. "
+                + "Monet Set only works with an existing calibration."
+            ) from exc
+
+        # set the power set values
+        self.power_setvalues = {}
+        for las in self.instrument.laser:
+            self.set_laser(las)
+            self.power_setvalues[las] = round(self.instrument.power)
+
+        # # switch on autoshutter (is switched on in initialization because
+        # # that is necessary for calibrate and adjust)
+        # try:
+        #     self.instrument.beampath.objects['shutter'].autoshutter = True
+        # except Exception:
+        #     pass
+
+    def execute_protocol_entry(self, i):
+        """execute protocol entry i"""
+        self._ensure_monet()
+        pentry = self.protocol["protocol_entries"][i]
+        if pentry["$type"] == "set power":
+            logger.debug(
+                "executing protocol entry {:d}: {:s}".format(i, str(pentry))
+            )
+
+            self.set_laser(pentry["laser"])
+            self.set_sample_power(pentry["power"])
+            self.beampath_open()
+
+            logger.debug("done executing protocol entry {:d}".format(i))
+        elif pentry["$type"] == "set shutter":
+            logger.debug(
+                "executing protocol entry {:d}: {:s}".format(i, str(pentry))
+            )
+            if pentry["state"]:
+                self.beampath_open()
+            else:
+                self.beampath_close()
+        elif pentry["$type"] == "laser enable":
+            if isinstance(pentry["laser"], int):
+                self.set_laser_enabled(pentry["laser"], pentry["state"])
+            elif (
+                isinstance(pentry["laser"], str)
+                and pentry["laser"].lower() == "all"
+            ):
+                for laser in self.instrument.lasers:
+                    self.set_laser_enabled(laser, pentry["state"])
+
+    def pause_execution(self):
+        """Pause protocol execution.
+
+        The illumination subsystem has no long-running operation to suspend —
+        commands are short and atomic — so pause is recorded as a flag only.
+        Future work (Stage 4) can use this to e.g. close the shutter while
+        paused.
+        """
+        logger.debug("Illumination system pause flag set")
+        self._paused = True
+
+    def resume_execution(self):
+        """Resume protocol execution after pausing.
+
+        Returns True so :meth:`AbstractSystemHandler.housekeeping` exits the
+        pause loop. Returning None (the previous behavior) was a bug: the
+        loop treats falsy returns as "still paused" and re-enters forever.
+        """
+        logger.debug("Illumination system pause flag cleared")
+        self._paused = False
+        return True
+
+    def abort_execution(self):
+        """Abort protocol execution"""
+        logger.debug("Illumination system abort requested")
+        self._paused = False
