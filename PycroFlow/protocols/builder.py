@@ -1387,15 +1387,16 @@ class ProtocolBuilder:
             {"$type": "wait for signal", "target": target, "value": message}
         )
 
-    def create_step_acquire(self, nframes, t_exp, message):
-        self.steps["img"].append(
-            {
-                "$type": "acquire",
-                "frames": nframes,
-                "t_exp": t_exp,
-                "message": message,
-            }
-        )
+    def create_step_acquire(self, nframes, t_exp, message, name=""):
+        step = {
+            "$type": "acquire",
+            "frames": nframes,
+            "t_exp": t_exp,
+            "message": message,
+        }
+        if name:
+            step["name"] = name
+        self.steps["img"].append(step)
 
     def create_step_setpower(self, laser, power, warmup_delay=0, message=""):
         self.steps["illu"].append(
