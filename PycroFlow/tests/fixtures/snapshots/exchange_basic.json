@@ -697,6 +697,7 @@
         "$type": "acquire",
         "frames": 15,
         "message": "round_img-0-Her3",
+        "name": "Her3",
         "t_exp": 75
       },
       {
@@ -717,6 +718,7 @@
         "$type": "acquire",
         "frames": 50,
         "message": "round_dark-0-Her3",
+        "name": "Her3 (dark frames)",
         "t_exp": 75
       },
       {
@@ -737,6 +739,7 @@
         "$type": "acquire",
         "frames": 15,
         "message": "round_img-1-EGFR",
+        "name": "EGFR",
         "t_exp": 75
       },
       {
@@ -757,6 +760,7 @@
         "$type": "acquire",
         "frames": 50,
         "message": "round_img-dark-1-EGFR",
+        "name": "EGFR (dark frames)",
         "t_exp": 75
       },
       {
@@ -777,6 +781,7 @@
         "$type": "acquire",
         "frames": 15,
         "message": "round_img-2-5T4",
+        "name": "5T4",
         "t_exp": 75
       },
       {
@@ -797,6 +802,7 @@
         "$type": "acquire",
         "frames": 50,
         "message": "round_img-dark-2-5T4",
+        "name": "5T4 (dark frames)",
         "t_exp": 75
       },
       {
@@ -817,6 +823,7 @@
         "$type": "acquire",
         "frames": 15,
         "message": "round_img-3-AXL",
+        "name": "AXL",
         "t_exp": 75
       },
       {
@@ -837,6 +844,7 @@
         "$type": "acquire",
         "frames": 50,
         "message": "round_img-dark-3-AXL",
+        "name": "AXL (dark frames)",
         "t_exp": 75
       },
       {
@@ -857,6 +865,7 @@
         "$type": "acquire",
         "frames": 15,
         "message": "round_img-4-Her2",
+        "name": "Her2",
         "t_exp": 75
       },
       {
@@ -877,6 +886,7 @@
         "$type": "acquire",
         "frames": 50,
         "message": "round_img-dark-4-Her2",
+        "name": "Her2 (dark frames)",
         "t_exp": 75
       },
       {
@@ -897,6 +907,7 @@
         "$type": "acquire",
         "frames": 15,
         "message": "round_img-5-PDL1",
+        "name": "PDL1",
         "t_exp": 75
       },
       {

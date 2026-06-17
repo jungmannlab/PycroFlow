@@ -221,7 +221,8 @@ class ProtocolBuilder:
         return getattr(self, method_name)(config)
 
     def create_stepset_acquisition(
-        self, illusttg, imgsttg, unique_name, readable_name, fluid_wait=True
+        self, illusttg, imgsttg, unique_name, readable_name, fluid_wait=True,
+        name=None,
     ):
         """Create the step set for an acquisition.
 
@@ -243,7 +244,13 @@ class ProtocolBuilder:
         fluid_wait : bool
             Whether the fluid system should await the completion of the
             acquisition.
+        name : str, optional
+            Human-readable description of this round (e.g. ``'R1'`` or
+            ``'A1 RESI round 2'``), stored on the acquire entry so the GUI can
+            label the round. Defaults to ``readable_name``.
         """
+        if name is None:
+            name = str(readable_name)
         if illusttg:
             self.create_step_setpower(
                 illusttg["laser"],
@@ -266,6 +273,7 @@ class ProtocolBuilder:
             imgsttg["frames"],
             imgsttg["t_exp"],
             message=f"round_{unique_name}-{readable_name}",
+            name=name,
         )
         self.create_step_signal(
             system="img", message=f"done imaging round {unique_name}"
@@ -540,6 +548,7 @@ class ProtocolBuilder:
                 unique_name=f"dark-{round}",
                 readable_name=imager,
                 fluid_wait=True,
+                name=f"{imager} (dark frames)",
             )
         else:
             # self.create_step_pumpout(volume=volumes['vol_wash_pre'])
@@ -605,6 +614,7 @@ class ProtocolBuilder:
                     unique_name=f"img-dark-{round}",
                     readable_name=imager,
                     fluid_wait=True,
+                    name=f"{imager} (dark frames)",
                 )
             elif last_round:
                 if illusttg:
@@ -814,6 +824,7 @@ class ProtocolBuilder:
                 unique_name="Round0",
                 readable_name="Round0",
                 fluid_wait=True,
+                name="Round 0 (alignment)",
             )
 
             # wash using wash_buffer_1
@@ -865,6 +876,7 @@ class ProtocolBuilder:
                 unique_name=f"BC-pre_{tgt_round}",
                 readable_name=f"{tgt}",
                 fluid_wait=True,
+                name=f"{tgt} barcode (pre)",
             )
 
             # wash using wash_buffer_1
@@ -954,6 +966,7 @@ class ProtocolBuilder:
                     unique_name=f"resi_{tgt_round}-{resi_round}",
                     readable_name=f"{tgt}-{resi_round}",
                     fluid_wait=True,
+                    name=f"{tgt} RESI round {resi_round + 1}",
                 )
 
                 # wash using wash_buffer_1
@@ -1059,6 +1072,7 @@ class ProtocolBuilder:
                 unique_name=f"BC-post_{tgt_round}",
                 readable_name=f"{tgt}",
                 fluid_wait=True,
+                name=f"{tgt} barcode (post)",
             )
 
             # if not last round:
