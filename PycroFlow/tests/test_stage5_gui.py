@@ -233,6 +233,30 @@ class TestMainWindow(unittest.TestCase):
         self.assertEqual(
             fluid.item(1).background().color(), _ACTIVE_COLOR)
 
+    def test_round_status_shows_description(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+        svc = MagicMock(name='service')
+        svc.state = ExperimentState.RUNNING
+        # Acquires carry the builder's human-readable round 'name'.
+        svc.protocol = {
+            'fluid': {'protocol_entries': []},
+            'img': {'protocol_entries': [
+                {'$type': 'acquire', 'frames': 1, 't_exp': 1, 'name': 'R1'},
+                {'$type': 'acquire', 'frames': 1, 't_exp': 1,
+                 'name': 'A1 RESI round 2'}]},
+            'illu': {'protocol_entries': []},
+        }
+        svc.progress.return_value = {
+            'fluid': (0, 0), 'img': (1, 2), 'illu': (0, 0)}
+        svc.step_progress.return_value = {}
+        tab = ExperimentTab(svc, MagicMock(name='bridge'))
+        tab._populate_steps()
+        tab._poll_progress()
+        # img cur=1 -> on the 2nd acquire (round 2 of 2), labelled by name.
+        self.assertIn('Round 2/2: A1 RESI round 2', tab.step_status.text())
+
     def test_current_round_progress_bar(self):
         from unittest.mock import MagicMock
         from PycroFlow.services import ExperimentState
