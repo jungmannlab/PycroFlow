@@ -101,6 +101,9 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # mutates the protocol the orchestrator runs.
         self._entries = {s: [] for s in _SYSTEMS}
         self._round_of = {s: [] for s in _SYSTEMS}
+        # Human-readable description of each round (one per imaging acquire),
+        # used to annotate the "Round k/N" status line.
+        self._round_names = []
         # Per-step logical "time" (longest-path level over the signal/wait
         # happens-before graph), used to correlate concurrent steps across
         # systems. {system: [level per entry]}.
@@ -385,6 +388,9 @@ class ExperimentTab(YamlDropMixin, QWidget):
                     else '?')
                 lst.addItem("{:d}: {}".format(i, type_))
         self._levels = self._compute_levels()
+        self._round_names = [
+            self._acquire_label(e) for e in self._entries.get('img', [])
+            if isinstance(e, dict) and e.get('$type') == 'acquire']
         self._durations = estimate_durations(protocol)
         self._total_duration = estimate_total_duration(protocol)
         self._overall_sw.reset()
@@ -565,9 +571,15 @@ class ExperimentTab(YamlDropMixin, QWidget):
         done_rounds, total_rounds = self._round_counts(prog.get('img'))
         parts = []
         if total_rounds:
-            # 1-based number of the round currently executing.
+            # 1-based number of the round currently executing, plus a short
+            # description of what that round images (imager / target / RESI).
             current_round = min(done_rounds + 1, total_rounds)
-            parts.append("Round {}/{}".format(current_round, total_rounds))
+            label = ""
+            if 0 <= current_round - 1 < len(self._round_names):
+                label = self._round_names[current_round - 1]
+            parts.append("Round {}/{}{}".format(
+                current_round, total_rounds,
+                ": {}".format(label) if label else ""))
         for key in _SYSTEMS:
             if key in prog:
                 cur, tot = prog[key]
@@ -634,6 +646,23 @@ class ExperimentTab(YamlDropMixin, QWidget):
         if entries and cur >= len(entries):
             return "done"
         return "—"
+
+    @staticmethod
+    def _acquire_label(entry):
+        """Short human-readable description of an acquire (round) entry.
+
+        Uses the ``name`` the protocol builder attaches (e.g. ``'R1'`` for
+        Exchange-PAINT, ``'A1 RESI round 2'`` / ``'A1 barcode (pre)'`` for
+        SPH-RESI). Falls back to the legacy ``message`` (minus its
+        ``round_`` prefix) for protocols built before names existed.
+        """
+        name = entry.get('name')
+        if name:
+            return str(name)
+        msg = entry.get('message')
+        if isinstance(msg, str):
+            return msg[len('round_'):] if msg.startswith('round_') else msg
+        return ''
 
     def _round_counts(self, img_prog):
         """(completed_rounds, total_rounds) from the imaging acquisitions.
