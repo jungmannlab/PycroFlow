@@ -240,6 +240,9 @@ class LegacyArchitecture(AbstractSystem):
 
     def __del__(self):
         self._stop_spill_sensor()
+        mux = getattr(self, "multiplexer", None)
+        if mux is not None:
+            mux.close()
 
     def _assign_system_config(self, config):
         """Assign a system configuration.
@@ -252,6 +255,18 @@ class LegacyArchitecture(AbstractSystem):
         assert config["system_type"] == "legacy"
         for vconfig in config["valve_a"]:
             self.valve_a[vconfig["address"]] = Valve(**vconfig)
+        # Optional ibidi MultiFlOW multiplexer: an alternative to the Hamilton
+        # MVP rotary valves for reservoir multiplexing. It registers in the
+        # valve map under its address (default 'ibidi') so _set_valves() drives
+        # it via reservoir valve_pos entries like {ibidi: <channel>, 1: in}.
+        self.multiplexer = None
+        if config.get("ibidi"):
+            from PycroFlow.ibidi_multiplexer import IbidiMultiplexer
+
+            mux_cfg = dict(config["ibidi"])
+            address = mux_cfg.pop("address", "ibidi")
+            self.multiplexer = IbidiMultiplexer(address=address, **mux_cfg)
+            self.valve_a[address] = self.multiplexer
         for rconfig in config["reservoir_a"]:
             self.reservoir_a.add(Reservoir(**rconfig))
             self.reservoir_paths[rconfig["id"]] = "a"

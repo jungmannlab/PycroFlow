@@ -1,0 +1,121 @@
+# Real-hardware template: Hamilton syringe pumps + ibidi MultiFlOW multiplexer.
+#
+# Copy this file to configs/setups/<YourMicroscope>.yaml and edit the values
+# marked "EDIT" for your rig. Reservoirs are multiplexed by the ibidi MultiFlOW
+# 24-channel actuator unit instead of Hamilton MVP rotary valves; the syringe
+# pumps stay Hamilton.
+#
+# Before a run:
+#   * Set `setup` to the monet CONFIGS key for this microscope (drives the
+#     Monet/illumination tab).
+#   * Set `hamilton.interface.COM` to the pumps' serial port and
+#     `hamilton.ibidi.port` to the COM port the MultiFlOW enumerates as
+#     (a *separate* USB serial connection).
+#   * Confirm the pump addresses/syringes and the reservoir<->channel wiring.
+
+setup: Ibidi          # EDIT: monet CONFIGS key for this microscope
+emulated: false
+
+hamilton:
+  interface:
+    COM: '3'          # EDIT: serial port of the Hamilton pump bus
+    baud: 9600
+  system_type: legacy
+  # No Hamilton MVP rotary valves — the ibidi multiplexer multiplexes.
+  valve_a: []
+  # ibidi MultiFlOW 24-channel actuator unit (its own USB serial port).
+  ibidi:
+    port: '7'         # EDIT: COM port of the MultiFlOW device
+    baud: 9600
+    channels: 24
+    address: ibidi    # key referenced by each reservoir's valve_pos
+    # line_ending: "\r\n"   # uncomment if the device needs CRLF after ';'
+  flush_pos:
+    inject: in
+    flush: out
+  pump_a:
+    address: 1
+    instrument_type: '4'
+    valve_type: Y
+    syringe: 500u
+    input_pos: in
+    output_pos: out
+    motorsteps_per_step: 1
+    speed_factor: 2
+  pump_out:
+    address: 0
+    instrument_type: '4'
+    valve_type: Y
+    syringe: 5.0m
+    input_pos: in
+    output_pos: out
+    motorsteps_per_step: 1
+    speed_factor: 2
+  # Each reservoir maps to one ibidi channel (1..24). Selecting a reservoir
+  # opens exactly that channel and closes all others; the pump (address 1) is
+  # set to its input position. Trim this list to the channels you actually use.
+  reservoir_a_manifold:
+    - {id: 1,  valve_pos: {ibidi: 1,  1: in}}
+    - {id: 2,  valve_pos: {ibidi: 2,  1: in}}
+    - {id: 3,  valve_pos: {ibidi: 3,  1: in}}
+    - {id: 4,  valve_pos: {ibidi: 4,  1: in}}
+    - {id: 5,  valve_pos: {ibidi: 5,  1: in}}
+    - {id: 6,  valve_pos: {ibidi: 6,  1: in}}
+    - {id: 7,  valve_pos: {ibidi: 7,  1: in}}
+    - {id: 8,  valve_pos: {ibidi: 8,  1: in}}
+    - {id: 9,  valve_pos: {ibidi: 9,  1: in}}
+    - {id: 10, valve_pos: {ibidi: 10, 1: in}}
+    - {id: 11, valve_pos: {ibidi: 11, 1: in}}
+    - {id: 12, valve_pos: {ibidi: 12, 1: in}}
+    - {id: 13, valve_pos: {ibidi: 13, 1: in}}
+    - {id: 14, valve_pos: {ibidi: 14, 1: in}}
+    - {id: 15, valve_pos: {ibidi: 15, 1: in}}
+    - {id: 16, valve_pos: {ibidi: 16, 1: in}}
+    - {id: 17, valve_pos: {ibidi: 17, 1: in}}
+    - {id: 18, valve_pos: {ibidi: 18, 1: in}}
+    - {id: 19, valve_pos: {ibidi: 19, 1: in}}
+    - {id: 20, valve_pos: {ibidi: 20, 1: in}}
+    - {id: 21, valve_pos: {ibidi: 21, 1: in}}
+    - {id: 22, valve_pos: {ibidi: 22, 1: in}}
+    - {id: 23, valve_pos: {ibidi: 23, 1: in}}
+    - {id: 24, valve_pos: {ibidi: 24, 1: in}}
+
+# Tubing volumes (ul) — EDIT to your measured values (run a tubing calibration).
+# With the multiplexer each reservoir connects directly to pump_a: one segment
+# per reservoir plus the pump->sample / pump->waste legs.
+tubing:
+  - {from: R1,  to: pump_a, volume: 325}
+  - {from: R2,  to: pump_a, volume: 325}
+  - {from: R3,  to: pump_a, volume: 325}
+  - {from: R4,  to: pump_a, volume: 325}
+  - {from: R5,  to: pump_a, volume: 325}
+  - {from: R6,  to: pump_a, volume: 325}
+  - {from: R7,  to: pump_a, volume: 325}
+  - {from: R8,  to: pump_a, volume: 325}
+  - {from: R9,  to: pump_a, volume: 325}
+  - {from: R10, to: pump_a, volume: 325}
+  - {from: R11, to: pump_a, volume: 325}
+  - {from: R12, to: pump_a, volume: 325}
+  - {from: R13, to: pump_a, volume: 325}
+  - {from: R14, to: pump_a, volume: 325}
+  - {from: R15, to: pump_a, volume: 325}
+  - {from: R16, to: pump_a, volume: 325}
+  - {from: R17, to: pump_a, volume: 325}
+  - {from: R18, to: pump_a, volume: 325}
+  - {from: R19, to: pump_a, volume: 325}
+  - {from: R20, to: pump_a, volume: 325}
+  - {from: R21, to: pump_a, volume: 325}
+  - {from: R22, to: pump_a, volume: 325}
+  - {from: R23, to: pump_a, volume: 325}
+  - {from: R24, to: pump_a, volume: 325}
+  - {from: pump_a, to: sample, volume: 325}
+  - {from: pump_a, to: flush_waste, volume: 650}
+
+imaging:
+  pfs_pars:
+    tag_pfs: TIPFSOffset
+    tag_zdrive: TIZDrive
+    tag_status: TIPFSStatus
+    prop_state: State
+    prop_status: Status
+    deltat: 10
