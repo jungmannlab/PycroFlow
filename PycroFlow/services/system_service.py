@@ -195,10 +195,12 @@ class SystemService:
         interface = hamilton["interface"]
 
         if self.is_emulated():
-            from PycroFlow.tests.emulators import patch_serial
-
-            with patch_serial():
-                ha.connect(interface["COM"], interface["baud"])
+            from PycroFlow.tests.emulators import (
+                patch_serial, patch_ibidi_serial)
+            # patch_ibidi_serial is a no-op unless the setup wires an ibidi
+            # multiplexer (whose driver opens its own serial port).
+            with patch_serial(), patch_ibidi_serial():
+                ha.connect(interface['COM'], interface['baud'])
                 self.fluid_system = ha.LegacyArchitecture(hamilton, tubing)
         else:
             ha.connect(interface["COM"], interface["baud"])

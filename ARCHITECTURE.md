@@ -25,6 +25,7 @@ PycroFlow/
 ├── schemas/              # pydantic wire-format schema (Stage 2)
 ├── fluid/                # Hamilton fluid stack (split from
 │   └── legacy.py         #   hamilton_architecture.py)
+├── ibidi_multiplexer.py  # ibidi MultiFlOW 24-ch multiplexer (alt. to MVP)
 ├── hal/                  # Hardware Abstraction Layer ABCs
 ├── services/             # ExperimentService, SystemService, mm_core
 ├── imaging.py            # ImagingSystem (pycromanager)
