@@ -59,8 +59,8 @@ class IbidiMultiplexer(_ValveABC):
     port : str
         Serial port the device enumerates as (e.g. ``'COM7'`` or
         ``'/dev/ttyACM0'``). A bare number / ``'COM<n>'`` is accepted.
-    baud : int, default: 9600
-        Baud rate. Irrelevant for USB CDC but required by pyserial.
+    baud : int, default: 115200
+        Baud rate (the device runs 115200 8N1).
     channels : int, default: 24
         Number of controllable channels.
     timeout : float, default: 2
@@ -79,7 +79,7 @@ class IbidiMultiplexer(_ValveABC):
     def __init__(
         self,
         port,
-        baud=9600,
+        baud=115200,
         channels=24,
         timeout=2,
         address="ibidi",
@@ -107,7 +107,7 @@ class IbidiMultiplexer(_ValveABC):
             self.connect(port, baud, timeout)
 
     # -- connection -----------------------------------------------------------
-    def connect(self, port, baud=9600, timeout=2):
+    def connect(self, port, baud=115200, timeout=2):
         """Open the serial port and confirm the device identifies as ``MX``."""
         port = self._normalize_port(port)
         self._serial = Serial(port, baudrate=baud, timeout=timeout)
