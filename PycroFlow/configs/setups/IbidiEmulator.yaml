@@ -25,7 +25,7 @@ hamilton:
   # ibidi MultiFlOW 24-channel actuator unit (its own USB serial port).
   ibidi:
     port: '7'        # COM port (real device); ignored under emulation
-    baud: 9600
+    baud: 115200     # device runs 115200 8N1; only ';' terminates a command
     channels: 24
     address: ibidi   # key referenced by each reservoir's valve_pos
   flush_pos:
