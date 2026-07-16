@@ -220,6 +220,9 @@ class FluidSettings(BaseModel):
 
 class FluidSection(BaseModel):
     model_config = _CFG
+    enabled: bool = _field(
+        True, tooltip='Include this subsystem when translating to the Run '
+                      'Sequence. Deselect to leave it out of the run.')
     parameters: FluidParameters = Field(default_factory=FluidParameters)
     settings: FluidSettings
 
@@ -241,6 +244,9 @@ class ImgSettings(BaseModel):
 
 class ImgSection(BaseModel):
     model_config = _CFG
+    enabled: bool = _field(
+        True, tooltip='Include this subsystem when translating to the Run '
+                      'Sequence. Deselect to leave it out of the run.')
     parameters: ImgParameters = Field(default_factory=ImgParameters)
     settings: ImgSettings
 
@@ -267,6 +273,9 @@ class IlluSection(BaseModel):
     # No 'parameters': the monet config name comes from the chosen microscope
     # setup (not the design), and the old channel_group/filter/ROI were unused.
     model_config = _CFG
+    enabled: bool = _field(
+        True, tooltip='Include this subsystem when translating to the Run '
+                      'Sequence. Deselect to leave it out of the run.')
     settings: IlluSettings
 
 

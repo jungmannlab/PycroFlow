@@ -309,5 +309,91 @@ class TestTranslate(unittest.TestCase):
         self.assertEqual(os.getcwd(), original)
 
 
+class TestSubsystemDeselection(unittest.TestCase):
+    """A subsystem can be deselected in the design (``enabled: false``) so it
+    is left out of the compiled Run Sequence without dangling waits."""
+
+    def _entries(self, protocol, system):
+        return protocol.get(system, {}).get('protocol_entries', [])
+
+    def _wait_targets(self, protocol):
+        targets = set()
+        for system in protocol.values():
+            for entry in system['protocol_entries']:
+                if entry.get('$type') == 'wait for signal':
+                    targets.add(entry['target'])
+        return targets
+
+    def test_enabled_defaults_true_and_round_trips(self):
+        model = validate_experiment_design(_example_design())
+        self.assertTrue(model.fluid.enabled)
+        self.assertTrue(model.img.enabled)
+        self.assertTrue(model.illu.enabled)
+        d = model.model_dump(by_alias=True)
+        self.assertTrue(d['illu']['enabled'])
+
+    def test_all_enabled_matches_baseline(self):
+        # Adding the flag must not change the emitted protocol when everything
+        # is enabled (the default) — same subsystems, same waits.
+        protocol = ProtocolBuilder().build_protocol(_example_design())
+        self.assertEqual(
+            set(protocol.keys()), {'fluid', 'img', 'illu'})
+
+    def test_deselect_illu_drops_key_and_waits(self):
+        design = _example_design()
+        design['illu']['enabled'] = False
+        protocol = ProtocolBuilder().build_protocol(design)
+        self.assertNotIn('illu', protocol)
+        # fluid + img still present and non-empty (structure intact).
+        self.assertTrue(self._entries(protocol, 'fluid'))
+        self.assertTrue(self._entries(protocol, 'img'))
+        # No survivor waits on the dropped illu subsystem.
+        self.assertNotIn('illu', self._wait_targets(protocol))
+
+    def test_deselect_img_drops_key_and_orphan_fluid_waits(self):
+        design = _example_design()
+        design['img']['enabled'] = False
+        protocol = ProtocolBuilder().build_protocol(design)
+        self.assertNotIn('img', protocol)
+        self.assertTrue(self._entries(protocol, 'fluid'))
+        # The fluid 'wait for signal target=img' (done imaging) is pruned;
+        # likewise any illu wait on img.
+        self.assertNotIn('img', self._wait_targets(protocol))
+
+    def test_design_without_illu_block_compiles(self):
+        # An absent illu section (illu -> None after validation) must not
+        # crash the exchange builder; it just yields a fluid+img protocol.
+        design = {
+            'base_name': 'x',
+            'fluid': {'settings': {
+                'vol_wash': 10, 'vol_imager_post': 5,
+                'reservoir_names': {1: 'R1'},
+                'experiment': {'type': 'Exchange', 'wash_buffer': 'R1',
+                               'imagers': ['R1']}}},
+            'img': {'settings': {'t_exp': 100, 'frames': 100}},
+        }
+        design = ExperimentService().load_experiment_design(design)
+        protocol = ProtocolBuilder().build_protocol(design)
+        self.assertEqual(set(protocol.keys()), {'fluid', 'img'})
+
+    def test_deselected_subsystem_not_wired_into_orchestrator(self):
+        from unittest.mock import MagicMock
+        design = _example_design()
+        design['illu']['enabled'] = False
+        svc = ExperimentService()
+        svc.attach_systems(
+            fluid_system=MagicMock(),
+            imaging_system=MagicMock(),
+            illumination_system=MagicMock(),
+        )
+        svc.load_experiment_design(design)
+        svc.translate()
+        # The illu handler must not receive a system (its protocol key is
+        # absent), otherwise it would crash on an empty entry list mid-run.
+        self.assertIsNone(svc._orchestrator.illumination_system)
+        self.assertIsNotNone(svc._orchestrator.fluid_system)
+        self.assertIsNotNone(svc._orchestrator.imaging_system)
+
+
 if __name__ == '__main__':
     unittest.main()

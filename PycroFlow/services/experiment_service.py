@@ -192,11 +192,19 @@ class ExperimentService:
         *after* a protocol/design was loaded are still picked up (otherwise
         the handlers see ``system=None`` and finish immediately).
         """
+        # Only wire a subsystem's hardware when the protocol actually contains
+        # its steps. A deselected subsystem (``enabled: false`` in the design)
+        # has no protocol key; attaching its system anyway would give that
+        # handler an empty/missing entry list and crash it mid-run.
+        proto = self._protocol or {}
         self._orchestrator = ProtocolOrchestrator(
             self._protocol,
-            imaging_system=self._imaging_system,
-            fluid_system=self._fluid_system,
-            illumination_system=self._illumination_system,
+            imaging_system=(
+                self._imaging_system if "img" in proto else None),
+            fluid_system=(
+                self._fluid_system if "fluid" in proto else None),
+            illumination_system=(
+                self._illumination_system if "illu" in proto else None),
         )
         self._orchestrator_systems = self._current_systems()
 
