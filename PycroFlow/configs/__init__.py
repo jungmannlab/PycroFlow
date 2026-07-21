@@ -304,7 +304,14 @@ def assemble_hamilton_config(setup, fluid_settings):
     special_names = dict(fluid_settings.get("special_names", {}))
     cleaning = fluid_settings.get("cleaning_reservoirs", []) or []
 
-    used_ids = list(fluid_settings.get("reservoir_names", {}).keys())
+    used_ids = list(fluid_settings.get('reservoir_names', {}).keys())
+    # Reservoirs named only in special_names (e.g. flushbuffer_a) are routed
+    # to just like any other — _flush() and fill_tubings() call
+    # _set_valves(special_names['flushbuffer_a']) — so they must be wired in
+    # too, even when the design does not also list them in reservoir_names.
+    for rid in special_names.values():
+        if rid not in used_ids:
+            used_ids.append(rid)
     for res in cleaning:
         if isinstance(res, int):
             rid = res
@@ -322,9 +329,9 @@ def assemble_hamilton_config(setup, fluid_settings):
     for rid in used_ids:
         if rid not in by_id:
             raise KeyError(
-                "Reservoir id {!r} is not wired in setup "
-                "{!r}'s fluid.reservoirs".format(
-                    rid, setup.get('setup')))
+                "Reservoir id {!r} is not wired in setup {!r}'s "
+                "fluid.reservoirs (which wires {})".format(
+                    rid, setup.get('setup'), sorted(by_id)))
         reservoir_a.append(by_id[rid])
 
     hamilton['reservoir_a'] = reservoir_a

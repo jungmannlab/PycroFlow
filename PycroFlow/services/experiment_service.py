@@ -148,7 +148,24 @@ class ExperimentService:
             folder = os.path.dirname(os.path.abspath(source))
             os.chdir(folder)
             logger.info("Working directory changed to {}", folder)
+        self._redirect_logs_to_acquisition_folder()
         return self._experiment_design
+
+    def _redirect_logs_to_acquisition_folder(self):
+        """Move the log files next to this experiment's acquisition output.
+
+        The logs are the record of what the run actually did (including the
+        per-step timings), so they belong with the data rather than in
+        whichever directory the app was started from.
+        """
+        import PycroFlow
+
+        design = self._experiment_design or {}
+        save_dir = os.path.abspath(design.get('save_dir') or '.')
+        try:
+            PycroFlow.redirect_logging(save_dir)
+        except Exception as exc:   # never fail a load over logging
+            logger.warning("could not redirect logs: {!r}", exc)
 
     @property
     def experiment_design(self) -> Optional[Dict]:

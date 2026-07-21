@@ -28,6 +28,7 @@ The matching imaging-only and combined fluid+imaging snippets live in
 """
 
 import abc
+import json
 import queue
 import threading
 import time
@@ -226,10 +227,19 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
                             step, exc
                         )
                     )
-            if typed is not None:
-                dispatch_entry(typed, self)
-            else:
-                self.execute_protocol_entry(self.protocol_iter)
+            started = time.perf_counter()
+            try:
+                if typed is not None:
+                    dispatch_entry(typed, self)
+                else:
+                    self.execute_protocol_entry(self.protocol_iter)
+            finally:
+                # Record what the step actually took, next to what it was
+                # estimated to take, so the estimates can be improved by
+                # mining a few run logs (protocols.timing_analysis).
+                self._log_step_timing(
+                    step, self.protocol_iter, nsteps,
+                    time.perf_counter() - started)
 
             self.protocol_iter += 1
 
@@ -242,6 +252,38 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         logger.debug(f"setting {self.target + '_finished'} flag.")
         self.txchange[self.target + "_finished"].set()
         return
+
+    def _log_step_timing(self, step, index, nsteps, elapsed):
+        """Emit one machine-parseable timing record for a finished step.
+
+        The line carries both the measured duration and the duration
+        :mod:`PycroFlow.protocols.timing` predicted, so a run's log is enough
+        to score and improve the estimator — see
+        :mod:`PycroFlow.protocols.timing_analysis`.
+        """
+        try:
+            from PycroFlow.protocols.timing import (
+                STEP_TIMING_TAG, estimate_entry_duration)
+
+            entry = step if isinstance(step, dict) else {}
+            record = {
+                'system': self.target,
+                'step': index + 1,
+                'nsteps': nsteps,
+                'type': entry.get('$type'),
+                'actual_s': round(float(elapsed), 3),
+                'estimate_s': round(
+                    estimate_entry_duration(
+                        entry, self.protocol.get('parameters')), 3),
+            }
+            # The fields the estimator models, so a log alone explains a miss.
+            for key in ('volume', 'velocity', 'frames', 't_exp', 'duration',
+                        'reservoir_id', 'delay'):
+                if entry.get(key) is not None:
+                    record[key] = entry[key]
+            logger.info("{} {}", STEP_TIMING_TAG, json.dumps(record))
+        except Exception as exc:   # timing must never break a run
+            logger.debug("could not log step timing: {!r}", exc)
 
     def get_current_protocol_iter(self, arg=None):
         return self.protocol_iter
