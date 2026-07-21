@@ -337,9 +337,31 @@ class PycroFlowMainWindow(QMainWindow):
     # --- run-sequence helpers -----------------------------------------
 
     def _on_translated(self):
-        """After compiling: connect (if needed) + show the Run Sequence tab."""
+        """After compiling: connect (if needed) + show the Run Sequence tab.
+
+        Translating is the point where the edited design becomes the thing
+        that will run, so the connected fluid system's reservoirs are
+        re-synced from it — editing the reservoir table after connecting
+        would otherwise leave the hardware routing by the old list.
+        """
         self._autoconnect()
+        self._sync_fluid_design()
         self.tabs.setCurrentWidget(self.run_sequence_tab)
+
+    def _sync_fluid_design(self):
+        """Push the current design's reservoirs into the connected system."""
+        design = self._experiment_service.experiment_design or {}
+        fluid = design.get('fluid')
+        if not fluid:
+            return
+        try:
+            self._system_service.sync_fluid_reservoirs(fluid)
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Reservoirs not applied",
+                "The design's reservoirs could not be applied to the "
+                "connected fluid system:\n\n{!r}\n\nReconnect the fluid "
+                "system before starting.".format(exc))
 
     def closeEvent(self, event):
         """Clean shutdown: abort any running experiment, run monet's cleanup,

@@ -543,11 +543,19 @@ class ProtocolBuilder:
         # imgsttg = {
         #     'frames': config['img']['settings']['frames'],
         #     't_exp': config['img']['settings']['t_exp']}
-        darkimgsttg = {
-            "frames": config["img"]["settings"]["darkframes"],
-            "t_exp": config["img"]["settings"]["t_exp"],
-        }
-        illusttg = (config.get("illu") or {}).get("settings")
+        # Dark-frame acquisitions are optional: leaving 'darkframes' empty
+        # (or 0) drops them from the Run Sequence entirely. The wash they
+        # follow is still performed — only the acquisition goes away.
+        darkframes = config["img"]["settings"].get("darkframes")
+        darkimgsttg = (
+            {
+                "frames": darkframes,
+                "t_exp": config["img"]["settings"]["t_exp"],
+            }
+            if darkframes
+            else None
+        )
+        illusttg = config.get("illu", {}).get("settings")
 
         # check that all mentioned sources acqually exist
         assert experiment["wash_buffer"] in reservoirs.values()
@@ -594,15 +602,16 @@ class ProtocolBuilder:
                 img_wait=True,
                 illu_wait=True,
             )
-            # check dark frames
-            self.create_stepset_acquisition(
-                illusttg,
-                darkimgsttg,
-                unique_name=f"dark-{round}",
-                readable_name=imager,
-                fluid_wait=True,
-                name=f"{imager} (dark frames)",
-            )
+            # check dark frames (skipped when 'darkframes' is left empty)
+            if darkimgsttg:
+                self.create_stepset_acquisition(
+                    illusttg,
+                    darkimgsttg,
+                    unique_name=f"dark-{round}",
+                    readable_name=imager,
+                    fluid_wait=True,
+                    name=f"{imager} (dark frames)",
+                )
         else:
             # self.create_step_pumpout(volume=volumes['vol_wash_pre'])
             # self.create_step_inject(
@@ -661,14 +670,15 @@ class ProtocolBuilder:
                     img_wait=True,
                     illu_wait=True,
                 )
-                self.create_stepset_acquisition(
-                    illusttg,
-                    darkimgsttg,
-                    unique_name=f"img-dark-{round}",
-                    readable_name=imager,
-                    fluid_wait=True,
-                    name=f"{imager} (dark frames)",
-                )
+                if darkimgsttg:
+                    self.create_stepset_acquisition(
+                        illusttg,
+                        darkimgsttg,
+                        unique_name=f"img-dark-{round}",
+                        readable_name=imager,
+                        fluid_wait=True,
+                        name=f"{imager} (dark frames)",
+                    )
             elif last_round:
                 if illusttg:
                     if illusttg["lasers_off_finally"]:
