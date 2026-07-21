@@ -28,10 +28,15 @@ To behave as a drop-in for :class:`PycroFlow.hamilton_components.Valve` (so the
 existing :meth:`LegacyArchitecture._set_valves` works unchanged), the class
 exposes :meth:`set_valve` / :meth:`wait_until_done` / :meth:`get_status` and
 the ``pause_flag`` / ``abort_flag`` events the orchestrator assigns.
-``set_valve``
-selects a single channel *exclusively* (all others closed) via one atomic
-``SETBATCHVALVES`` command, which is the correct routing for reservoir
-multiplexing.
+``set_valve`` opens the requested channel(s) *exclusively* (all others closed)
+via one atomic ``SETBATCHVALVES`` command, which is the correct routing for
+reservoir multiplexing.
+
+The two valve kinds differ in principle: a Hamilton rotary valve is at exactly
+one position at a time, whereas these 24 valves are independent and several
+may be open together. A reservoir's ``valve_pos`` may therefore name either a
+single channel (``{ibidi: 3}``) or a list (``{ibidi: [1, 3]}``); in both cases
+every channel *not* listed is closed.
 """
 from __future__ import annotations
 
@@ -259,11 +264,44 @@ class IbidiMultiplexer(_ValveABC):
         return reply
 
     def select(self, channel):
-        """Open one channel (1-based), closing all others atomically."""
-        self._check_channel(channel)
+        """Open one channel or a set of channels, closing all others.
+
+        Unlike a Hamilton rotary valve — which is at exactly one position at
+        a time — the multiplexer's 24 valves are independent, so a reservoir
+        may be reached through several channels open at once (e.g. a shared
+        feed line). Passing a sequence opens exactly those and closes every
+        other channel, in one atomic ``SETBATCHVALVES``.
+
+        Parameters
+        ----------
+        channel : int or sequence of int
+            The channel(s) to open (1..``channels``). A sequence must be
+            non-empty; duplicates are ignored.
+
+        Returns
+        -------
+        str
+            The device reply.
+        """
+        channels = self._as_channels(channel)
         states = [False] * self.channels
-        states[channel - 1] = True
+        for ch in channels:
+            states[ch - 1] = True
         return self.set_batch(states)
+
+    def _as_channels(self, channel):
+        """Normalise an int / sequence of ints to a validated channel list."""
+        if isinstance(channel, (list, tuple, set, frozenset)):
+            channels = [int(c) for c in channel]
+            if not channels:
+                raise ValueError(
+                    "no channel given; a reservoir's ibidi valve_pos must "
+                    "name at least one channel")
+        else:
+            channels = [int(channel)]
+        for ch in channels:
+            self._check_channel(ch)
+        return channels
 
     def _check_channel(self, channel):
         if not (1 <= int(channel) <= self.channels):
@@ -275,7 +313,7 @@ class IbidiMultiplexer(_ValveABC):
 
     # -- HAL Valve interface --------------------------------------------------
     def set_valve(self, pos, move_now=True):
-        """Route to reservoir channel ``pos`` (1-based), closing all others.
+        """Route to reservoir channel(s) ``pos``, closing all others.
 
         Presents the same surface as the Hamilton MVP ``Valve`` so
         :meth:`LegacyArchitecture._set_valves` drives it unchanged. Honours the
@@ -284,8 +322,10 @@ class IbidiMultiplexer(_ValveABC):
 
         Parameters
         ----------
-        pos : int
-            The channel to open (1..``channels``).
+        pos : int or sequence of int
+            The channel(s) to open (1..``channels``). A Hamilton valve takes
+            a single position; this device can hold several open at once, so
+            a reservoir's ``valve_pos`` may name a list (see :meth:`select`).
         move_now : bool, default: True
             Accepted for interface compatibility; the device switches
             immediately, so this is ignored.
@@ -312,7 +352,7 @@ class IbidiMultiplexer(_ValveABC):
                 )
             )
             return
-        self.select(int(pos))
+        self.select(pos)
 
     def wait_until_done(self):
         """No-op: bi-stable valves switch synchronously (the device replies

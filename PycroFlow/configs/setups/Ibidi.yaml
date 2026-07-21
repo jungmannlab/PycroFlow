@@ -56,34 +56,31 @@ fluid:
   flush_pos:
     inject: in
     flush: out
-  # Each reservoir maps to one ibidi channel (1..24). Selecting a reservoir
-  # opens exactly that channel and closes all others; the pump (address 1) is
-  # set to its input position. Trim this list to the channels you actually use.
+  # Each reservoir maps to ibidi channel(s) (1..24). Selecting a reservoir
+  # opens exactly those and closes all others; the pump (address 1) is set to
+  # its input position. Trim this list to the channels you actually use.
+  #
+  # Unlike a Hamilton rotary valve (one position at a time), these valves are
+  # independent, so a reservoir reached through several channels at once lists
+  # them:  - {id: 3, valve_pos: {ibidi: [1, 3], 1: in}}
   reservoirs:
-    - {id: 1,  valve_pos: {ibidi: 1,  1: in}}
-    - {id: 2,  valve_pos: {ibidi: 2,  1: in}}
-    - {id: 3,  valve_pos: {ibidi: 3,  1: in}}
-    - {id: 4,  valve_pos: {ibidi: 4,  1: in}}
-    - {id: 5,  valve_pos: {ibidi: 5,  1: in}}
-    - {id: 6,  valve_pos: {ibidi: 6,  1: in}}
-    - {id: 7,  valve_pos: {ibidi: 7,  1: in}}
-    - {id: 8,  valve_pos: {ibidi: 8,  1: in}}
-    - {id: 9,  valve_pos: {ibidi: 9,  1: in}}
-    - {id: 10, valve_pos: {ibidi: 10, 1: in}}
-    - {id: 11, valve_pos: {ibidi: 11, 1: in}}
-    - {id: 12, valve_pos: {ibidi: 12, 1: in}}
-    - {id: 13, valve_pos: {ibidi: 13, 1: in}}
-    - {id: 14, valve_pos: {ibidi: 14, 1: in}}
-    - {id: 15, valve_pos: {ibidi: 15, 1: in}}
-    - {id: 16, valve_pos: {ibidi: 16, 1: in}}
-    - {id: 17, valve_pos: {ibidi: 17, 1: in}}
-    - {id: 18, valve_pos: {ibidi: 18, 1: in}}
-    - {id: 19, valve_pos: {ibidi: 19, 1: in}}
-    - {id: 20, valve_pos: {ibidi: 20, 1: in}}
-    - {id: 21, valve_pos: {ibidi: 21, 1: in}}
-    - {id: 22, valve_pos: {ibidi: 22, 1: in}}
-    - {id: 23, valve_pos: {ibidi: 23, 1: in}}
-    - {id: 24, valve_pos: {ibidi: 24, 1: in}}
+    - {id: 2,  valve_pos: {ibidi: [1, 2],  1: in}}
+    - {id: 3,  valve_pos: {ibidi: [1, 3],  1: in}}
+    - {id: 4,  valve_pos: {ibidi: [1, 4],  1: in}}
+    - {id: 5,  valve_pos: {ibidi: [1, 5],  1: in}}
+    - {id: 8,  valve_pos: {ibidi: [1, 6, 7, 8],  1: in}}
+    - {id: 9,  valve_pos: {ibidi: [1, 6, 7, 9],  1: in}}
+    - {id: 10, valve_pos: {ibidi: [1, 6, 7, 10], 1: in}}
+    - {id: 11, valve_pos: {ibidi: [1, 6, 7, 11], 1: in}}
+    - {id: 14, valve_pos: {ibidi: [1, 6, 7, 12, 13, 14], 1: in}}
+    - {id: 15, valve_pos: {ibidi: [1, 6, 7, 12, 13, 15], 1: in}}
+    - {id: 16, valve_pos: {ibidi: [1, 6, 7, 12, 13, 16], 1: in}}
+    - {id: 17, valve_pos: {ibidi: [1, 6, 7, 12, 13, 17], 1: in}}
+    - {id: 20, valve_pos: {ibidi: [1, 6, 7, 12, 13, 18, 19, 20], 1: in}}
+    - {id: 21, valve_pos: {ibidi: [1, 6, 7, 12, 13, 18, 19, 21], 1: in}}
+    - {id: 22, valve_pos: {ibidi: [1, 6, 7, 12, 13, 18, 19, 22], 1: in}}
+    - {id: 23, valve_pos: {ibidi: [1, 6, 7, 12, 13, 18, 19, 23], 1: in}}
+    - {id: 24, valve_pos: {ibidi: [1, 6, 7, 12, 13, 18, 19, 24], 1: in}}
   # Tubing volumes (ul) — EDIT to your measured values (run a tubing
   # calibration). With the multiplexer each reservoir connects directly to
   # pump_a: one segment per reservoir plus the pump->sample / pump->waste legs.

@@ -45,6 +45,40 @@ class IbidiMultiplexerDriverTest(unittest.TestCase):
             self.assertEqual(len(batch), 2)
             mx.close()
 
+    def test_select_multiple_channels_exclusively(self):
+        # Unlike a rotary valve, several channels may be open at once — but
+        # everything not listed must still be closed, in one atomic command.
+        with emu.patch_ibidi_serial() as fake:
+            mx = IbidiMultiplexer('7')
+            mx.select([1, 3])
+            self.assertEqual(
+                [i for i, s in enumerate(fake.channels, 1) if s], [1, 3])
+            # switching to another set closes the previous one
+            mx.select([2, 24])
+            self.assertEqual(
+                [i for i, s in enumerate(fake.channels, 1) if s], [2, 24])
+            batch = [c for c, _ in fake.command_log
+                     if c.startswith('SETBATCHVALVES')]
+            self.assertEqual(len(batch), 2)
+            mx.close()
+
+    def test_set_valve_accepts_channel_list(self):
+        with emu.patch_ibidi_serial() as fake:
+            mx = IbidiMultiplexer('7')
+            mx.set_valve([4, 5])
+            self.assertEqual(
+                [i for i, s in enumerate(fake.channels, 1) if s], [4, 5])
+            mx.close()
+
+    def test_select_rejects_bad_channel_sets(self):
+        with emu.patch_ibidi_serial():
+            mx = IbidiMultiplexer('7')
+            with self.assertRaises(ValueError):
+                mx.select([])            # no channel at all
+            with self.assertRaises(ValueError):
+                mx.select([1, 25])       # out of range
+            mx.close()
+
     def test_set_valve_matches_select(self):
         with emu.patch_ibidi_serial() as fake:
             mx = IbidiMultiplexer('7')
@@ -149,6 +183,32 @@ class IbidiLegacyArchitectureIntegrationTest(unittest.TestCase):
         self.assertIsNotNone(la.multiplexer)
         self.assertIsInstance(la.multiplexer, IbidiMultiplexer)
         self.assertIn('ibidi', la.valve_a)
+
+    def test_set_valves_routes_multi_channel_reservoir(self):
+        # A reservoir wired through several channels (valve_pos {ibidi: [..]})
+        # opens exactly those, all the way from _set_valves.
+        from PycroFlow.configs import assemble_hamilton_config, load_setup
+        import PycroFlow.hamilton_architecture as ha
+
+        setup = load_setup('IbidiEmulator')
+        for entry in setup['fluid']['reservoirs']:
+            if entry['id'] == 3:
+                entry['valve_pos'] = {'ibidi': [1, 3], 1: 'in'}
+        hamilton, tubing = assemble_hamilton_config(setup, {
+            'reservoir_names': {1: 'imager1', 3: 'shared', 5: 'buffer'},
+            'special_names': {'flushbuffer_a': 5},
+        })
+        with emu.patch_serial(), emu.patch_ibidi_serial() as fake:
+            ha.connect(hamilton['interface']['COM'],
+                       hamilton['interface']['baud'])
+            la = ha.LegacyArchitecture(hamilton, tubing)
+        la._set_valves(3)
+        self.assertEqual(
+            [i for i, s in enumerate(fake.channels, 1) if s], [1, 3])
+        # a single-channel reservoir still closes the extra channel
+        la._set_valves(1)
+        self.assertEqual(
+            [i for i, s in enumerate(fake.channels, 1) if s], [1])
 
     def test_set_valves_routes_through_multiplexer(self):
         la, fake = self._build()
