@@ -297,3 +297,80 @@ class TestProtocolBuilder(unittest.TestCase):
         self.assertTrue(fname.endswith('.yaml'))
         self.assertGreater(len(steps['fluid']), 0)
         self.assertGreater(len(steps['img']), 0)
+
+
+class TestOptionalDarkframes(unittest.TestCase):
+    """Leaving ``darkframes`` empty drops the dark-frame acquisitions."""
+
+    @staticmethod
+    def _protocol(darkframes='omit'):
+        from PycroFlow.schemas import validate_experiment_design
+
+        design = {
+            'base_name': 'x', 'save_dir': TEST_OUTPUT_DIR,
+            'fluid': {'settings': {
+                'vol_wash': 200., 'vol_reagent': 100., 'vol_imager_post': 50.,
+                'reservoir_names': {2: 'Buffer', 3: 'I1', 4: 'I2'},
+                'special_names': {},
+                'experiment': {'type': 'Exchange', 'wash_buffer': 'Buffer',
+                               'imagers': ['I1', 'I2']}}},
+            'img': {'settings': {'t_exp': 100., 'frames': 10}},
+            'illu': {'settings': {'laser': 560, 'power_acq': 35.}},
+        }
+        if darkframes != 'omit':
+            design['img']['settings']['darkframes'] = darkframes
+        design = validate_experiment_design(design).model_dump(by_alias=True)
+        return pprot.ProtocolBuilder().build_protocol(design)
+
+    @staticmethod
+    def _entries(protocol):
+        for sub in protocol.values():
+            if isinstance(sub, dict):
+                for entry in sub.get('protocol_entries', []):
+                    yield entry
+
+    def _acquire_names(self, protocol):
+        return [e.get('name') for e in self._entries(protocol)
+                if e['$type'] == 'acquire']
+
+    def _fluid_entries(self, protocol):
+        return [e['$type'] for e in protocol['fluid']['protocol_entries']]
+
+    def test_darkframes_set_keeps_the_acquisitions(self):
+        names = self._acquire_names(self._protocol(darkframes=5))
+        self.assertIn('I1 (dark frames)', names)
+
+    def test_omitted_darkframes_drops_the_acquisitions(self):
+        protocol = self._protocol()          # field absent entirely
+        names = self._acquire_names(protocol)
+        self.assertEqual(names, ['I1', 'I2'])
+        self.assertFalse([n for n in names if 'dark' in str(n)])
+        # No acquire entry may carry a None frame count (which previously
+        # failed protocol validation with a confusing pydantic error).
+        for entry in self._entries(protocol):
+            if entry['$type'] == 'acquire':
+                self.assertIsInstance(entry['frames'], int)
+
+    def test_none_and_zero_behave_like_omitted(self):
+        for value in (None, 0):
+            names = self._acquire_names(self._protocol(darkframes=value))
+            self.assertEqual(names, ['I1', 'I2'], msg=repr(value))
+
+    def test_the_wash_is_still_performed(self):
+        # Only the acquisition goes away — the wash it followed must stay,
+        # or rounds would run into each other.
+        with_dark = self._fluid_entries(self._protocol(darkframes=5))
+        without = self._fluid_entries(self._protocol())
+        self.assertEqual(with_dark.count('inject'), without.count('inject'))
+        self.assertEqual(
+            with_dark.count('pump_out'), without.count('pump_out'))
+
+    def test_no_orphaned_waits_without_darkframes(self):
+        # Dropping steps must not leave a 'wait for signal' whose signal was
+        # removed with them — that would deadlock the run.
+        protocol = self._protocol()
+        signals = {e['value'] for e in self._entries(protocol)
+                   if e['$type'] == 'signal'}
+        waits = {e['value'] for e in self._entries(protocol)
+                 if e['$type'] == 'wait for signal'}
+        self.assertEqual(waits - signals, set())

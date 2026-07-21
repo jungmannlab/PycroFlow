@@ -422,6 +422,51 @@ class SystemService:
         self._require('fluid_system')
         self.fluid_system.deliver_fluid(reservoir_id, volume)
 
+    def sync_fluid_reservoirs(self, fluid) -> bool:
+        """Re-apply an experiment design's reservoirs to the live system.
+
+        The fluid system is built from the design at connect time, but the
+        design keeps being edited afterwards. Adding a reservoir and
+        re-translating would otherwise leave the connected system routing by
+        the old list, and the run would die on the first step touching the
+        new one. Call this whenever the design may have changed (the GUI does
+        it on translate); it rebuilds the reservoir bookkeeping only, with no
+        serial reconnect.
+
+        Parameters
+        ----------
+        fluid : dict
+            The design's ``fluid`` section (or a bare settings dict).
+
+        Returns
+        -------
+        bool
+            True if the live system was updated, False if there was nothing
+            to update (not connected, no setup, or an emulated/simple system
+            that does not take a reservoir config).
+        """
+        if self.fluid_system is None or self._setup is None:
+            return False
+        update = getattr(self.fluid_system, 'update_reservoirs', None)
+        if not callable(update):
+            return False
+        settings = fluid.get('settings', fluid) if fluid else {}
+        if not settings:
+            return False
+        from PycroFlow.configs import assemble_hamilton_config
+
+        hamilton, _ = assemble_hamilton_config(self._setup, settings)
+        update(hamilton)
+        logger.debug("fluid reservoirs re-synced from the design: {}".format(
+            sorted(getattr(self.fluid_system, 'reservoir_paths', {}))))
+        return True
+
+    def routable_reservoirs(self) -> list:
+        """Reservoir ids the connected fluid system can currently route to."""
+        if self.fluid_system is None:
+            return []
+        return sorted(getattr(self.fluid_system, 'reservoir_paths', {}) or {})
+
     def reservoir_route(self, reservoir_id) -> dict:
         """Return the ``{valve address: position}`` map for a reservoir.
 

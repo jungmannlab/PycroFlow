@@ -267,9 +267,7 @@ class LegacyArchitecture(AbstractSystem):
             address = mux_cfg.pop("address", "ibidi")
             self.multiplexer = IbidiMultiplexer(address=address, **mux_cfg)
             self.valve_a[address] = self.multiplexer
-        for rconfig in config["reservoir_a"]:
-            self.reservoir_a.add(Reservoir(**rconfig))
-            self.reservoir_paths[rconfig["id"]] = "a"
+        self.update_reservoirs(config)
         if config.get("valve_flush"):
             self.valve_flush = Valve(**config["valve_flush"])
         else:
@@ -293,9 +291,41 @@ class LegacyArchitecture(AbstractSystem):
         # self.pump_out = Pump(**pump_out_config)
         self.pump_out = Pump(**config["pump_out"])
 
-        self.special_names = config["special_names"]
         self.flush_pos = config["flush_pos"]
+
+    def update_reservoirs(self, config):
+        """(Re)build the reservoir set from an assembled hamilton config.
+
+        Which reservoirs exist comes from the *experiment design*, which can
+        change after the hardware was connected — editing the reservoir table
+        and re-translating must not leave the system routing by the previous
+        design's list (a reservoir added afterwards would raise ``KeyError``
+        mid-run, in :meth:`_set_valves`).
+
+        Serial connections, valves and pumps are untouched; only the
+        reservoir bookkeeping is replaced. The containers are rebuilt rather
+        than added to, so removed reservoirs really disappear.
+
+        Parameters
+        ----------
+        config : dict
+            An assembled hamilton config (see
+            :func:`PycroFlow.configs.assemble_hamilton_config`): needs
+            ``reservoir_a`` / ``special_names``, optional
+            ``cleaning_reservoirs``.
+        """
+        # Assign fresh per-instance containers: these attributes default to
+        # mutable *class* attributes, so mutating them in place would leak
+        # one architecture's reservoirs into the next.
+        self.reservoir_a = ReservoirDict()
+        self.reservoir_paths = {}
+        for rconfig in config["reservoir_a"]:
+            self.reservoir_a.add(Reservoir(**rconfig))
+            self.reservoir_paths[rconfig["id"]] = "a"
+        self.special_names = config["special_names"]
         self.cleaning_reservoirs = config.get("cleaning_reservoirs", {})
+        if isinstance(getattr(self, "tubing_config", None), TubingConfig):
+            self.tubing_config.set_special_names(self.special_names)
 
     def _assign_protocol(self, protocol):
         self.protocol = protocol["protocol_entries"]

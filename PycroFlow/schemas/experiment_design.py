@@ -238,7 +238,11 @@ class ImgSettings(BaseModel):
     t_exp: float = _unit(unit='ms')
     # frames may be a single count or a per-imager mapping (Exchange).
     frames: Optional[Union[int, Dict[str, int]]] = None
-    darkframes: Optional[int] = None
+    darkframes: Optional[int] = _field(
+        None,
+        tooltip=("Frames to acquire after each wash, to check the sample "
+                 "went dark. Leave empty to skip dark-frame acquisitions "
+                 "entirely — the wash itself still runs."))
 
 
 class ImgSection(BaseModel):

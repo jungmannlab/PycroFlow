@@ -172,6 +172,48 @@ class TestRunRecord(unittest.TestCase):
             self.assertEqual(os.listdir(tmp), [])
 
 
+class TestReservoirPreflight(unittest.TestCase):
+    """A run must not start if it would die on an unroutable reservoir."""
+
+    def _service(self, routable, needed):
+        from PycroFlow.services import ExperimentService
+
+        class FakeFluid:
+            reservoir_paths = {rid: 'a' for rid in routable}
+
+        svc = ExperimentService(fluid_system=FakeFluid())
+        svc._protocol = {'fluid': {'protocol_entries': [
+            {'$type': 'inject', 'reservoir_id': rid} for rid in needed]}}
+        return svc
+
+    def test_missing_reservoirs_are_reported(self):
+        svc = self._service(routable=[2, 4], needed=[2, 3, 4, 5])
+        self.assertEqual(svc.check_reservoirs_routable(), [3, 5])
+
+    def test_start_refuses_and_explains(self):
+        svc = self._service(routable=[2, 4], needed=[2, 3])
+        svc._orchestrator = unittest.mock.MagicMock()
+        with self.assertRaises(RuntimeError) as ctx:
+            svc.start()
+        message = str(ctx.exception)
+        self.assertIn('[3]', message)
+        self.assertIn('reconnect', message.lower())
+        svc._orchestrator.start_protocol.assert_not_called()
+
+    def test_all_routable_passes(self):
+        svc = self._service(routable=[2, 3, 4], needed=[2, 3])
+        self.assertEqual(svc.check_reservoirs_routable(), [])
+
+    def test_system_without_reservoirs_is_not_second_guessed(self):
+        # An emulated/simple fluid system exposes no reservoir_paths; the
+        # check must stay out of the way rather than block every run.
+        from PycroFlow.services import ExperimentService
+        svc = ExperimentService(fluid_system=object())
+        svc._protocol = {'fluid': {'protocol_entries': [
+            {'$type': 'inject', 'reservoir_id': 9}]}}
+        self.assertEqual(svc.check_reservoirs_routable(), [])
+
+
 class TestTimingAnalysis(unittest.TestCase):
 
     def test_parses_records_and_ignores_other_traffic(self):

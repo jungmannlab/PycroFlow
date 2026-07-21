@@ -294,6 +294,44 @@ class IbidiLegacyArchitectureIntegrationTest(unittest.TestCase):
         self.assertEqual(
             [i for i, s in enumerate(fake.channels, 1) if s], [1])
 
+    def test_design_edit_after_connect_is_applied(self):
+        # The reported failure: a reservoir added to the design after the
+        # hardware was connected made the run die on its first step with
+        # KeyError in _set_valves. Re-syncing must make it routable.
+        from PycroFlow.services import SystemService
+
+        svc = SystemService()
+        svc.load_setup('IbidiEmulator')
+        first = {'settings': {'reservoir_names': {2: 'Buffer', 4: 'Imager 2'},
+                              'special_names': {}}}
+        fs = svc.connect_fluid(first)
+        self.assertEqual(sorted(fs.reservoir_paths), [2, 4])
+
+        # ... the user then adds "Imager 1" on reservoir 3 and re-translates
+        edited = {'settings': {
+            'reservoir_names': {2: 'Buffer', 4: 'Imager 2', 3: 'Imager 1'},
+            'special_names': {}}}
+        self.assertTrue(svc.sync_fluid_reservoirs(edited))
+        self.assertEqual(sorted(fs.reservoir_paths), [2, 3, 4])
+        fs._set_valves(3)
+        self.assertEqual(
+            [i for i, s in enumerate(fs.multiplexer.channel_states, 1) if s],
+            [3])
+
+    def test_sync_drops_removed_reservoirs(self):
+        # Rebuilt, not added to: a reservoir taken out of the design must
+        # stop being routable rather than linger from the previous connect.
+        from PycroFlow.services import SystemService
+
+        svc = SystemService()
+        svc.load_setup('IbidiEmulator')
+        fs = svc.connect_fluid({'settings': {
+            'reservoir_names': {2: 'Buffer', 4: 'Imager 2'},
+            'special_names': {}}})
+        svc.sync_fluid_reservoirs({'settings': {
+            'reservoir_names': {2: 'Buffer'}, 'special_names': {}}})
+        self.assertEqual(sorted(fs.reservoir_paths), [2])
+
     def test_manual_set_valves_reaches_undesigned_reservoirs(self):
         # Manual hardware testing must reach every reservoir the SETUP wires,
         # not just the ones the loaded design happens to name.

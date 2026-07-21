@@ -276,8 +276,43 @@ class ExperimentService:
 
     # --- Lifecycle ----------------------------------------------------
 
+    def check_reservoirs_routable(self) -> list:
+        """Return the protocol's reservoir ids the fluid system cannot reach.
+
+        The fluid system knows only the reservoirs it was connected with. If
+        the design gained a reservoir afterwards, the compiled Run Sequence
+        references an id the system cannot route to, and the run dies on that
+        step — potentially minutes in, with liquid already moved. Checked
+        before starting so the failure is caught while nothing has happened
+        yet.
+
+        Returns
+        -------
+        list
+            Unroutable reservoir ids (empty when fine, or when the fluid
+            system does not expose its reservoirs).
+        """
+        fluid = self._fluid_system
+        routable = getattr(fluid, 'reservoir_paths', None)
+        if fluid is None or not isinstance(routable, dict) or not routable:
+            return []
+        entries = ((self._protocol or {}).get('fluid') or {}).get(
+            'protocol_entries') or []
+        needed = {e['reservoir_id'] for e in entries
+                  if isinstance(e, dict) and e.get('reservoir_id') is not None}
+        return sorted(needed - set(routable))
+
     def start(self, system_steps: Optional[Dict] = None) -> None:
         self._require_orchestrator()
+        missing = self.check_reservoirs_routable()
+        if missing:
+            raise RuntimeError(
+                "The Run Sequence uses reservoir(s) {} that the connected "
+                "fluid system cannot route to (it has {}). The experiment "
+                "design changed after the hardware was connected — "
+                "reconnect the fluid system, then start again.".format(
+                    missing, sorted(
+                        getattr(self._fluid_system, 'reservoir_paths', {}))))
         if self._state in (
             ExperimentState.LOADED,
             ExperimentState.FINISHED,
