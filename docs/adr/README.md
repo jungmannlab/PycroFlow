@@ -16,3 +16,4 @@ Format: lightweight [MADR](https://adr.github.io/madr/). Status is one of
 | 005 | Frontend-agnostic service layer                | accepted |
 | 006 | Single-process Micro-Manager Core sharing      | accepted |
 | 007 | Qt GUI frontend (PyQt6, in-process monet embed) | accepted (amended: PyQt5→PyQt6) |
+| 008 | Role-based setup configs                       | accepted |

@@ -1,30 +1,54 @@
 # Real-hardware template: Hamilton syringe pumps + ibidi MultiFlOW multiplexer.
 #
-# Copy this file to configs/setups/<YourMicroscope>.yaml and edit the values
-# marked "EDIT" for your rig. Reservoirs are multiplexed by the ibidi MultiFlOW
+# Copy this file to configs/setups/<YourSetup>.yaml and edit the values marked
+# "EDIT" for your rig. Reservoirs are multiplexed by the ibidi MultiFlOW
 # 24-channel actuator unit instead of Hamilton MVP rotary valves; the syringe
 # pumps stay Hamilton.
 #
+# Sections are grouped by ROLE, and each names its driver: `fluid.pumps`,
+# `fluid.multiplexer`, `imaging`, `illumination`.
+#
 # Before a run:
-#   * Set `setup` to the monet CONFIGS key for this microscope (drives the
-#     Monet/illumination tab).
-#   * Set `hamilton.interface.COM` to the pumps' serial port and
-#     `hamilton.ibidi.port` to the COM port the MultiFlOW enumerates as
+#   * Set `illumination.config` to the monet CONFIGS key of the MICROSCOPE this
+#     runs on — that is the microscope's name, not this setup's name (this file
+#     ships configured for the Mercury microscope).
+#   * Set `fluid.pumps.interface.COM` to the pumps' serial port and
+#     `fluid.multiplexer.port` to the COM port the MultiFlOW enumerates as
 #     (a *separate* USB serial connection).
 #   * Confirm the pump addresses/syringes and the reservoir<->channel wiring.
 
-setup: Ibidi          # EDIT: monet CONFIGS key for this microscope
+setup: Ibidi          # this setup's own name (shown in the setup selector)
 emulated: false
 
-hamilton:
-  interface:
-    COM: '3'          # EDIT: serial port of the Hamilton pump bus
-    baud: 9600
+fluid:
   system_type: legacy
-  # No Hamilton MVP rotary valves — the ibidi multiplexer multiplexes.
-  valve_a: []
-  # ibidi MultiFlOW 24-channel actuator unit (its own USB serial port).
-  ibidi:
+  pumps:
+    driver: hamilton-psd
+    interface:
+      COM: '3'        # EDIT: serial port of the Hamilton pump bus
+      baud: 9600
+    pump_a:
+      address: 1
+      instrument_type: '4'
+      valve_type: Y
+      syringe: 500u
+      input_pos: in
+      output_pos: out
+      motorsteps_per_step: 1
+      speed_factor: 2
+    pump_out:
+      address: 0
+      instrument_type: '4'
+      valve_type: Y
+      syringe: 5.0m
+      input_pos: in
+      output_pos: out
+      motorsteps_per_step: 1
+      speed_factor: 2
+  # Reservoir selection: ibidi MultiFlOW 24-channel actuator unit, on its own
+  # USB serial port. No Hamilton MVP rotary valves in this setup.
+  multiplexer:
+    driver: ibidi-multiflow
     port: '7'         # EDIT: COM port of the MultiFlOW device
     baud: 115200      # device runs 115200 8N1; only ';' terminates a command
     channels: 24
@@ -32,28 +56,10 @@ hamilton:
   flush_pos:
     inject: in
     flush: out
-  pump_a:
-    address: 1
-    instrument_type: '4'
-    valve_type: Y
-    syringe: 500u
-    input_pos: in
-    output_pos: out
-    motorsteps_per_step: 1
-    speed_factor: 2
-  pump_out:
-    address: 0
-    instrument_type: '4'
-    valve_type: Y
-    syringe: 5.0m
-    input_pos: in
-    output_pos: out
-    motorsteps_per_step: 1
-    speed_factor: 2
   # Each reservoir maps to one ibidi channel (1..24). Selecting a reservoir
   # opens exactly that channel and closes all others; the pump (address 1) is
   # set to its input position. Trim this list to the channels you actually use.
-  reservoir_a_manifold:
+  reservoirs:
     - {id: 1,  valve_pos: {ibidi: 1,  1: in}}
     - {id: 2,  valve_pos: {ibidi: 2,  1: in}}
     - {id: 3,  valve_pos: {ibidi: 3,  1: in}}
@@ -78,37 +84,36 @@ hamilton:
     - {id: 22, valve_pos: {ibidi: 22, 1: in}}
     - {id: 23, valve_pos: {ibidi: 23, 1: in}}
     - {id: 24, valve_pos: {ibidi: 24, 1: in}}
-
-# Tubing volumes (ul) — EDIT to your measured values (run a tubing calibration).
-# With the multiplexer each reservoir connects directly to pump_a: one segment
-# per reservoir plus the pump->sample / pump->waste legs.
-tubing:
-  - {from: R1,  to: pump_a, volume: 325}
-  - {from: R2,  to: pump_a, volume: 325}
-  - {from: R3,  to: pump_a, volume: 325}
-  - {from: R4,  to: pump_a, volume: 325}
-  - {from: R5,  to: pump_a, volume: 325}
-  - {from: R6,  to: pump_a, volume: 325}
-  - {from: R7,  to: pump_a, volume: 325}
-  - {from: R8,  to: pump_a, volume: 325}
-  - {from: R9,  to: pump_a, volume: 325}
-  - {from: R10, to: pump_a, volume: 325}
-  - {from: R11, to: pump_a, volume: 325}
-  - {from: R12, to: pump_a, volume: 325}
-  - {from: R13, to: pump_a, volume: 325}
-  - {from: R14, to: pump_a, volume: 325}
-  - {from: R15, to: pump_a, volume: 325}
-  - {from: R16, to: pump_a, volume: 325}
-  - {from: R17, to: pump_a, volume: 325}
-  - {from: R18, to: pump_a, volume: 325}
-  - {from: R19, to: pump_a, volume: 325}
-  - {from: R20, to: pump_a, volume: 325}
-  - {from: R21, to: pump_a, volume: 325}
-  - {from: R22, to: pump_a, volume: 325}
-  - {from: R23, to: pump_a, volume: 325}
-  - {from: R24, to: pump_a, volume: 325}
-  - {from: pump_a, to: sample, volume: 325}
-  - {from: pump_a, to: flush_waste, volume: 650}
+  # Tubing volumes (ul) — EDIT to your measured values (run a tubing
+  # calibration). With the multiplexer each reservoir connects directly to
+  # pump_a: one segment per reservoir plus the pump->sample / pump->waste legs.
+  tubing:
+    - {from: R1,  to: pump_a, volume: 325}
+    - {from: R2,  to: pump_a, volume: 325}
+    - {from: R3,  to: pump_a, volume: 325}
+    - {from: R4,  to: pump_a, volume: 325}
+    - {from: R5,  to: pump_a, volume: 325}
+    - {from: R6,  to: pump_a, volume: 325}
+    - {from: R7,  to: pump_a, volume: 325}
+    - {from: R8,  to: pump_a, volume: 325}
+    - {from: R9,  to: pump_a, volume: 325}
+    - {from: R10, to: pump_a, volume: 325}
+    - {from: R11, to: pump_a, volume: 325}
+    - {from: R12, to: pump_a, volume: 325}
+    - {from: R13, to: pump_a, volume: 325}
+    - {from: R14, to: pump_a, volume: 325}
+    - {from: R15, to: pump_a, volume: 325}
+    - {from: R16, to: pump_a, volume: 325}
+    - {from: R17, to: pump_a, volume: 325}
+    - {from: R18, to: pump_a, volume: 325}
+    - {from: R19, to: pump_a, volume: 325}
+    - {from: R20, to: pump_a, volume: 325}
+    - {from: R21, to: pump_a, volume: 325}
+    - {from: R22, to: pump_a, volume: 325}
+    - {from: R23, to: pump_a, volume: 325}
+    - {from: R24, to: pump_a, volume: 325}
+    - {from: pump_a, to: sample, volume: 325}
+    - {from: pump_a, to: flush_waste, volume: 650}
 
 imaging:
   pfs_pars:
@@ -118,3 +123,9 @@ imaging:
     prop_state: State
     prop_status: Status
     deltat: 10
+
+illumination:
+  backend: monet
+  # EDIT: the monet CONFIGS key of the MICROSCOPE this fluidics setup runs on
+  # — not this setup's name. Ships pointing at the Mercury microscope.
+  config: Mercury

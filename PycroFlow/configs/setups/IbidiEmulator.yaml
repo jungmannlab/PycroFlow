@@ -8,22 +8,43 @@
 # serial wires (FakeHamiltonSerial for the pumps, FakeIbidiSerial for the
 # multiplexer), so the whole app runs with no instruments attached.
 #
-# To make a real ibidi setup, copy this file, set `emulated: false`, give the
-# pumps' interface the right COM/baud, and set `ibidi.port` to the COM port the
-# MultiFlOW enumerates as.
+# To make a real ibidi setup, copy this file (or Ibidi.yaml), set
+# `emulated: false`, give `fluid.pumps.interface` the right COM/baud, set
+# `fluid.multiplexer.port` to the COM port the MultiFlOW enumerates as, and
+# point `illumination.config` at the microscope's monet config.
 
 setup: IbidiEmulator
 emulated: true
 
-hamilton:
-  interface:
-    COM: '0'
-    baud: 9600
+fluid:
   system_type: legacy
-  # No Hamilton MVP rotary valves — the ibidi multiplexer multiplexes.
-  valve_a: []
-  # ibidi MultiFlOW 24-channel actuator unit (its own USB serial port).
-  ibidi:
+  pumps:
+    driver: hamilton-psd
+    interface:
+      COM: '0'
+      baud: 9600
+    pump_a:
+      address: 1
+      instrument_type: '4'
+      valve_type: Y
+      syringe: 500u
+      input_pos: in
+      output_pos: out
+      motorsteps_per_step: 1
+      speed_factor: 2
+    pump_out:
+      address: 0
+      instrument_type: '4'
+      valve_type: Y
+      syringe: 5.0m
+      input_pos: in
+      output_pos: out
+      motorsteps_per_step: 1
+      speed_factor: 2
+  # Reservoir selection: ibidi MultiFlOW 24-channel actuator unit (its own USB
+  # serial port). No Hamilton MVP rotary valves in this setup.
+  multiplexer:
+    driver: ibidi-multiflow
     port: '7'        # COM port (real device); ignored under emulation
     baud: 115200     # device runs 115200 8N1; only ';' terminates a command
     channels: 24
@@ -31,28 +52,10 @@ hamilton:
   flush_pos:
     inject: in
     flush: out
-  pump_a:
-    address: 1
-    instrument_type: '4'
-    valve_type: Y
-    syringe: 500u
-    input_pos: in
-    output_pos: out
-    motorsteps_per_step: 1
-    speed_factor: 2
-  pump_out:
-    address: 0
-    instrument_type: '4'
-    valve_type: Y
-    syringe: 5.0m
-    input_pos: in
-    output_pos: out
-    motorsteps_per_step: 1
-    speed_factor: 2
   # Each reservoir maps to one ibidi channel (1..24). Selecting a reservoir
   # opens exactly that channel and closes all others; the pump (address 1) is
   # set to its input position. 24 channels => reservoir ids 1..24.
-  reservoir_a_manifold:
+  reservoirs:
     - {id: 1,  valve_pos: {ibidi: 1,  1: in}}
     - {id: 2,  valve_pos: {ibidi: 2,  1: in}}
     - {id: 3,  valve_pos: {ibidi: 3,  1: in}}
@@ -77,36 +80,36 @@ hamilton:
     - {id: 22, valve_pos: {ibidi: 22, 1: in}}
     - {id: 23, valve_pos: {ibidi: 23, 1: in}}
     - {id: 24, valve_pos: {ibidi: 24, 1: in}}
-
-# Tubing volumes (ul). With the multiplexer each reservoir connects directly
-# to pump_a: one segment per reservoir plus the pump->sample / pump->waste legs.
-tubing:
-  - {from: R1,  to: pump_a, volume: 325}
-  - {from: R2,  to: pump_a, volume: 325}
-  - {from: R3,  to: pump_a, volume: 325}
-  - {from: R4,  to: pump_a, volume: 325}
-  - {from: R5,  to: pump_a, volume: 325}
-  - {from: R6,  to: pump_a, volume: 325}
-  - {from: R7,  to: pump_a, volume: 325}
-  - {from: R8,  to: pump_a, volume: 325}
-  - {from: R9,  to: pump_a, volume: 325}
-  - {from: R10, to: pump_a, volume: 325}
-  - {from: R11, to: pump_a, volume: 325}
-  - {from: R12, to: pump_a, volume: 325}
-  - {from: R13, to: pump_a, volume: 325}
-  - {from: R14, to: pump_a, volume: 325}
-  - {from: R15, to: pump_a, volume: 325}
-  - {from: R16, to: pump_a, volume: 325}
-  - {from: R17, to: pump_a, volume: 325}
-  - {from: R18, to: pump_a, volume: 325}
-  - {from: R19, to: pump_a, volume: 325}
-  - {from: R20, to: pump_a, volume: 325}
-  - {from: R21, to: pump_a, volume: 325}
-  - {from: R22, to: pump_a, volume: 325}
-  - {from: R23, to: pump_a, volume: 325}
-  - {from: R24, to: pump_a, volume: 325}
-  - {from: pump_a, to: sample, volume: 325}
-  - {from: pump_a, to: flush_waste, volume: 650}
+  # Tubing volumes (ul). With the multiplexer each reservoir connects directly
+  # to pump_a: one segment per reservoir plus the pump->sample / pump->waste
+  # legs.
+  tubing:
+    - {from: R1,  to: pump_a, volume: 325}
+    - {from: R2,  to: pump_a, volume: 325}
+    - {from: R3,  to: pump_a, volume: 325}
+    - {from: R4,  to: pump_a, volume: 325}
+    - {from: R5,  to: pump_a, volume: 325}
+    - {from: R6,  to: pump_a, volume: 325}
+    - {from: R7,  to: pump_a, volume: 325}
+    - {from: R8,  to: pump_a, volume: 325}
+    - {from: R9,  to: pump_a, volume: 325}
+    - {from: R10, to: pump_a, volume: 325}
+    - {from: R11, to: pump_a, volume: 325}
+    - {from: R12, to: pump_a, volume: 325}
+    - {from: R13, to: pump_a, volume: 325}
+    - {from: R14, to: pump_a, volume: 325}
+    - {from: R15, to: pump_a, volume: 325}
+    - {from: R16, to: pump_a, volume: 325}
+    - {from: R17, to: pump_a, volume: 325}
+    - {from: R18, to: pump_a, volume: 325}
+    - {from: R19, to: pump_a, volume: 325}
+    - {from: R20, to: pump_a, volume: 325}
+    - {from: R21, to: pump_a, volume: 325}
+    - {from: R22, to: pump_a, volume: 325}
+    - {from: R23, to: pump_a, volume: 325}
+    - {from: R24, to: pump_a, volume: 325}
+    - {from: pump_a, to: sample, volume: 325}
+    - {from: pump_a, to: flush_waste, volume: 650}
 
 imaging:
   pfs_pars:
@@ -116,3 +119,7 @@ imaging:
     prop_state: State
     prop_status: Status
     deltat: 10
+
+illumination:
+  backend: monet
+  config: IbidiEmulator
