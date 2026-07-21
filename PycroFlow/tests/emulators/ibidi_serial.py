@@ -21,7 +21,15 @@ command                                   reply
 ``RDALLSTAT;``                            ``...OK;``
 ========================================  ====================================
 
-The per-channel state is exposed via :attr:`channels` for assertions.
+The per-channel state is exposed via :attr:`channels` for assertions, as the
+**physical** state (True = open / flowing). The wire encoding is inverted —
+``SET:Valve:<v>:0`` opens the valve — and this emulator inverts it the same
+way the driver does, so a test asserting on ``fake.channels`` is asserting
+about liquid paths rather than bit patterns.
+
+``max_simultaneous`` models the unit's real current limit: a single command
+that asks more than that many valves to *change* state only actuates the
+first few, which is why the driver switches one valve at a time by default.
 
 Typical use in a test::
 
@@ -51,9 +59,13 @@ _RE_RDSTAT = re.compile(r"^RDSTAT=(\d+)$")
 class FakeIbidiSerial:
     """Emulated ibidi MultiFlOW serial port, 24 bi-stable channels."""
 
-    def __init__(self, *args, channels=24, **kwargs):
+    def __init__(self, *args, channels=24, max_simultaneous=None, **kwargs):
         self.num_channels = channels
+        # Physical state: True = open (flowing). The wire bit is inverted.
         self.channels = [False] * channels
+        # None = an ideal supply. An int caps how many valves one command can
+        # actually switch at once (the real unit's current limit).
+        self.max_simultaneous = max_simultaneous
         self._open = True
         self._rx = bytearray()
         self._lock = threading.Lock()
@@ -141,10 +153,11 @@ class FakeIbidiSerial:
         if cmd == "CH":
             return "{};".format(self.num_channels)
         if cmd == "SETALL":
-            self.channels = [True] * self.num_channels
+            # All bits 1 = all valves closed (the inverted encoding).
+            self._apply([False] * self.num_channels)
             return "OK;"
         if cmd == "UNSETALL":
-            self.channels = [False] * self.num_channels
+            self._apply([True] * self.num_channels)
             return "OK;"
         if cmd == "CLRFLT":
             return "OK;"
@@ -157,10 +170,12 @@ class FakeIbidiSerial:
 
         m = _RE_SET_VALVE.match(cmd)
         if m:
-            valve, state = int(m.group(1)), int(m.group(2))
+            valve, bit = int(m.group(1)), int(m.group(2))
             if not (1 <= valve <= self.num_channels):
                 return "counterr;"
-            self.channels[valve - 1] = bool(state)
+            target = list(self.channels)
+            target[valve - 1] = bit == 0   # 0 opens, 1 closes
+            self._apply(target)
             return "OK;"
 
         m = _RE_BATCH.match(cmd)
@@ -170,20 +185,38 @@ class FakeIbidiSerial:
                 return "biterr;"
             if len(parts) != self.num_channels:
                 return "Counter;"
-            self.channels = [p.strip() == "1" for p in parts]
+            self._apply([p.strip() == "0" for p in parts])
             return "OK;"
 
         return "Unknown CMD;"
 
+    def _apply(self, target):
+        """Move towards ``target``, honouring the simultaneous-switch limit.
+
+        Valves only draw current while *changing*, so the cap applies to the
+        number of changes one command requests. Beyond it the extra valves
+        silently stay put — exactly the failure that makes a full-manifold
+        ``SETBATCHVALVES`` unreliable on the real unit. The device still
+        answers ``OK;``, which is why the driver cannot detect it.
+        """
+        changes = [i for i, (old, new) in enumerate(zip(self.channels, target))
+                   if old != new]
+        if self.max_simultaneous is not None:
+            changes = changes[:self.max_simultaneous]
+        for i in changes:
+            self.channels[i] = target[i]
+
 
 @contextmanager
-def patch_ibidi_serial(channels=24):
+def patch_ibidi_serial(channels=24, max_simultaneous=None):
     """Patch ``serial.Serial`` as seen by ``IbidiMultiplexer`` with the fake.
 
     Yields the :class:`FakeIbidiSerial` instance the driver will use so the
-    test can read back channel state and the command log.
+    test can read back channel state and the command log. Pass
+    ``max_simultaneous`` to emulate the unit's current limit.
     """
-    fake = FakeIbidiSerial(channels=channels)
+    fake = FakeIbidiSerial(
+        channels=channels, max_simultaneous=max_simultaneous)
 
     def _factory(*args, **kwargs):
         fake.port = args[0] if args else kwargs.get("port", fake.port)

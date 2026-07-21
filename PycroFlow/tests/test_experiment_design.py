@@ -234,7 +234,8 @@ class TestSetupConfigs(unittest.TestCase):
               system_type: legacy
               interface: {COM: '0', baud: 9600}
               valve_a: []
-              ibidi: {port: '7', baud: 115200, channels: 24, address: ibidi}
+              ibidi: {port: '7', baud: 115200, channels: 24, address: ibidi,
+                      batch_valves: false, switch_delay: 0.01}
               flush_pos: {inject: in, flush: out}
               pump_a: {address: 1, instrument_type: '4', valve_type: Y,
                        syringe: 500u, input_pos: in, output_pos: out,

@@ -24,19 +24,32 @@ command                                 response
 ``RDALLSTAT;``                          dump all registers (debug)
 ======================================  =======================================
 
+**Wire polarity is inverted** relative to what "set" suggests: a valve is
+*open* (flowing) when its bit is ``0`` and *closed* when it is ``1``
+(:data:`WIRE_OPEN` / :data:`WIRE_CLOSED`). This module's API — ``select``,
+``set_channel``, ``open_all`` / ``close_all``, :attr:`channel_states` — always
+speaks in terms of **open**, and inverts at the wire, so nothing above the
+driver has to remember the encoding.
+
 To behave as a drop-in for :class:`PycroFlow.hamilton_components.Valve` (so the
 existing :meth:`LegacyArchitecture._set_valves` works unchanged), the class
 exposes :meth:`set_valve` / :meth:`wait_until_done` / :meth:`get_status` and
 the ``pause_flag`` / ``abort_flag`` events the orchestrator assigns.
-``set_valve`` opens the requested channel(s) *exclusively* (all others closed)
-via one atomic ``SETBATCHVALVES`` command, which is the correct routing for
-reservoir multiplexing.
+``set_valve`` opens the requested channel(s) *exclusively* (all others closed),
+which is the correct routing for reservoir multiplexing.
 
 The two valve kinds differ in principle: a Hamilton rotary valve is at exactly
 one position at a time, whereas these 24 valves are independent and several
 may be open together. A reservoir's ``valve_pos`` may therefore name either a
 single channel (``{ibidi: 3}``) or a list (``{ibidi: [1, 3]}``); in both cases
 every channel *not* listed is closed.
+
+Switching **one valve at a time** is the default (``batch_valves=False``).
+``SETBATCHVALVES`` actuates every changing valve simultaneously, whose inrush
+current exceeds what the unit can supply, so some valves silently fail to
+move. The sequential path issues one ``SET:Valve`` per channel spaced by
+``switch_delay`` seconds. Set ``batch_valves=True`` to go back to the single
+atomic command once the hardware supports it.
 """
 from __future__ import annotations
 
@@ -54,6 +67,15 @@ from PycroFlow.hal.valves import Valve as _ValveABC
 
 DEVICE_ID = "MX"
 TERMINATOR = ";"
+
+#: Wire encoding of a valve state: the bit is inverted with respect to flow.
+#: ``SET:Valve:<v>:0`` *opens* the valve; ``:1`` closes it.
+WIRE_OPEN = 0
+WIRE_CLOSED = 1
+
+#: Seconds between consecutive single-valve commands when switching
+#: sequentially, so their actuation currents do not overlap.
+DEFAULT_SWITCH_DELAY = 0.01
 
 
 class IbidiMultiplexer(_ValveABC):
@@ -79,6 +101,14 @@ class IbidiMultiplexer(_ValveABC):
     connect : bool, default: True
         Open the serial port and verify the device id on construction. Pass
         ``False`` to build the object without I/O (mainly for tests).
+    batch_valves : bool, default: False
+        Switch every valve with one atomic ``SETBATCHVALVES``. Off by
+        default: the simultaneous inrush current exceeds what the unit can
+        supply, so some valves do not actuate. Turn back on when the
+        hardware can drive it — the routing is identical either way.
+    switch_delay : float, default: 0.01
+        Seconds between consecutive single-valve commands in the sequential
+        path, spreading the actuation current. Ignored when batching.
     """
 
     def __init__(
@@ -90,11 +120,15 @@ class IbidiMultiplexer(_ValveABC):
         address="ibidi",
         line_ending="",
         connect=True,
+        batch_valves=False,
+        switch_delay=DEFAULT_SWITCH_DELAY,
         **kwargs,
     ):
         self.address = address
         self.channels = int(channels)
         self.line_ending = line_ending
+        self.batch_valves = bool(batch_valves)
+        self.switch_delay = float(switch_delay)
         self._lock = threading.Lock()
         self._serial = None
 
@@ -105,7 +139,8 @@ class IbidiMultiplexer(_ValveABC):
         self.pause_flag = threading.Event()
         self.abort_flag = threading.Event()
 
-        # Last commanded channel states (1-based index -> bool), best effort.
+        # Last commanded channel states, best effort: index i holds whether
+        # channel i+1 is OPEN (flowing), not the inverted wire bit.
         self.channel_states = [False] * self.channels
 
         if connect:
@@ -213,27 +248,56 @@ class IbidiMultiplexer(_ValveABC):
         return self._command("RDSTAT={}".format(int(drv_idx)))
 
     # -- channel control ------------------------------------------------------
+    def open_all(self):
+        """Open every channel, one valve at a time (or batched)."""
+        return self.apply_states([True] * self.channels)
+
+    def close_all(self):
+        """Close every channel, one valve at a time (or batched)."""
+        return self.apply_states([False] * self.channels)
+
     def set_all(self):
-        """Turn all channels ON (``SETALL``)."""
+        """Send the raw ``SETALL`` firmware command.
+
+        Kept as a firmware pass-through. Prefer :meth:`close_all` /
+        :meth:`open_all`: only the per-valve polarity is confirmed
+        (:data:`WIRE_OPEN`), and this actuates all 24 valves at once — the
+        very thing the unit's supply cannot sustain. The resulting state is
+        therefore recorded as unknown.
+        """
         reply = self._command("SETALL")
-        if self._ok(reply):
-            self.channel_states = [True] * self.channels
+        self._invalidate_states("SETALL")
         return reply
 
     def unset_all(self):
-        """Turn all channels OFF (``UNSETALL``)."""
+        """Send the raw ``UNSETALL`` firmware command (see :meth:`set_all`)."""
         reply = self._command("UNSETALL")
-        if self._ok(reply):
-            self.channel_states = [False] * self.channels
+        self._invalidate_states("UNSETALL")
         return reply
 
-    def set_channel(self, channel, state):
-        """Set a single channel (1-based) ON/OFF (``SET:Valve:<v>:<s>``)."""
+    def _invalidate_states(self, command):
+        """Forget the cached states after a command with unverified effect."""
+        logger.debug(
+            "ibidi {} sent; cached channel states are now unknown until the "
+            "next select()".format(command))
+        self.channel_states = [None] * self.channels
+
+    def set_channel(self, channel, open_):
+        """Open or close a single channel (``SET:Valve:<v>:<s>``).
+
+        Parameters
+        ----------
+        channel : int
+            Channel to actuate (1..``channels``).
+        open_ : bool
+            True to open (let liquid through), False to close. Inverted onto
+            the wire — the device opens on ``0`` (:data:`WIRE_OPEN`).
+        """
         self._check_channel(channel)
-        bit = 1 if state else 0
+        bit = WIRE_OPEN if open_ else WIRE_CLOSED
         reply = self._command("SET:Valve:{}:{}".format(channel, bit))
         if self._ok(reply):
-            self.channel_states[channel - 1] = bool(state)
+            self.channel_states[channel - 1] = bool(open_)
         else:
             raise RuntimeError(
                 "ibidi SET:Valve:{}:{} failed: {!r}".format(
@@ -243,9 +307,18 @@ class IbidiMultiplexer(_ValveABC):
         return reply
 
     def set_batch(self, states):
-        """Set all channels at once from a sequence of 24 truthy/falsy values.
+        """Set all channels at once from a sequence of open/closed flags.
 
-        Sends one ``SETBATCHVALVES=<csv>`` command (atomic on the device).
+        Sends one ``SETBATCHVALVES=<csv>`` command (atomic on the device),
+        with the bits inverted (:data:`WIRE_OPEN`). Note the hardware caveat
+        in the module docstring: actuating many valves simultaneously draws
+        more current than the unit supplies, so some may not move. Reach it
+        through :meth:`apply_states` rather than calling it directly.
+
+        Parameters
+        ----------
+        states : sequence of bool
+            One flag per channel; True = open.
         """
         states = list(states)
         if len(states) != self.channels:
@@ -254,13 +327,56 @@ class IbidiMultiplexer(_ValveABC):
                     self.channels, len(states)
                 )
             )
-        csv = ",".join("1" if s else "0" for s in states)
+        csv = ",".join(
+            str(WIRE_OPEN if s else WIRE_CLOSED) for s in states)
         reply = self._command("SETBATCHVALVES={}".format(csv))
         if not self._ok(reply):
             raise RuntimeError(
                 "ibidi SETBATCHVALVES failed: {!r}".format(reply)
             )
         self.channel_states = [bool(s) for s in states]
+        return reply
+
+    def apply_states(self, states):
+        """Drive every channel to ``states`` (True = open).
+
+        Uses one atomic ``SETBATCHVALVES`` when ``batch_valves`` is set,
+        otherwise switches one valve at a time — see the module docstring
+        for why sequential is the default.
+
+        Parameters
+        ----------
+        states : sequence of bool
+            One flag per channel; True = open.
+
+        Returns
+        -------
+        str
+            The reply of the last command sent.
+        """
+        states = list(states)
+        if len(states) != self.channels:
+            raise ValueError(
+                "expected {} channel states, got {}".format(
+                    self.channels, len(states)))
+        if self.batch_valves:
+            return self.set_batch(states)
+        return self._apply_states_sequentially(states)
+
+    def _apply_states_sequentially(self, states):
+        """Switch one valve at a time, closing before opening.
+
+        Closing first means no moment where an old feed path and the new one
+        are open together, and spacing the commands by ``switch_delay``
+        keeps the actuation currents from overlapping.
+        """
+        order = [(ch, False) for ch, s in enumerate(states, 1) if not s]
+        order += [(ch, True) for ch, s in enumerate(states, 1) if s]
+        reply = ""
+        for i, (channel, open_) in enumerate(order):
+            if i and self.switch_delay > 0:
+                time.sleep(self.switch_delay)
+            reply = self.set_channel(channel, open_)
         return reply
 
     def select(self, channel):
@@ -270,7 +386,8 @@ class IbidiMultiplexer(_ValveABC):
         a time — the multiplexer's 24 valves are independent, so a reservoir
         may be reached through several channels open at once (e.g. a shared
         feed line). Passing a sequence opens exactly those and closes every
-        other channel, in one atomic ``SETBATCHVALVES``.
+        other channel — one valve at a time by default, see
+        :meth:`apply_states`.
 
         Parameters
         ----------
@@ -281,13 +398,13 @@ class IbidiMultiplexer(_ValveABC):
         Returns
         -------
         str
-            The device reply.
+            The device reply of the last command sent.
         """
         channels = self._as_channels(channel)
         states = [False] * self.channels
         for ch in channels:
             states[ch - 1] = True
-        return self.set_batch(states)
+        return self.apply_states(states)
 
     def _as_channels(self, channel):
         """Normalise an int / sequence of ints to a validated channel list."""
