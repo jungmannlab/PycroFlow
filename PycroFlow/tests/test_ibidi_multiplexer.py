@@ -210,6 +210,25 @@ class IbidiLegacyArchitectureIntegrationTest(unittest.TestCase):
         self.assertEqual(
             [i for i, s in enumerate(fake.channels, 1) if s], [1])
 
+    def test_manual_set_valves_reaches_undesigned_reservoirs(self):
+        # Manual hardware testing must reach every reservoir the SETUP wires,
+        # not just the ones the loaded design happens to name.
+        from PycroFlow.services import SystemService
+
+        svc = SystemService()
+        svc.load_setup('IbidiEmulator')
+        fs = svc.connect_fluid({'settings': {
+            'reservoir_names': {1: 'imager1'},
+            'special_names': {'flushbuffer_a': 5}}})
+        self.assertEqual(sorted(fs.reservoir_a.keys()), [1, 5])
+
+        svc.set_valves(8)   # wired in the setup, absent from the design
+        self.assertEqual(
+            [i for i, s in enumerate(fs.multiplexer.channel_states, 1) if s],
+            [8])
+        with self.assertRaises(KeyError):
+            svc.set_valves(99)   # wired nowhere
+
     def test_set_valves_routes_through_multiplexer(self):
         la, fake = self._build()
         # The fake serial persists on the constructed multiplexer after the

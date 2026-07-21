@@ -317,6 +317,40 @@ class TestSystemService(unittest.TestCase):
             svc.connect_illumination()
         IS.assert_called_once_with(setup="Mercury")
 
+    def test_describe_route_names_the_valves_and_channels(self):
+        # The manual controls show what routing to a reservoir will do.
+        svc = SystemService()
+        setup = svc.load_setup('IbidiEmulator')
+        setup['fluid']['reservoirs'] = [
+            {'id': 8, 'valve_pos': {'ibidi': [1, 6, 7, 8], 1: 'in'}}]
+        text = svc.describe_reservoir_route(8)
+        self.assertIn('ibidi multiplexer opens channels 1, 6, 7, 8', text)
+        self.assertIn('all others closed', text)   # unlike a rotary valve
+        self.assertIn('pump_a', text)
+        # Without a fluid system the design cannot be using it.
+        self.assertIn('not used by the design', text)
+
+    def test_describe_route_for_hamilton_valves(self):
+        svc = SystemService()
+        svc.load_setup('Mercury')
+        text = svc.describe_reservoir_route(14)
+        self.assertIn('MVP valve 3', text)
+        self.assertIn('MVP valve 5', text)
+
+    def test_describe_route_unwired_and_no_setup(self):
+        svc = SystemService()
+        self.assertIn('No setup', svc.describe_reservoir_route(1))
+        svc.load_setup('Mercury')
+        self.assertIn('not wired', svc.describe_reservoir_route(999))
+
+    def test_reservoir_route_returns_the_valve_map(self):
+        svc = SystemService()
+        setup = svc.load_setup('IbidiEmulator')
+        setup['fluid']['reservoirs'] = [
+            {'id': 3, 'valve_pos': {'ibidi': [1, 3], 1: 'in'}}]
+        self.assertEqual(svc.reservoir_route(3)['ibidi'], [1, 3])
+        self.assertEqual(svc.reservoir_route(4), {})
+
     def test_connect_fluid_requires_setup(self):
         svc = SystemService()
         with self.assertRaises(RuntimeError):

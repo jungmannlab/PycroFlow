@@ -1685,10 +1685,36 @@ class LegacyArchitecture(AbstractSystem):
             valve_positions = self.reservoir_a.get_reservoir_valve_positions(
                 reservoir_id
             )
-            for valve, pos in valve_positions.items():
-                self.valve_a[valve].set_valve(pos)
+            self.set_valve_positions(valve_positions)
         else:
             raise NotImplementedError('Legacy system only has fluid path "a".')
+
+    def set_valve_positions(self, valve_positions):
+        """Drive the valves to an explicit ``{valve address: position}`` map.
+
+        The routing step of :meth:`_set_valves`, split out so a caller that
+        already knows the positions can use it — manual hardware control
+        reaches *any* reservoir wired in the setup's manifold, not only the
+        subset the loaded experiment design happens to name.
+
+        Parameters
+        ----------
+        valve_positions : dict
+            Maps a valve address (as used in a reservoir's ``valve_pos``) to
+            the position for it. An ibidi multiplexer position may be a list
+            of channels.
+
+        Raises
+        ------
+        KeyError
+            A valve address is not wired in this system.
+        """
+        for valve, pos in valve_positions.items():
+            if valve not in self.valve_a:
+                raise KeyError(
+                    "valve {!r} is not wired in this system (have {})".format(
+                        valve, sorted(self.valve_a, key=str)))
+            self.valve_a[valve].set_valve(pos)
 
     def _flush(self, flushfactor=1):
         """Flush the tubing up to the flush valve with the flush buffer.
