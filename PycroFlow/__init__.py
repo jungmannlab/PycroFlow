@@ -39,6 +39,9 @@ _LOG_FORMAT = (
 
 
 _LOGGING_CONFIGURED = False
+# The arguments the last setup_logging() call used, so redirect_logging() can
+# re-install the same sinks in a different directory.
+_LOG_CONFIG = {}
 
 
 def log_filter(record):
@@ -108,6 +111,9 @@ def setup_logging(logfile='pycroflow.log', clean_old=False,
         Path for the pyHamilton-only log file, or None to skip it.
     """
     global _LOGGING_CONFIGURED
+    _LOG_CONFIG.update(
+        logfile=logfile, stderr_level=stderr_level,
+        hamilton_logfile=hamilton_logfile)
     if clean_old:
         clean_old_logs(prefix=logfile)
         if hamilton_logfile:
@@ -134,6 +140,59 @@ def setup_logging(logfile='pycroflow.log', clean_old=False,
         )
     logger.add(sys.stderr, format=_LOG_FORMAT, level=stderr_level)
     _LOGGING_CONFIGURED = True
+
+
+def redirect_logging(directory):
+    """Move the log files into ``directory``, keeping the same sink setup.
+
+    Frontends configure logging at startup, before any experiment is loaded,
+    so the log files land wherever the app was launched from — typically the
+    source checkout. Once the acquisition folder is known, the run's logs
+    belong *with the data* they describe, so they can be read (and mined for
+    timings) alongside the images.
+
+    Lines written before this call stay in the startup log; the new log
+    records where it continued from. No-op unless :func:`setup_logging` has
+    been called (a library user's sinks are theirs to manage).
+
+    Parameters
+    ----------
+    directory : str
+        Target folder for the log files. Created if missing.
+
+    Returns
+    -------
+    str or None
+        The absolute path of the new main log file, or None if logging was
+        not configured or the redirect failed.
+    """
+    if not _LOGGING_CONFIGURED:
+        return None
+    directory = os.path.abspath(directory)
+    logfile = os.path.join(directory, os.path.basename(
+        _LOG_CONFIG.get('logfile') or 'pycroflow.log'))
+    if os.path.abspath(_LOG_CONFIG.get('active_logfile') or '') == logfile:
+        return logfile   # already logging there
+    hamilton = _LOG_CONFIG.get('hamilton_logfile')
+    if hamilton:
+        hamilton = os.path.join(directory, os.path.basename(hamilton))
+    try:
+        os.makedirs(directory, exist_ok=True)
+        previous = _LOG_CONFIG.get('active_logfile') or _LOG_CONFIG.get(
+            'logfile')
+        setup_logging(
+            logfile=logfile, clean_old=False,
+            stderr_level=_LOG_CONFIG.get('stderr_level', 'ERROR'),
+            hamilton_logfile=hamilton)
+    except OSError as exc:
+        # A bad/unwritable save_dir must not take the logging down with it.
+        logger.warning(
+            "could not move logs to {}: {!r}; still logging to {}".format(
+                directory, exc, _LOG_CONFIG.get('active_logfile')))
+        return None
+    _LOG_CONFIG['active_logfile'] = logfile
+    logger.info("Log continued from {}", previous)
+    return logfile
 
 
 # Back-compat shims for any caller that imported the old names.

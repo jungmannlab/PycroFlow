@@ -197,6 +197,14 @@ class TubingConfig:
             while searching:
                 segment = [k for k in self.config.keys() if k[0] == segstart]
                 logger.debug("found segment {:s}".format(str(segment)))
+                if not segment:
+                    # A reservoir wired in the manifold but missing from the
+                    # tubing config dead-ends here; say so rather than
+                    # raising IndexError deep in a volume calculation.
+                    raise KeyError(
+                        "no tubing segment leaves {!r} on the way from {!r} "
+                        "to {!r}; add it to the setup's fluid.tubing".format(
+                            segstart, res, path[1]))
                 segment = segment[0]
                 vol += self.config[segment]
                 if segment[1] == path[1]:

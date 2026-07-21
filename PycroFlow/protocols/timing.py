@@ -23,6 +23,13 @@ from __future__ import annotations
 # Subsystems that may carry timed work, in display order.
 _SYSTEMS = ('fluid', 'img', 'illu')
 
+#: Marker prefixing the per-step timing records written to the run log by
+#: ``AbstractSystemHandler._log_step_timing``. Each tagged line is followed by
+#: a JSON object holding the measured and estimated duration of one step;
+#: :mod:`PycroFlow.protocols.timing_analysis` mines them to score and improve
+#: the estimates below.
+STEP_TIMING_TAG = 'STEP_TIMING'
+
 
 def estimate_entry_duration(entry, parameters=None):
     """Estimate one protocol entry's wall-clock duration, in seconds.
