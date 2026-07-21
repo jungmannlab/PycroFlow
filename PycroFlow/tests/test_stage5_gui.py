@@ -1170,6 +1170,41 @@ class TestSchemaForm(unittest.TestCase):
         self.assertEqual(form.to_dict()["laser"], 642)
         self.assertIsInstance(form.to_dict()["laser"], int)
 
+    def test_laser_stays_typeable_without_monet_lasers(self):
+        # A monet config that declares no lasers (or no setup loaded) must
+        # not lock the field: the dropdown is editable, so any wavelength
+        # can still be entered.
+        from PycroFlow.gui.widgets.schema_form import SchemaForm
+        from PycroFlow.schemas.experiment_design import IlluSettings
+        form = SchemaForm(IlluSettings, {'laser': 642, 'power_acq': 70},
+                          context={'lasers': []})
+        ed = form.field_editor('laser')
+        self.assertTrue(ed._combo.isEditable())
+        ed._combo.setCurrentText('750')
+        self.assertEqual(form.to_dict()['laser'], 750)
+
+    def test_setup_options_refresh_into_live_form(self):
+        # Picking/switching a setup after a design is loaded must refresh the
+        # setup-derived dropdowns in place, not leave them stale.
+        from PycroFlow.services import ExperimentService
+        from PycroFlow.gui.tabs.experiment_design_tab import (
+            ExperimentDesignTab)
+        lasers = []
+        tab = ExperimentDesignTab(
+            ExperimentService(), laser_options_provider=lambda: list(lasers),
+            reservoir_ids_provider=lambda: [1, 2])
+        tab._set_form({'base_name': 'x',
+                       'illu': {'settings': {'laser': 642, 'power_acq': 70}}})
+        illu = tab._form.field_editor('illu')
+        ed = illu._form.field_editor('settings')._form.field_editor('laser')
+        self.assertEqual(
+            [ed._combo.itemText(i) for i in range(ed._combo.count())], ['642'])
+        lasers[:] = [488, 561, 640]
+        tab.refresh_setup_options()
+        self.assertEqual(
+            [ed._combo.itemText(i) for i in range(ed._combo.count())],
+            ['488', '561', '640', '642'])
+
     def test_imager_dropdowns_update_live_on_reservoir_edit(self):
         from PycroFlow.gui.widgets.schema_form import SchemaForm
         from PycroFlow.schemas.experiment_design import FluidSettings

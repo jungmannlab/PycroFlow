@@ -123,6 +123,23 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             "lasers": self._call_provider(self._laser_options_provider),
         }
 
+    def refresh_setup_options(self):
+        """Re-publish the setup-derived dropdown options into the live form.
+
+        ``reservoir_ids`` and ``lasers`` come from the loaded microscope
+        setup, which can change *after* a design was loaded (picking or
+        switching a setup in the toolbar). Publishing them into the form
+        context refreshes the subscribed dropdowns in place, so they never
+        show a previous setup's options — or none at all.
+        """
+        if self._form is None:
+            return
+        ctx = self._form.context
+        ctx.set_options(
+            'reservoir_ids', self._call_provider(self._reservoir_ids_provider))
+        ctx.set_options(
+            'lasers', self._call_provider(self._laser_options_provider))
+
     @staticmethod
     def _call_provider(provider):
         if provider is None:

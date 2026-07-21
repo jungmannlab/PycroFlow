@@ -49,7 +49,9 @@ def _field(default=..., *, alias=None, default_factory=None, **extra):
     schema-driven GUI editor reads it to render richer inputs. Recognised
     keys: ``unit`` (label), ``choices`` (static dropdown options),
     ``choices_from`` (dropdown options from an editor *context* key),
-    ``allow_none`` (add a blank → None option), ``tooltip``, and for mappings
+    ``allow_none`` (add a blank → None option), ``allow_custom`` (the
+    dropdown is editable, so a value outside the option set — or any value
+    when the set is unknown — can be typed), ``tooltip``, and for mappings
     ``columns`` / ``display_value_first`` / ``key_choices_from`` /
     ``value_choices_from``. ``default=...`` (the pydantic sentinel) marks a
     required field.
@@ -282,10 +284,13 @@ class ImgSection(BaseModel):
 
 class IlluSettings(BaseModel):
     model_config = _CFG
-    laser: int = _field(choices_from="lasers")
-    power_acq: float = _unit(unit="mW")
-    power_nonacq: Optional[float] = _unit(None, "mW")
-    warmup_delay: float = _unit(0, "s")
+    laser: int = _field(
+        choices_from='lasers', allow_custom=True,
+        tooltip=("Laser line (nm). The dropdown lists the lines the setup's "
+                 "monet config declares; any other value can be typed in."))
+    power_acq: float = _unit(unit='mW')
+    power_nonacq: Optional[float] = _unit(None, 'mW')
+    warmup_delay: float = _unit(0, 's')
     shutter_off_nonacq: bool = False
     lasers_off_finally: bool = False
 

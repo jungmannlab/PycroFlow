@@ -11,6 +11,18 @@ from __future__ import annotations
 from loguru import logger
 
 
+def _as_wavelength(value):
+    """Return ``value`` as an int wavelength if it parses, else unchanged.
+
+    monet config keys may be YAML ints (``640``) or strings (``'640'``); the
+    experiment design's ``laser`` field is an int.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
 def _load_yaml_or_dict(config):
     """Return ``config`` as a dict: load YAML if a path, else pass through.
 
@@ -118,28 +130,52 @@ class SystemService:
     def laser_options(self) -> list:
         """Laser lines (wavelengths) defined in the setup's monet config.
 
-        Empty when no setup is loaded or monet/the config is unavailable
-        (e.g. monet not installed or mocked in tests). Used by the GUI to
-        offer the experiment design's ``laser`` field as a dropdown.
+        monet configs come in two shapes: a multi-laser one with a ``lasers``
+        mapping keyed by wavelength, and a single-laser one that names its
+        line in ``index[monet.LASER_TAG]`` only. Both are read here, so the
+        GUI's laser dropdown is populated either way.
+
+        Returns
+        -------
+        list
+            Wavelengths (ints where they parse as such), sorted. Empty when
+            no setup is loaded, monet/the config is unavailable (not
+            installed, or mocked in tests), or the config names no laser —
+            the design's ``laser`` field stays typeable in that case.
         """
         name = self.get_monet_setup()
         if not name:
             return []
         try:
             import monet
-        except Exception:
+        except Exception as exc:
+            logger.debug("no laser options: monet import failed: {!r}".format(
+                exc))
             return []
         configs = getattr(monet, "CONFIGS", None)
         if not isinstance(configs, dict):
+            logger.debug("no laser options: monet.CONFIGS is unavailable")
             return []
-        lasers = (
-            (configs.get(name) or {}).get("lasers")
-            if isinstance(configs.get(name), dict)
-            else None
-        )
-        if not isinstance(lasers, dict):
+        mconfig = configs.get(name)
+        if not isinstance(mconfig, dict):
+            logger.warning(
+                "no laser options: monet config {!r} not found (have: "
+                "{})".format(name, sorted(configs)))
             return []
-        return sorted(lasers.keys())
+
+        lasers = mconfig.get('lasers')
+        if isinstance(lasers, dict) and lasers:
+            return sorted(_as_wavelength(k) for k in lasers)
+        # Single-laser config: the line lives in the database index instead.
+        index = mconfig.get('index')
+        tag = getattr(monet, 'LASER_TAG', 'wavelength [nm]')
+        if isinstance(index, dict) and index.get(tag) is not None:
+            return [_as_wavelength(index[tag])]
+        logger.warning(
+            "monet config {!r} declares no lasers (neither a 'lasers' "
+            "mapping nor index[{!r}]); the design's laser field stays "
+            "free-text".format(name, tag))
+        return []
 
     # --- Connection ----------------------------------------------------
 

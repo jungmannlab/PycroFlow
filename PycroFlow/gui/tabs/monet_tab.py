@@ -29,8 +29,23 @@ class MonetTab(QWidget):
         self._layout = QVBoxLayout(self)
         # PycroFlow's own illumination-system connection status (distinct from
         # monet's embedded laser GUI below).
-        self._illu_status = QLabel("PycroFlow illumination: not connected")
+        self._illu_status = QLabel()
         self._layout.addWidget(self._illu_status)
+        # There are two independent connections to the same lasers on this
+        # tab, which is easy to misread — spell out which is which.
+        self._explainer = QLabel(
+            "Two separate connections to the same lasers live here:\n"
+            "  • PycroFlow illumination (status above) — used by an "
+            "experiment run. It only checks the monet config on Connect; "
+            "the lasers open on first use.\n"
+            "  • monet's own Connect (below) — manual control between runs. "
+            "It opens the lasers immediately.\n"
+            "Only one may hold the laser ports at a time, so monet's "
+            "controls are disabled while an experiment runs.")
+        self._explainer.setWordWrap(True)
+        self._explainer.setStyleSheet("color: gray;")
+        self._layout.addWidget(self._explainer)
+        self.set_illumination_status("not connected")
         self._embed_container = QWidget()
         self._embed_layout = QVBoxLayout(self._embed_container)
         self._embed_layout.setContentsMargins(0, 0, 0, 0)
@@ -49,7 +64,10 @@ class MonetTab(QWidget):
 
     def set_illumination_status(self, text):
         """Show the PycroFlow illumination-system connection status."""
-        self._illu_status.setText("PycroFlow illumination: {}".format(text))
+        scope = (" (monet config: {})".format(self._setup_name)
+                 if self._setup_name else "")
+        self._illu_status.setText(
+            "PycroFlow illumination: {}{}".format(text, scope))
 
     def set_run_lock(self, locked):
         """Disable the embedded monet GUI during an experiment run.
