@@ -193,9 +193,17 @@ class _ListScalarEditor(QWidget):
 
 
 class _ChoiceEditor(QWidget):
-    """A dropdown for a string field with a fixed/contextual option set."""
+    """A dropdown for a string field with a fixed/contextual option set.
 
-    def __init__(self, options, value, allow_none, ann=str, parent=None):
+    With ``allow_custom`` the combo is editable, so a value outside the
+    option set can be typed. That matters when the options come from an
+    external source that may not know them all (e.g. the laser lines a
+    setup's monet config declares) — otherwise an empty option set would
+    leave the field unchangeable.
+    """
+
+    def __init__(self, options, value, allow_none, ann=str, parent=None,
+                 allow_custom=False):
         super().__init__(parent)
         self.is_block = False
         self._allow_none = allow_none
@@ -207,6 +215,10 @@ class _ChoiceEditor(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         self._combo = QComboBox()
+        self._combo.setEditable(allow_custom)
+        if allow_custom:
+            # Typing a value must not silently add it to the option list.
+            self._combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         if allow_none:
             self._combo.addItem('')   # blank -> None
         self._combo.addItems(opts)
@@ -638,7 +650,9 @@ def _make_editor(ann, optional, value, label, meta, context):
         opts = meta.get('choices')
         if opts is None:
             opts = context.get(key, [])
-        editor = _ChoiceEditor(opts, value, meta.get('allow_none', False), ann)
+        editor = _ChoiceEditor(
+            opts, value, meta.get('allow_none', False), ann,
+            allow_custom=meta.get('allow_custom', False))
         if key is not None and hasattr(context, 'subscribe'):
             context.subscribe(key, editor.set_options)
         return editor
@@ -742,6 +756,15 @@ class SchemaForm(QWidget):
     def field_editor(self, alias):
         """Return the editor widget for a top-level field (None if absent)."""
         return self._editors.get(alias)
+
+    @property
+    def context(self):
+        """The :class:`FormContext` shared down this form tree.
+
+        Exposed so an owner can publish fresh option lists (e.g. after the
+        microscope setup changes) without rebuilding the form.
+        """
+        return self._context
 
     def to_dict(self):
         """Return the edited values as an alias-keyed dict."""

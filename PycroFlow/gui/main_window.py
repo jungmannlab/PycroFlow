@@ -136,6 +136,9 @@ class PycroFlowMainWindow(QMainWindow):
             self._refresh_status()
             return
         self.monet_tab.set_setup(self._system_service.get_monet_setup())
+        # The setup supplies the design editor's reservoir-id and laser
+        # dropdown options; refresh them for the setup just loaded.
+        self.design_tab.refresh_setup_options()
         self._refresh_status()
         # If a design is already loaded, connect for the new setup.
         if self._experiment_service.experiment_design:

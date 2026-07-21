@@ -250,6 +250,27 @@ class TestSystemService(unittest.TestCase):
         with _fake_monet({'Mercury': {'lasers': {640: {}, 488: {}, 561: {}}}}):
             self.assertEqual(svc.laser_options(), [488, 561, 640])
 
+    def test_laser_options_string_keys_become_ints(self):
+        # monet config keys may be YAML strings; the design's laser is an int.
+        svc = SystemService()
+        svc.load_setup('Mercury')
+        with _fake_monet({'Mercury': {'lasers': {'640': {}, '488': {}}}}):
+            self.assertEqual(svc.laser_options(), [488, 640])
+
+    def test_laser_options_from_single_laser_config(self):
+        # A single-laser monet config names its line in index[LASER_TAG]
+        # rather than in a 'lasers' mapping.
+        svc = SystemService()
+        svc.load_setup('Mercury')
+        with _fake_monet({'Mercury': {'index': {'wavelength [nm]': 561}}}):
+            self.assertEqual(svc.laser_options(), [561])
+
+    def test_laser_options_empty_when_config_names_no_laser(self):
+        svc = SystemService()
+        svc.load_setup('Mercury')
+        with _fake_monet({'Mercury': {'powermeter': {}}}):
+            self.assertEqual(svc.laser_options(), [])
+
     def test_laser_options_empty_without_real_config(self):
         # Emulator has no monet config (and monet may be mocked) -> empty.
         svc = SystemService()
