@@ -30,26 +30,22 @@ class IbidiMultiplexerDriverTest(unittest.TestCase):
     def test_is_a_hal_valve(self):
         self.assertTrue(issubclass(IbidiMultiplexer, ValveABC))
 
-    def test_select_is_exclusive_and_atomic(self):
+    def test_select_is_exclusive(self):
         with emu.patch_ibidi_serial() as fake:
-            mx = IbidiMultiplexer('7')
+            mx = IbidiMultiplexer('7', switch_delay=0)
             mx.select(3)
             self.assertEqual(
                 [i for i, s in enumerate(fake.channels, 1) if s], [3])
             mx.select(20)
             self.assertEqual(
                 [i for i, s in enumerate(fake.channels, 1) if s], [20])
-            # exactly one SETBATCHVALVES per select (atomic), no UNSETALL churn
-            batch = [c for c, _ in fake.command_log
-                     if c.startswith('SETBATCHVALVES')]
-            self.assertEqual(len(batch), 2)
             mx.close()
 
     def test_select_multiple_channels_exclusively(self):
         # Unlike a rotary valve, several channels may be open at once — but
-        # everything not listed must still be closed, in one atomic command.
+        # everything not listed must still be closed.
         with emu.patch_ibidi_serial() as fake:
-            mx = IbidiMultiplexer('7')
+            mx = IbidiMultiplexer('7', switch_delay=0)
             mx.select([1, 3])
             self.assertEqual(
                 [i for i, s in enumerate(fake.channels, 1) if s], [1, 3])
@@ -57,9 +53,86 @@ class IbidiMultiplexerDriverTest(unittest.TestCase):
             mx.select([2, 24])
             self.assertEqual(
                 [i for i, s in enumerate(fake.channels, 1) if s], [2, 24])
+            mx.close()
+
+    def test_open_is_wire_zero_close_is_wire_one(self):
+        # The device's bit is inverted with respect to flow: 0 opens.
+        with emu.patch_ibidi_serial() as fake:
+            mx = IbidiMultiplexer('7', switch_delay=0)
+            mx.set_channel(5, True)
+            self.assertIn(('SET:Valve:5:0', 'OK;'), fake.command_log)
+            self.assertTrue(fake.channels[4])
+            self.assertTrue(mx.channel_states[4])
+            mx.set_channel(5, False)
+            self.assertIn(('SET:Valve:5:1', 'OK;'), fake.command_log)
+            self.assertFalse(fake.channels[4])
+            self.assertFalse(mx.channel_states[4])
+            mx.close()
+
+    def test_batch_encodes_inverted_bits(self):
+        with emu.patch_ibidi_serial() as fake:
+            mx = IbidiMultiplexer('7', batch_valves=True)
+            mx.select([1, 3])
             batch = [c for c, _ in fake.command_log
                      if c.startswith('SETBATCHVALVES')]
-            self.assertEqual(len(batch), 2)
+            self.assertEqual(len(batch), 1)
+            bits = batch[0].split('=', 1)[1].split(',')
+            # open channels carry 0, everything else 1
+            self.assertEqual(bits[0], '0')
+            self.assertEqual(bits[2], '0')
+            self.assertEqual(bits[1], '1')
+            self.assertEqual(
+                [i for i, s in enumerate(fake.channels, 1) if s], [1, 3])
+            mx.close()
+
+    def test_sequential_is_the_default_and_closes_before_opening(self):
+        # One valve at a time (the unit cannot actuate many at once), and
+        # never a moment with an old and a new feed path open together.
+        with emu.patch_ibidi_serial() as fake:
+            mx = IbidiMultiplexer('7', switch_delay=0)
+            self.assertFalse(mx.batch_valves)
+            mx.select([2, 4])
+            sets = [c for c, _ in fake.command_log
+                    if c.startswith('SET:Valve')]
+            self.assertFalse([c for c, _ in fake.command_log
+                              if c.startswith('SETBATCHVALVES')])
+            self.assertEqual(len(sets), 24)     # every channel driven
+            opens = [c for c in sets if c.endswith(':0')]
+            self.assertEqual(opens, ['SET:Valve:2:0', 'SET:Valve:4:0'])
+            # all the closes come first
+            self.assertLess(sets.index('SET:Valve:1:1'),
+                            sets.index('SET:Valve:2:0'))
+            mx.close()
+
+    def test_sequential_survives_the_units_current_limit(self):
+        # The regression: a batch command asking many valves to switch at
+        # once only actuates a few, so the route is silently wrong. One at a
+        # time gets there.
+        with emu.patch_ibidi_serial(max_simultaneous=3) as fake:
+            mx = IbidiMultiplexer('7', batch_valves=True)
+            mx.select([1, 6, 7, 8])
+            self.assertNotEqual(
+                [i for i, s in enumerate(fake.channels, 1) if s],
+                [1, 6, 7, 8])           # batch under-actuates
+            mx.close()
+
+        with emu.patch_ibidi_serial(max_simultaneous=3) as fake:
+            mx = IbidiMultiplexer('7', switch_delay=0)
+            mx.select([1, 6, 7, 8])
+            self.assertEqual(
+                [i for i, s in enumerate(fake.channels, 1) if s],
+                [1, 6, 7, 8])           # sequential gets the real route
+            mx.close()
+
+    def test_switch_delay_spaces_the_commands(self):
+        import time as _time
+        with emu.patch_ibidi_serial():
+            mx = IbidiMultiplexer('7', switch_delay=0.002)
+            started = _time.perf_counter()
+            mx.select(1)
+            elapsed = _time.perf_counter() - started
+            # 24 channels -> 23 gaps; allow slack, just prove it waits.
+            self.assertGreater(elapsed, 0.02)
             mx.close()
 
     def test_set_valve_accepts_channel_list(self):
@@ -87,13 +160,24 @@ class IbidiMultiplexerDriverTest(unittest.TestCase):
             self.assertEqual(sum(fake.channels), 1)
             mx.close()
 
-    def test_set_all_unset_all(self):
+    def test_open_all_close_all(self):
         with emu.patch_ibidi_serial() as fake:
+            mx = IbidiMultiplexer('7', switch_delay=0)
+            mx.open_all()
+            self.assertTrue(all(fake.channels))
+            self.assertTrue(all(mx.channel_states))
+            mx.close_all()
+            self.assertFalse(any(fake.channels))
+            self.assertFalse(any(mx.channel_states))
+            mx.close()
+
+    def test_raw_set_all_marks_state_unknown(self):
+        # SETALL/UNSETALL are firmware pass-throughs whose polarity we have
+        # not confirmed on hardware, so the cache must not claim to know.
+        with emu.patch_ibidi_serial():
             mx = IbidiMultiplexer('7')
             mx.set_all()
-            self.assertTrue(all(fake.channels))
-            mx.unset_all()
-            self.assertFalse(any(fake.channels))
+            self.assertTrue(all(s is None for s in mx.channel_states))
             mx.close()
 
     def test_set_single_channel(self):

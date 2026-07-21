@@ -53,6 +53,13 @@ fluid:
     baud: 115200      # device runs 115200 8N1; only ';' terminates a command
     channels: 24
     address: ibidi    # key referenced by each reservoir's valve_pos
+    # Switch one valve at a time. The unit cannot supply the inrush current
+    # of many valves actuating together, so the single atomic SETBATCHVALVES
+    # command leaves some of them unmoved — silently, since it still answers
+    # OK. Set batch_valves: true to go back to it once the hardware allows;
+    # the resulting routing is identical either way.
+    batch_valves: false
+    switch_delay: 0.01   # s between consecutive single-valve commands
   flush_pos:
     inject: in
     flush: out

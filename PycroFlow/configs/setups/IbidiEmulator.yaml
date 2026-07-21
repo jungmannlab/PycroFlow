@@ -49,6 +49,10 @@ fluid:
     baud: 115200     # device runs 115200 8N1; only ';' terminates a command
     channels: 24
     address: ibidi   # key referenced by each reservoir's valve_pos
+    # One valve at a time: the real unit cannot actuate many simultaneously
+    # (SETBATCHVALVES leaves some unmoved). See Ibidi.yaml.
+    batch_valves: false
+    switch_delay: 0.01   # s between consecutive single-valve commands
   flush_pos:
     inject: in
     flush: out
