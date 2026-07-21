@@ -20,6 +20,7 @@ Convenience: :func:`connect_interface` builds an ``ArduinoSensorInterface``
 already attached to a fake (patching out the 2 s init sleep), so a test can poll
 or monitor immediately.
 """
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -64,31 +65,31 @@ class FakeArduinoSerial:
         return len(data)
 
     def readline(self):
-        idx = self._rx.find(b'\n')
+        idx = self._rx.find(b"\n")
         if idx == -1:
             line, self._rx = bytes(self._rx), bytearray()
             return line
-        line = bytes(self._rx[:idx + 1])
-        del self._rx[:idx + 1]
+        line = bytes(self._rx[: idx + 1])
+        del self._rx[: idx + 1]
         return line
 
     # -- protocol -------------------------------------------------------------
     def _reply_for(self, ch):
-        if ch == 'H':
-            return 'HANDSHAKE_OK\n'
-        if ch == 'P':
-            return ('WET' if self.wet else 'DRY') + '\n'
-        if ch == 'B':
-            return 'START_BROADCAST_OK\n'
-        if ch == 'S':
-            return 'STOP_BROADCAST_OK\n'
-        if ch == 'R':
-            return ''
-        return ''
+        if ch == "H":
+            return "HANDSHAKE_OK\n"
+        if ch == "P":
+            return ("WET" if self.wet else "DRY") + "\n"
+        if ch == "B":
+            return "START_BROADCAST_OK\n"
+        if ch == "S":
+            return "STOP_BROADCAST_OK\n"
+        if ch == "R":
+            return ""
+        return ""
 
 
 @contextmanager
-def connect_interface(port='COM-EMU', wet=False):
+def connect_interface(port="COM-EMU", wet=False):
     """Yield a connected ``ArduinoSensorInterface`` backed by a fake serial.
 
     Patches ``serial.Serial`` in the spill-sensor module and ``time.sleep`` so
@@ -99,12 +100,14 @@ def connect_interface(port='COM-EMU', wet=False):
     from PycroFlow import spill_sensor_arduino as ssa
 
     fake = FakeArduinoSerial(wet=wet)
-    with mock.patch.object(ssa.serial, 'Serial', return_value=fake), \
-            mock.patch.object(ssa.time, 'sleep', lambda *a, **k: None):
+    with (
+        mock.patch.object(ssa.serial, "Serial", return_value=fake),
+        mock.patch.object(ssa.time, "sleep", lambda *a, **k: None),
+    ):
         iface = ssa.ArduinoSensorInterface(port=port)
         ok = iface.connect()
         if not ok:
-            raise RuntimeError('emulated Arduino handshake failed')
+            raise RuntimeError("emulated Arduino handshake failed")
         try:
             yield iface
         finally:

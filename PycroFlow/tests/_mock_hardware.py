@@ -13,32 +13,32 @@ Hardware-specific behavior must therefore NOT be tested through these mocks;
 keep hardware integration tests gated on real-SDK availability with
 ``unittest.skipUnless``.
 """
+
 import importlib
 import sys
 from unittest.mock import MagicMock
 
-
 _HARDWARE_MODULES = [
-    'pycromanager',
-    'pycromanager.acquisitions',
-    'pycromanager.acq_util',
-    'pycromanager.zmq_bridge',
-    'monet',
-    'monet.control',
-    'monet.gui',
-    'monet.beampath',
-    'pycobolt',
-    'nidaqmx',
-    'ThorlabsPM100',
-    'pyvisa',
-    'msl',
-    'msl.equipment',
-    'Arduino',
-    'pandas',
-    'lmfit',
-    'matplotlib',
-    'matplotlib.pyplot',
-    'PyHamiltonPSD',
+    "pycromanager",
+    "pycromanager.acquisitions",
+    "pycromanager.acq_util",
+    "pycromanager.zmq_bridge",
+    "monet",
+    "monet.control",
+    "monet.gui",
+    "monet.beampath",
+    "pycobolt",
+    "nidaqmx",
+    "ThorlabsPM100",
+    "pyvisa",
+    "msl",
+    "msl.equipment",
+    "Arduino",
+    "pandas",
+    "lmfit",
+    "matplotlib",
+    "matplotlib.pyplot",
+    "PyHamiltonPSD",
 ]
 
 

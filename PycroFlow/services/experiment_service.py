@@ -11,6 +11,7 @@ up systems (that's the caller's job, typically through
 :class:`SystemService`). It owns the orchestrator instance and the
 protocol that was loaded.
 """
+
 from __future__ import annotations
 
 import enum
@@ -26,8 +27,9 @@ from PycroFlow.orchestration import ProtocolOrchestrator
 
 class ExperimentState(enum.Enum):
     """Lifecycle states observable by frontends."""
+
     IDLE = "idle"
-    LOADED = "loaded"           # protocol parsed, orchestrator not started
+    LOADED = "loaded"  # protocol parsed, orchestrator not started
     # handler threads running, protocol not started
     ORCHESTRATING = "orchestrating"
     RUNNING = "running"
@@ -199,18 +201,20 @@ class ExperimentService:
         proto = self._protocol or {}
         self._orchestrator = ProtocolOrchestrator(
             self._protocol,
-            imaging_system=(
-                self._imaging_system if "img" in proto else None),
-            fluid_system=(
-                self._fluid_system if "fluid" in proto else None),
+            imaging_system=(self._imaging_system if "img" in proto else None),
+            fluid_system=(self._fluid_system if "fluid" in proto else None),
             illumination_system=(
-                self._illumination_system if "illu" in proto else None),
+                self._illumination_system if "illu" in proto else None
+            ),
         )
         self._orchestrator_systems = self._current_systems()
 
     def _current_systems(self):
-        return (self._fluid_system, self._imaging_system,
-                self._illumination_system)
+        return (
+            self._fluid_system,
+            self._imaging_system,
+            self._illumination_system,
+        )
 
     def load_protocol_from_yaml(self, path: str) -> None:
         """Load a protocol from a YAML file (the format produced by
@@ -234,14 +238,17 @@ class ExperimentService:
             # system=None and the protocol silently finishes immediately);
             # skipping it when systems are unchanged preserves an
             # externally-set orchestrator.
-            if (self._state is not ExperimentState.LOADED
-                    or self._current_systems() != self._orchestrator_systems):
+            if (
+                self._state is not ExperimentState.LOADED
+                or self._current_systems() != self._orchestrator_systems
+            ):
                 self._build_orchestrator()
             if not any(self._current_systems()):
                 logger.warning(
                     "Starting with no subsystems connected — the protocol "
                     "will finish immediately. Connect hardware (or the "
-                    "Emulator setup) in the System tab first.")
+                    "Emulator setup) in the System tab first."
+                )
             self._orchestrator.start_orchestration()
             self._set_state(ExperimentState.ORCHESTRATING)
         if self._state in (
@@ -332,15 +339,18 @@ class ExperimentService:
         if self._orchestrator is None or self._protocol is None:
             return {}
         handlers = {
-            'fluid': self._orchestrator.fluid_handler,
-            'img': self._orchestrator.imaging_handler,
-            'illu': self._orchestrator.illumination_handler,
+            "fluid": self._orchestrator.fluid_handler,
+            "img": self._orchestrator.imaging_handler,
+            "illu": self._orchestrator.illumination_handler,
         }
         out = {}
         for key, handler in handlers.items():
             sub = self._protocol.get(key, {})
-            entries = sub.get('protocol_entries', []) if isinstance(
-                sub, dict) else []
+            entries = (
+                sub.get("protocol_entries", [])
+                if isinstance(sub, dict)
+                else []
+            )
             total = len(entries)
             if handler.system is None:
                 cur = total
@@ -363,13 +373,13 @@ class ExperimentService:
         if self._orchestrator is None:
             return {}
         handlers = {
-            'fluid': self._orchestrator.fluid_handler,
-            'img': self._orchestrator.imaging_handler,
-            'illu': self._orchestrator.illumination_handler,
+            "fluid": self._orchestrator.fluid_handler,
+            "img": self._orchestrator.imaging_handler,
+            "illu": self._orchestrator.illumination_handler,
         }
         out = {}
         for key, handler in handlers.items():
-            getter = getattr(handler, 'get_step_progress', None)
+            getter = getattr(handler, "get_step_progress", None)
             out[key] = getter() if getter is not None else None
         return out
 
@@ -408,8 +418,8 @@ class ExperimentService:
         if old is new_state:
             return
         logger.debug(
-            "ExperimentService: {} -> {}".format(
-                old.value, new_state.value))
+            "ExperimentService: {} -> {}".format(old.value, new_state.value)
+        )
         for fn in list(self._state_observers):
             try:
                 fn(old, new_state)

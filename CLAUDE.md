@@ -11,8 +11,8 @@ See `ARCHITECTURE.md` for the package map, `docs/architecture.md` for detail, an
 ## Repository & workflow
 
 - **Active branch:** `feature-FullAutoS0A` (feature branch; PRs target `master`). This repo is one of several checked out under the `DNA-PAINT-FullAutomation` workspace — see the standing pointers below.
-- **Versioning:** the version is hardcoded in `pyproject.toml` (`[project] version`) and is the single source of truth; `PycroFlow.__version__` reads it at runtime via `importlib.metadata.version("PycroFlow")` (falling back to `"0.0.0"` in an uninstalled source tree). To release, bump the number manually in `pyproject.toml` — there is no setuptools-scm / git-tag-driven versioning here.
-- **Changelog:** keep `CHANGELOG.txt` current — add an entry under an `[Unreleased]` heading in every PR that changes behaviour, and promote `[Unreleased]` to a dated, version-stamped section when you bump the version.
+- **Versioning:** driven by `setuptools-scm` from the latest reachable **git tag** (single source of truth — `pyproject.toml` has `dynamic = ["version"]`, no static number). At build/install time scm writes the resolved value into `PycroFlow/_version.py` (git-ignored, generated); `PycroFlow.__init__` imports it (`from ._version import version`), falling back to `importlib.metadata` then `"0.0.0"` in an uninstalled source tree. `[tool.setuptools_scm]` sets `fallback_version` for checkouts with no reachable tag. To release, create an annotated `vX.Y.Z` git tag — do **not** edit a version string.
+- **Changelog:** keep `CHANGELOG.md` (Keep a Changelog format, SemVer) current — add an entry under the `[Unreleased]` heading in every PR that changes behaviour, and promote `[Unreleased]` to a dated, version-stamped section when you cut a release tag.
 
 ### Standing pointers
 
@@ -35,12 +35,12 @@ pip install -e ".[hardware]"   # lab Windows box (real instruments)
 pip install -e ".[gui]"        # PyQt6 for the `pycroflow-gui` frontend
 ```
 Console scripts: `pycroflow` (CLI), `pycroflow-gui` (Qt GUI).
-All metadata and dependencies live in `pyproject.toml`; `setup.py` is a thin shim. There is no `requirements.txt` — its former contents are fully covered by the core `dependencies` plus the `[hardware]` / `[dev]` / `[gui]` extras.
+All metadata, dependencies, and build config live in `pyproject.toml` (canonical — there is no `setup.py`). There is no `requirements.txt` — its former contents are fully covered by the core `dependencies` plus the `[hardware]` / `[dev]` / `[gui]` extras.
 
 ## Configuration
 
 ### Code Style
-- Formatting: Black with 79-char lines. `.flake8` sets `max-line-length = 79` and `extend-ignore = E203, W503` (the Black-compatibility ignores — Black owns line wrapping, so those two pycodestyle rules stay off; note `E501` is *not* ignored here). `ruff` and `mypy` are available via the `[dev]` extra but are not yet wired into CI.
+- Formatting: Black with 79-char lines. Lint config lives in `pyproject.toml`: `[tool.black]` (`line-length = 79`, `target-version = ["py310"]`) and `[tool.flake8]` (read via the Flake8-pyproject plugin; `max-line-length = 79`, `extend-ignore = E203,E501,W503`). Black owns line wrapping, so **E501 is ignored** (matching the rest of the DNA-PAINT stack); E203/W503 are the standard Black-compatibility ignores. The generated `_version.py` is excluded. `black --check` + `flake8` run in CI and via `.pre-commit-config.yaml` (Black + flake8 + pre-commit-hooks). `ruff` and `mypy` are available via the `[dev]` extra but are not yet wired into CI.
 - Docstring convention: NumPy style (numpydoc) — one-line imperative
   summary, then `Parameters` / `Returns` / `Raises` / `Notes` sections with
   dashed underlines and `name : type` fields. Pair with PEP 604 type hints in

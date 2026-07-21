@@ -160,7 +160,8 @@ class ProtocolBuilder:
         for system in protocol.values():
             entries = system["protocol_entries"]
             system["protocol_entries"] = [
-                entry for entry in entries
+                entry
+                for entry in entries
                 if not (
                     entry.get("$type") == "wait for signal"
                     and entry.get("target") not in present
@@ -251,7 +252,12 @@ class ProtocolBuilder:
         return getattr(self, method_name)(config)
 
     def create_stepset_acquisition(
-        self, illusttg, imgsttg, unique_name, readable_name, fluid_wait=True,
+        self,
+        illusttg,
+        imgsttg,
+        unique_name,
+        readable_name,
+        fluid_wait=True,
         name=None,
     ):
         """Create the step set for an acquisition.

@@ -5,14 +5,25 @@ Load / Save a design YAML, edit it field-by-field (incl. the nested SPH-RESI
 target / RESI rounds), and **Translate** it into the Run Sequence tab via
 :meth:`PycroFlow.services.ExperimentService.translate`.
 """
+
 import os
 
 import yaml
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
-    QFileDialog, QMessageBox, QAbstractButton, QCheckBox, QComboBox,
-    QLineEdit, QAbstractSpinBox,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QFileDialog,
+    QMessageBox,
+    QAbstractButton,
+    QCheckBox,
+    QComboBox,
+    QLineEdit,
+    QAbstractSpinBox,
 )
 
 from PycroFlow.schemas.experiment_design import ExperimentDesign
@@ -21,9 +32,15 @@ from PycroFlow.gui.widgets.dnd import YamlDropMixin
 
 
 class ExperimentDesignTab(YamlDropMixin, QWidget):
-    def __init__(self, experiment_service, on_translated=None,
-                 on_design_loaded=None, reservoir_ids_provider=None,
-                 laser_options_provider=None, parent=None):
+    def __init__(
+        self,
+        experiment_service,
+        on_translated=None,
+        on_design_loaded=None,
+        reservoir_ids_provider=None,
+        laser_options_provider=None,
+        parent=None,
+    ):
         super().__init__(parent)
         self._svc = experiment_service
         self._on_translated = on_translated
@@ -46,8 +63,12 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
         self.save_btn = QPushButton("Save…")
         self.clear_btn = QPushButton("Clear")
         self.translate_btn = QPushButton("Translate → Run Sequence")
-        for b in (self.load_btn, self.save_btn, self.clear_btn,
-                  self.translate_btn):
+        for b in (
+            self.load_btn,
+            self.save_btn,
+            self.clear_btn,
+            self.translate_btn,
+        ):
             controls.addWidget(b)
         # Estimated run time, recomputed live from the current (unsaved)
         # design whenever a field changes — see _connect_estimate_signals.
@@ -78,7 +99,8 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
 
     def _set_form(self, data):
         self._form = SchemaForm(
-            ExperimentDesign, data, context=self._editor_context(data))
+            ExperimentDesign, data, context=self._editor_context(data)
+        )
         self.scroll.setWidget(self._form)
         self._wire_save_dir_hint()
         self._connect_estimate_signals()
@@ -93,12 +115,12 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
         reservoir-id inputs, and ``lasers`` (from the setup's monet config)
         the laser dropdown (both snapshot at form-build time).
         """
-        settings = ((data or {}).get('fluid', {}) or {}).get('settings', {})
-        names = list((settings.get('reservoir_names') or {}).values())
+        settings = ((data or {}).get("fluid", {}) or {}).get("settings", {})
+        names = list((settings.get("reservoir_names") or {}).values())
         return {
-            'reservoir_names': names,
-            'reservoir_ids': self._call_provider(self._reservoir_ids_provider),
-            'lasers': self._call_provider(self._laser_options_provider),
+            "reservoir_names": names,
+            "reservoir_ids": self._call_provider(self._reservoir_ids_provider),
+            "lasers": self._call_provider(self._laser_options_provider),
         }
 
     @staticmethod
@@ -120,7 +142,7 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
         already-absolute path.
         """
         self._save_dir_hint = None
-        editor = self._form.field_editor('save_dir')
+        editor = self._form.field_editor("save_dir")
         line = editor.line_edit() if editor is not None else None
         if line is None:
             return
@@ -133,7 +155,7 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             if os.path.isabs(text):
                 hint.setText("")
             else:
-                hint.setText("→ {}".format(os.path.abspath(text or '.')))
+                hint.setText("→ {}".format(os.path.abspath(text or ".")))
 
         line.textChanged.connect(update)
         update(line.text())
@@ -142,15 +164,18 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
 
     def _on_load(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load experiment design", "", "YAML files (*.yaml *.yml)")
+            self, "Load experiment design", "", "YAML files (*.yaml *.yml)"
+        )
         if path:
             self.load_design_path(path)
 
     def _on_clear(self):
         reply = QMessageBox.question(
-            self, "Clear experiment design",
+            self,
+            "Clear experiment design",
             "Discard the current experiment design and reset the editor to "
-            "an empty design? Unsaved changes will be lost.")
+            "an empty design? Unsaved changes will be lost.",
+        )
         if reply == QMessageBox.StandardButton.Yes:
             self._svc.clear_design()
             self._set_form({})
@@ -161,7 +186,8 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             self._svc.load_experiment_design(path)
         except Exception as exc:
             QMessageBox.critical(
-                self, "Invalid experiment design", "{}".format(exc))
+                self, "Invalid experiment design", "{}".format(exc)
+            )
             return
         self._set_form(self._svc.experiment_design)
         if self._on_design_loaded is not None:
@@ -175,23 +201,23 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             model = self._form.to_model()
         except Exception as exc:
             QMessageBox.warning(
-                self, "Cannot save — invalid design", "{}".format(exc))
+                self, "Cannot save — invalid design", "{}".format(exc)
+            )
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save experiment design", "", "YAML files (*.yaml *.yml)")
+            self, "Save experiment design", "", "YAML files (*.yaml *.yml)"
+        )
         if not path:
             return
         with open(path, "w") as f:
-            yaml.safe_dump(
-                model.model_dump(by_alias=True), f, sort_keys=False)
+            yaml.safe_dump(model.model_dump(by_alias=True), f, sort_keys=False)
 
     def _on_translate(self):
         try:
             self._svc.load_experiment_design(self._form.to_dict())
             self._svc.translate()
         except Exception as exc:
-            QMessageBox.critical(
-                self, "Translation failed", "{}".format(exc))
+            QMessageBox.critical(self, "Translation failed", "{}".format(exc))
             return
         self._schedule_estimate()
         if self._on_translated is not None:
@@ -215,7 +241,7 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
         if self._form is None:
             return
         for w in [self._form] + self._form.findChildren(QWidget):
-            if w.property('_estimate_hooked'):
+            if w.property("_estimate_hooked"):
                 continue
             hooked = True
             if isinstance(w, QAbstractSpinBox):
@@ -233,7 +259,7 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             else:
                 hooked = False
             if hooked:
-                w.setProperty('_estimate_hooked', True)
+                w.setProperty("_estimate_hooked", True)
 
     def _recompute_estimate(self):
         """Compile the current design and show its estimated run time.
@@ -245,17 +271,22 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
         """
         from PycroFlow.protocols import ProtocolBuilder
         from PycroFlow.protocols.timing import (
-            estimate_total_duration, format_duration)
+            estimate_total_duration,
+            format_duration,
+        )
         from PycroFlow.schemas import validate_experiment_design
+
         # New list/dict rows may have appeared since the last hook pass.
         self._connect_estimate_signals()
         try:
             design = validate_experiment_design(
-                self._form.to_dict()).model_dump(by_alias=True)
+                self._form.to_dict()
+            ).model_dump(by_alias=True)
             protocol = ProtocolBuilder().build_protocol(design)
             total = estimate_total_duration(protocol)
         except Exception:
             self.estimate_label.setText("Estimated duration: — (incomplete)")
             return
         self.estimate_label.setText(
-            "Estimated duration: ~{}".format(format_duration(total)))
+            "Estimated duration: ~{}".format(format_duration(total))
+        )

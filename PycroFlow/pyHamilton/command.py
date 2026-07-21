@@ -15,13 +15,14 @@ class Command:
     Yx - Initialize PSD, Assign Valve Output to Left
     Wx - Initialize PSD, Configure for No Valve
     """
+
     def initialize(self, drive: str, value=0):
-        cmd: str = ''
-        if drive == 'Z' or drive == 'Y' or drive == 'W':
+        cmd: str = ""
+        if drive == "Z" or drive == "Y" or drive == "W":
             cmd += drive
         else:
             print("Error! Incorrect drive!")
-            cmd = 'cmdError'
+            cmd = "cmdError"
             return cmd
         if (value == 1) or (value >= 10 and value <= 40):
             cmd += str(value)
@@ -31,13 +32,14 @@ class Command:
     R - Execute Command Buffer
     X - Execute Command Buffer from Beginning
     """
-    def executeCommandBuffer(self, type='R'):
-        cmd: str = ''
-        if type == 'R' or type == 'X':
+
+    def executeCommandBuffer(self, type="R"):
+        cmd: str = ""
+        if type == "R" or type == "X":
             cmd += type
         else:
             print("Error! Incorrect type!")
-            cmd = 'cmdError'
+            cmd = "cmdError"
         return cmd
 
     """
@@ -57,28 +59,30 @@ class Command:
     # - volume parameter: is volume required per second, volume value is measured in micro liters
     #
     def syringeMovement(self, typeOf: str, volume: float):
-        cmd: str = ''
+        cmd: str = ""
         if typeOf == SyringeMovement.absoluteMovement.value:
-            cmd += 'A'
+            cmd += "A"
         elif typeOf == SyringeMovement.relativePickup.value:
-            cmd += 'P'
+            cmd += "P"
         elif typeOf == SyringeMovement.relativeDispense.value:
-            cmd += 'D'
+            cmd += "D"
         elif typeOf == SyringeMovement.returnSteps.value:
-            cmd += 'K'
+            cmd += "K"
         elif typeOf == SyringeMovement.backoffSteps.value:
-            cmd += 'k'
+            cmd += "k"
         else:
-            print("Invalid value \"" + str(typeOf) + "\" for type of movement!")
-            cmd = 'cmdError'
+            print('Invalid value "' + str(typeOf) + '" for type of movement!')
+            cmd = "cmdError"
 
         value: int = self.volumeToSteps(volume)
         if self.checkIntervalCorrectness(value, typeOf) == True:
-            value = int(value * self.motorsteps_per_step)  # apparently needed as the OEM/high force PSD4 needs D6000 for a full stroke
+            value = int(
+                value * self.motorsteps_per_step
+            )  # apparently needed as the OEM/high force PSD4 needs D6000 for a full stroke
             cmd += str(value)
         else:
-            print("Invalid value \"" + str(volume) + "\" for volume!")
-            cmd = 'cmdError'
+            print('Invalid value "' + str(volume) + '" for volume!')
+            cmd = "cmdError"
         return cmd
 
     # This script can set start, stop and maximum velocity using as parameter the fluid volume requested per second
@@ -92,24 +96,24 @@ class Command:
     # - volume parameter: is volume required per second, volume value is measured in micro liters
     #
     def velocityConfiguration(self, typeOf: str, volume: float):
-        cmd: str = ''
+        cmd: str = ""
         if typeOf == VelocityTypes.maxVelocity.value:
-            cmd += 'V'
+            cmd += "V"
         elif typeOf == VelocityTypes.startVelocity.value:
-            cmd += 'v'
+            cmd += "v"
         elif typeOf == VelocityTypes.stopVelocity.value:
-            cmd += 'c'
+            cmd += "c"
         else:
-            print("Invalid value \"" + str(typeOf) + "\" for type of velocity!")
-            cmd = 'cmdError'
+            print('Invalid value "' + str(typeOf) + '" for type of velocity!')
+            cmd = "cmdError"
             return cmd
 
         parameterV: int = self.parameterVCalculation(volume)
         if self.checkParameterV(parameterV, typeOf) == True:
             cmd += str(parameterV)
         else:
-            print("Invalid value \"" + str(volume) + "\" for volume!")
-            cmd = 'cmdError'
+            print('Invalid value "' + str(volume) + '" for volume!')
+            cmd = "cmdError"
         return cmd
 
     # helper method that checks if the value is in the correct range
@@ -128,9 +132,10 @@ class Command:
     # calculation of flow rate for parameter "u"
     def calculateParameterU(self, volRequested: float):
         result: float = 0
-        if (self.syringeStroke == 192000 or self.syringeStroke == 384000) and \
-                ( 0.0 <= volRequested <= self.maxVolum and self.maxVolum != 0 ):
-            result = (volRequested * self.syringeStroke / self.maxVolum)
+        if (self.syringeStroke == 192000 or self.syringeStroke == 384000) and (
+            0.0 <= volRequested <= self.maxVolum and self.maxVolum != 0
+        ):
+            result = volRequested * self.syringeStroke / self.maxVolum
 
         return (int)(result)
 
@@ -138,7 +143,7 @@ class Command:
     def parameterVCalculation(self, volRequested: float):
         result: float = 0
         if 0.0 <= volRequested <= self.maxVolum and self.maxVolum != 0:
-            result = (volRequested * self.syringeStroke / self.maxVolum)
+            result = volRequested * self.syringeStroke / self.maxVolum
 
         if self.syringeStroke == 192000 or self.syringeStroke == 384000:
             result /= 4
@@ -150,20 +155,38 @@ class Command:
     def checkParameterV(self, value: int, typeOf: str):
         result: bool = False
         if self.syringeStroke == 6000 or self.syringeStroke == 12000:
-            if typeOf == VelocityTypes.maxVelocity.value and 2 <= value <= 5800:
+            if (
+                typeOf == VelocityTypes.maxVelocity.value
+                and 2 <= value <= 5800
+            ):
                 result = True
-            elif typeOf == VelocityTypes.startVelocity.value and 50 <= value <= 1000:
+            elif (
+                typeOf == VelocityTypes.startVelocity.value
+                and 50 <= value <= 1000
+            ):
                 result = True
-            elif typeOf == VelocityTypes.stopVelocity.value and 50 <= value <= 2700:
+            elif (
+                typeOf == VelocityTypes.stopVelocity.value
+                and 50 <= value <= 2700
+            ):
                 result = True
             else:
                 result = False
         elif self.syringeStroke == 192000 or self.syringeStroke == 384000:
-            if typeOf == VelocityTypes.maxVelocity.value and 2 <= value <= 3400:
+            if (
+                typeOf == VelocityTypes.maxVelocity.value
+                and 2 <= value <= 3400
+            ):
                 result = True
-            elif typeOf == VelocityTypes.startVelocity.value and 50 <= value <= 800:
+            elif (
+                typeOf == VelocityTypes.startVelocity.value
+                and 50 <= value <= 800
+            ):
                 result = True
-            elif typeOf == VelocityTypes.stopVelocity.value and 50 <= value <= 1700:
+            elif (
+                typeOf == VelocityTypes.stopVelocity.value
+                and 50 <= value <= 1700
+            ):
                 result = True
             else:
                 result = False
@@ -175,9 +198,11 @@ class Command:
     def checkIntervalCorrectness(self, value: int, syringeMov: str):
         result: bool = False
         if self.syringeStroke == 6000:
-            if syringeMov == SyringeMovement.absoluteMovement.value or \
-                    syringeMov == SyringeMovement.relativePickup.value or \
-                    syringeMov == SyringeMovement.relativeDispense.value:
+            if (
+                syringeMov == SyringeMovement.absoluteMovement.value
+                or syringeMov == SyringeMovement.relativePickup.value
+                or syringeMov == SyringeMovement.relativeDispense.value
+            ):
                 result = self.checkValueInInterval(value, 3000, 24000)
             elif syringeMov == SyringeMovement.returnSteps.value:
                 result = self.checkValueInInterval(value, 100, 800)
@@ -186,9 +211,11 @@ class Command:
             else:
                 result = False
         elif self.syringeStroke == 12000:
-            if syringeMov == SyringeMovement.absoluteMovement.value or \
-                    syringeMov == SyringeMovement.relativePickup.value or \
-                    syringeMov == SyringeMovement.relativeDispense.value:
+            if (
+                syringeMov == SyringeMovement.absoluteMovement.value
+                or syringeMov == SyringeMovement.relativePickup.value
+                or syringeMov == SyringeMovement.relativeDispense.value
+            ):
                 result = self.checkValueInInterval(value, 6000, 48000)
             elif syringeMov == SyringeMovement.returnSteps.value:
                 result = self.checkValueInInterval(value, 100, 800)
@@ -197,9 +224,11 @@ class Command:
             else:
                 result = False
         elif self.syringeStroke == 192000:
-            if syringeMov == SyringeMovement.absoluteMovement.value or \
-                    syringeMov == SyringeMovement.relativePickup.value or \
-                    syringeMov == SyringeMovement.relativeDispense.value:
+            if (
+                syringeMov == SyringeMovement.absoluteMovement.value
+                or syringeMov == SyringeMovement.relativePickup.value
+                or syringeMov == SyringeMovement.relativeDispense.value
+            ):
                 result = self.checkValueInInterval(value, 192000, 192000)
             elif syringeMov == SyringeMovement.returnSteps.value:
                 result = self.checkValueInInterval(value, 6400, 6400)
@@ -208,9 +237,11 @@ class Command:
             else:
                 result = False
         elif self.syringeStroke == 384000:
-            if syringeMov == SyringeMovement.absoluteMovement.value or \
-                    syringeMov == SyringeMovement.relativePickup.value or \
-                    syringeMov == SyringeMovement.relativeDispense.value:
+            if (
+                syringeMov == SyringeMovement.absoluteMovement.value
+                or syringeMov == SyringeMovement.relativePickup.value
+                or syringeMov == SyringeMovement.relativeDispense.value
+            ):
                 result = self.checkValueInInterval(value, 384000, 384000)
             elif syringeMov == SyringeMovement.returnSteps.value:
                 result = self.checkValueInInterval(value, 6400, 6400)
@@ -231,73 +262,81 @@ class Command:
 
     # z - Set Counter Position
     def setCounterPosition(self):
-        return 'z'
+        return "z"
 
     # Ax - Absolute Position
     def absolutePosition(self, value):
-        cmd: str = 'A'
+        cmd: str = "A"
         cmd += str(value)
         return cmd
 
     # Px - Relative Pickup
     def relativePickup(self, value: int):
-        cmd: str = 'P'
+        cmd: str = "P"
         cmd += str(value)
         return cmd
 
     # Dx - Relative Dispense
     def relativeDispense(self, value: int):
-        cmd: str = 'D'
+        cmd: str = "D"
         cmd += str(value)
         return cmd
 
     # Kx - Return Steps
     def returnSteps(self, value: int):
-        cmd: str = 'K'
+        cmd: str = "K"
         cmd += str(value)
         return cmd
 
     # kx - Back-off Steps
     def backoffSteps(self, value: int):
-        cmd: str = 'k'
+        cmd: str = "k"
         cmd += str(value)
         return cmd
 
-    '''
+    """
         Valve Commands
-    '''
+    """
 
     # Ix - Move Valve to Input Position
     def moveValveToInputPosition(self, value=0):
-        cmd: str = 'I'
+        cmd: str = "I"
         if value == 0:
             pass
         elif 1 <= value <= 8:
             cmd += str(value)
         else:
-            print("Invalid value " + str(value) + " for Move valve to input position command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid value "
+                + str(value)
+                + " for Move valve to input position command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     # Ox - Move Valve to Output Position
     def moveValveToOutputPosition(self, value=0):
-        cmd: str = 'O'
+        cmd: str = "O"
         if value == 0:
             pass
         elif 1 <= value <= 8:
             cmd += str(value)
         else:
-            print("Invalid value " + str(value) + " for Move valve to output position command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid value "
+                + str(value)
+                + " for Move valve to output position command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     # B - Move Valve to Bypass (Throughput Position)
     def moveValveToBypass(self):
-        return 'B'
+        return "B"
 
     # E - Move Valve to Extra Position
     def moveValveToExtraPosition(self):
-        return 'E'
+        return "E"
 
     """
         Action commands
@@ -305,130 +344,162 @@ class Command:
 
     # g - Define a Position in a Command String
     def definePositionInCommandString(self):
-        return 'g'
+        return "g"
 
     # Gx - Repeat Commands
     def repeatCommands(self, value=0):
-        cmd: str = 'G'
+        cmd: str = "G"
         if value == 0:
             pass
         elif 1 <= value <= 65535:
             cmd += str(value)
         else:
-            print("Invalid value " + str(value) + " for Repeat Commands command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid value " + str(value) + " for Repeat Commands command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     # Mx - Delay - performs a delay of x milliseconds.where 5 ≤ x ≤ 30,000 milliseconds.
     def delay(self, value: int):
-        cmd: str = 'M'
+        cmd: str = "M"
         if 5 <= value <= 30000:
             cmd += str(value)
         else:
             print("Invalid value " + str(value) + " for Delay command!")
-            cmd = 'cmdError'
+            cmd = "cmdError"
         return cmd
 
     # Hx - Halt Command Execution
     def halt(self, value: int):
-        cmd: str = 'H'
+        cmd: str = "H"
         if 0 <= value <= 2:
             cmd += str(value)
         else:
             print("Invalid value " + str(value) + " for Halt command!")
-            cmd = 'cmdError'
+            cmd = "cmdError"
         return cmd
 
     # Jx - Auxiliary Outputs
     def auxiliaryOutputs(self, value: int):
-        cmd: str = 'J'
+        cmd: str = "J"
         if 0 <= value <= 7:
             cmd += str(value)
         else:
-            print("Invalid value " + str(value) + " for Auxiliary Outputs command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid value "
+                + str(value)
+                + " for Auxiliary Outputs command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     # sx - Store Command String
     def storeCommandString(self, location: int, command: str):
-        cmd: str = 's'
+        cmd: str = "s"
         if 0 <= location <= 14:
             cmd += str(location)
             cmd += command
         else:
-            print("Invalid value " + str(location) + " for Store Command String command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid value "
+                + str(location)
+                + " for Store Command String command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     # ex - Execute Command String in EEPROM Location
     def executeCommandStringInEEPROMLocation(self, location: int):
-        cmd: str = 'e'
+        cmd: str = "e"
         if 0 <= location <= 14:
             cmd += str(location)
         else:
-            print("Invalid value " + str(location) + " for Execute Command String in EEPROM Location command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid value "
+                + str(location)
+                + " for Execute Command String in EEPROM Location command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     def terminateCommandBuffer(self):
-        return 'T'
+        return "T"
 
     """
         Motor Commands
     """
 
     def setAcceleration(self, value: int):
-        cmd: str = 'L'
+        cmd: str = "L"
         if 0 <= value <= 20:
             cmd += str(value)
         else:
-            print("Invalid value " + str(value) + " for Set acceleration command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid value "
+                + str(value)
+                + " for Set acceleration command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     def setSpeed(self, value: int):
-        cmd: str = 'S'
+        cmd: str = "S"
         if 1 <= value <= 40:
             cmd += str(value)
         else:
             print("Invalid value " + str(value) + " for Set speed command!")
-            cmd = 'cmdError'
+            cmd = "cmdError"
         return cmd
 
     def increaseStopVelocityBySteps(self, value: int):
-        cmd: str = 'C'
+        cmd: str = "C"
         if 0 <= value <= 25:
             cmd += str(value)
         else:
-            print("Invalid value " + str(value) + " for Increase Stop Velocity by Steps command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid value "
+                + str(value)
+                + " for Increase Stop Velocity by Steps command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     def setStartVelocity(self, value: int):
-        cmd: str = 'v'
+        cmd: str = "v"
         if 50 <= value <= 1000:
             cmd += str(value)
         else:
-            print("Invalid value " + str(value) + " for Set start velocity command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid value "
+                + str(value)
+                + " for Set start velocity command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     def setMaximumVelocity(self, value: int):
-        cmd: str = 'V'
+        cmd: str = "V"
         if 2 <= value <= 5800:
             cmd += str(value)
         else:
-            print("Invalid value " + str(value) + " for Set maximum velocity command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid value "
+                + str(value)
+                + " for Set maximum velocity command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     def stopVelocity(self, value: int):
-        cmd: str = 'c'
+        cmd: str = "c"
         if 50 <= value <= 2700:
             cmd += str(value)
         else:
-            print("Invalid value " + str(value) + " for Stop velocity command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid value " + str(value) + " for Stop velocity command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     """
@@ -449,27 +520,33 @@ class Command:
         return "h20000"
 
     def initializeSyringeOnly(self, speedCode: int):
-        cmd: str = 'h'
+        cmd: str = "h"
         cmdValue = 10000
         # permitted values between 0-40
         if 0 <= speedCode <= 40:
             cmdValue += speedCode
             cmd += str(cmdValue)
         else:
-            print("Invalid speed code " + str(speedCode) + " for Initialize Syringe Only command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid speed code "
+                + str(speedCode)
+                + " for Initialize Syringe Only command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     def setSyringeMode(self, mode: int):
-        cmd: str = 'h'
+        cmd: str = "h"
         cmdValue = 11000
         # permitted values between 0-15
         if 0 <= mode <= 15:
             cmdValue += mode
             cmd += str(cmdValue)
         else:
-            print("Invalid mode " + str(mode) + " for Set Syringe Mode command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid mode " + str(mode) + " for Set Syringe Mode command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     def enableValveMovement(self):
@@ -479,13 +556,17 @@ class Command:
         return "h20002"
 
     def setValveType(self, type: int):
-        cmd: str = 'h2100'
+        cmd: str = "h2100"
         # permitted values between 0-6
         if 0 <= type <= 6:
             cmd += str(type)
         else:
-            print("Invalid valve type " + str(type) + " for Set Valve Type command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid valve type "
+                + str(type)
+                + " for Set Valve Type command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     def moveValveToInputPositionInShortestDirection(self):
@@ -507,44 +588,60 @@ class Command:
         return "h23006"
 
     def moveValveClockwiseDirection(self, position: int):
-        cmd: str = 'h2400'
+        cmd: str = "h2400"
         # permitted values between 1-8
         if 1 <= position <= 8:
             cmd += str(position)
         else:
-            print("Invalid position " + str(position) + " for Move Valve in Clockwise Direction command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid position "
+                + str(position)
+                + " for Move Valve in Clockwise Direction command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     def moveValveCounterclockwiseDirection(self, position: int):
-        cmd: str = 'h2500'
+        cmd: str = "h2500"
         # permitted values between 1-8
         if 1 <= position <= 8:
             cmd += str(position)
         else:
-            print("Invalid position " + str(position) + " for Move Valve in Counterclockwise Direction command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid position "
+                + str(position)
+                + " for Move Valve in Counterclockwise Direction command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     def moveValveInShortestDirection(self, position: int):
-        cmd: str = 'h2600'
+        cmd: str = "h2600"
         # permitted values between 1-8
         if 1 <= position <= 8:
             cmd += str(position)
         else:
-            print("Invalid position " + str(position) + " for Move Valve in Shortest Direction command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid position "
+                + str(position)
+                + " for Move Valve in Shortest Direction command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     def angularValveMoveCommandCtr(self, cmdValue: int, incrementWith: int):
-        cmd: str = 'h'
+        cmd: str = "h"
         # permitted values between 0-345 incremented by 15
         if 345 >= incrementWith >= 0 == incrementWith % 15:
             cmdValue += incrementWith
             cmd += str(cmdValue)
         else:
-            print("Invalid angle value " + str(incrementWith) + " for Angular Valve Move command!")
-            cmd = 'cmdError'
+            print(
+                "Invalid angle value "
+                + str(incrementWith)
+                + " for Angular Valve Move command!"
+            )
+            cmd = "cmdError"
         return cmd
 
     def clockwiseAngularValveMove(self, position: int):

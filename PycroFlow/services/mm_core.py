@@ -13,13 +13,11 @@ on a module-level pair of Optionals so:
 Lazy initialization keeps the module importable without ``pycromanager``
 on dev / CI machines.
 """
+
 from __future__ import annotations
 
-from typing import Optional
-
-
-_core = None     # type: Optional[object]
-_studio = None   # type: Optional[object]
+_core: object | None = None
+_studio: object | None = None
 
 
 def get_core():
@@ -27,6 +25,7 @@ def get_core():
     global _core
     if _core is None:
         from pycromanager import Core
+
         _core = Core()
     return _core
 
@@ -36,6 +35,7 @@ def get_studio():
     global _studio
     if _studio is None:
         from pycromanager import Studio
+
         _studio = Studio(convert_camel_case=True)
     return _studio
 

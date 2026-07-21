@@ -4,6 +4,7 @@ Multi-position rotary valves selecting between reservoir lines or pump
 directions. The existing :class:`PycroFlow.hamilton_components.Valve`
 (Hamilton MVP) matches this interface.
 """
+
 from __future__ import annotations
 
 import abc

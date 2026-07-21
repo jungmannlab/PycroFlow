@@ -10,54 +10,86 @@ shown in three side-by-side lists. Clicking a step in any list shows that
 step's parameters in the editable box below, labelled with which list it came
 from.
 """
+
 import ast
 import time
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel,
-    QListWidget, QPlainTextEdit, QFileDialog, QGroupBox, QTableWidget,
-    QTableWidgetItem, QMessageBox, QProgressBar, QAbstractItemView,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QGridLayout,
+    QPushButton,
+    QLabel,
+    QListWidget,
+    QPlainTextEdit,
+    QFileDialog,
+    QGroupBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QMessageBox,
+    QProgressBar,
+    QAbstractItemView,
 )
 
 from PycroFlow.services.experiment_service import ExperimentState
 from PycroFlow.gui.widgets.dnd import YamlDropMixin
 from PycroFlow.protocols.timing import (
-    estimate_durations, estimate_total_duration, estimate_remaining,
-    format_duration)
-
+    estimate_durations,
+    estimate_total_duration,
+    estimate_remaining,
+    format_duration,
+)
 
 # The subsystems, in display order.
-_SYSTEMS = ('fluid', 'img', 'illu')
-_SYSTEM_LABELS = {'fluid': 'Fluid', 'img': 'Imaging', 'illu': 'Illumination'}
+_SYSTEMS = ("fluid", "img", "illu")
+_SYSTEM_LABELS = {"fluid": "Fluid", "img": "Imaging", "illu": "Illumination"}
 
 # Scroll a list so the target row sits in the middle of the viewport.
 _CENTER = QAbstractItemView.ScrollHint.PositionAtCenter
 
 # States during which we poll the orchestrator for live progress.
-_ACTIVE_STATES = {ExperimentState.ORCHESTRATING, ExperimentState.RUNNING,
-                  ExperimentState.PAUSED}
+_ACTIVE_STATES = {
+    ExperimentState.ORCHESTRATING,
+    ExperimentState.RUNNING,
+    ExperimentState.PAUSED,
+}
 
 # Which run controls are enabled in each experiment state. Start is also
 # available after a run finished/aborted, to launch a fresh run of the same
 # loaded sequence (the service rebuilds the orchestrator for it).
-_CAN_START = {ExperimentState.LOADED, ExperimentState.ORCHESTRATING,
-              ExperimentState.PAUSED, ExperimentState.FINISHED,
-              ExperimentState.ABORTED}
-_CAN_ABORT = {ExperimentState.ORCHESTRATING, ExperimentState.RUNNING,
-              ExperimentState.PAUSED}
+_CAN_START = {
+    ExperimentState.LOADED,
+    ExperimentState.ORCHESTRATING,
+    ExperimentState.PAUSED,
+    ExperimentState.FINISHED,
+    ExperimentState.ABORTED,
+}
+_CAN_ABORT = {
+    ExperimentState.ORCHESTRATING,
+    ExperimentState.RUNNING,
+    ExperimentState.PAUSED,
+}
 # Loading a new run sequence is only allowed when nothing is running.
-_CAN_LOAD = {ExperimentState.IDLE, ExperimentState.LOADED,
-             ExperimentState.FINISHED, ExperimentState.ABORTED}
+_CAN_LOAD = {
+    ExperimentState.IDLE,
+    ExperimentState.LOADED,
+    ExperimentState.FINISHED,
+    ExperimentState.ABORTED,
+}
 # Clearing the loaded run sequence is allowed when one is loaded but not
 # running (nothing to clear in IDLE).
-_CAN_CLEAR = {ExperimentState.LOADED, ExperimentState.FINISHED,
-              ExperimentState.ABORTED}
+_CAN_CLEAR = {
+    ExperimentState.LOADED,
+    ExperimentState.FINISHED,
+    ExperimentState.ABORTED,
+}
 
 # Step-list shading.
-_FINISHED_COLOR = QColor("#e8f5e9")   # light green — completed
-_ACTIVE_COLOR = QColor("#fff59d")     # amber — currently executing
+_FINISHED_COLOR = QColor("#e8f5e9")  # light green — completed
+_ACTIVE_COLOR = QColor("#fff59d")  # amber — currently executing
 
 
 class _Stopwatch:
@@ -148,8 +180,13 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # One button toggles Pause/Resume depending on the run state.
         self.pause_resume_btn = QPushButton("Pause")
         self.abort_btn = QPushButton("Abort")
-        for b in (self.load_btn, self.clear_btn, self.start_btn,
-                  self.pause_resume_btn, self.abort_btn):
+        for b in (
+            self.load_btn,
+            self.clear_btn,
+            self.start_btn,
+            self.pause_resume_btn,
+            self.abort_btn,
+        ):
             controls.addWidget(b)
         controls.addStretch()
         layout.addLayout(controls)
@@ -177,10 +214,12 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # only stretching column, so all bars share width and right edge),
         # column 2 = the right-aligned current/total count.
         self.overall_bar, self.overall_count, _ = self._add_bar(
-            prog_grid, 1, "Overall")
+            prog_grid, 1, "Overall"
+        )
         # Steps performed within the round currently being executed.
         self.current_round_bar, self.current_round_count, _ = self._add_bar(
-            prog_grid, 2, "Steps in Round")
+            prog_grid, 2, "Steps in Round"
+        )
         # Round counter + per-subsystem step status on one line.
         self.step_status = QLabel("—")
         self.step_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -191,7 +230,8 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.substep_bars = {}
         for i, system in enumerate(_SYSTEMS):
             bar, count, name = self._add_bar(
-                prog_grid, 4 + i, _SYSTEM_LABELS[system])
+                prog_grid, 4 + i, _SYSTEM_LABELS[system]
+            )
             self.substep_bars[system] = (name, bar, count)
             self._set_substep_visible(system, False)
         layout.addWidget(prog_box)
@@ -204,9 +244,12 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.center_btn = QPushButton("Center on current step")
         self.center_btn.clicked.connect(self._center_on_current)
         steps_head.addWidget(self.center_btn)
-        steps_head.addWidget(QLabel(
-            "Click a step to highlight the concurrent step in the other "
-            "systems."))
+        steps_head.addWidget(
+            QLabel(
+                "Click a step to highlight the concurrent step in the other "
+                "systems."
+            )
+        )
         steps_head.addStretch()
         steps_layout.addLayout(steps_head)
 
@@ -262,7 +305,8 @@ class ExperimentTab(YamlDropMixin, QWidget):
         count = QLabel("0/0")
         count.setMinimumWidth(70)
         count.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
         grid.addWidget(count, row, 2)
         return bar, count, name
 
@@ -271,7 +315,8 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._bridge.log_message.connect(self._on_log)
         for system, lst in self.step_lists.items():
             lst.currentRowChanged.connect(
-                lambda row, s=system: self._on_step_selected(s, row))
+                lambda row, s=system: self._on_step_selected(s, row)
+            )
         self.apply_btn.clicked.connect(self._on_apply)
         self._poll_timer.timeout.connect(self._poll_progress)
         self.load_btn.clicked.connect(self._on_load)
@@ -284,15 +329,18 @@ class ExperimentTab(YamlDropMixin, QWidget):
 
     def _on_load(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load Run Sequence YAML", "", "YAML files (*.yaml *.yml)")
+            self, "Load Run Sequence YAML", "", "YAML files (*.yaml *.yml)"
+        )
         if path:
             self.load_protocol_path(path)
 
     def _on_clear(self):
         reply = QMessageBox.question(
-            self, "Clear run sequence",
+            self,
+            "Clear run sequence",
             "Unload the current run sequence? This clears the loaded steps "
-            "and progress (the hardware connections stay).")
+            "and progress (the hardware connections stay).",
+        )
         if reply == QMessageBox.StandardButton.Yes:
             self._service.clear_protocol()
 
@@ -378,19 +426,23 @@ class ExperimentTab(YamlDropMixin, QWidget):
             lst.clear()
             sub = protocol.get(system, {})
             entries = (
-                sub.get('protocol_entries', []) if isinstance(sub, dict)
-                else [])
+                sub.get("protocol_entries", [])
+                if isinstance(sub, dict)
+                else []
+            )
             self._entries[system] = list(entries)
             self._round_of[system] = self._round_indices(entries)
             for i, entry in enumerate(entries):
                 type_ = (
-                    entry.get('$type', '?') if isinstance(entry, dict)
-                    else '?')
+                    entry.get("$type", "?") if isinstance(entry, dict) else "?"
+                )
                 lst.addItem("{:d}: {}".format(i, type_))
         self._levels = self._compute_levels()
         self._round_names = [
-            self._acquire_label(e) for e in self._entries.get('img', [])
-            if isinstance(e, dict) and e.get('$type') == 'acquire']
+            self._acquire_label(e)
+            for e in self._entries.get("img", [])
+            if isinstance(e, dict) and e.get("$type") == "acquire"
+        ]
         self._durations = estimate_durations(protocol)
         self._total_duration = estimate_total_duration(protocol)
         self._overall_sw.reset()
@@ -418,7 +470,9 @@ class ExperimentTab(YamlDropMixin, QWidget):
         if self._total_duration > 0:
             self.total_estimate_label.setText(
                 "Estimated sequence duration: ~{}".format(
-                    format_duration(self._total_duration)))
+                    format_duration(self._total_duration)
+                )
+            )
         else:
             self.total_estimate_label.setText("")
 
@@ -434,13 +488,16 @@ class ExperimentTab(YamlDropMixin, QWidget):
             self._update_total_estimate_label()
             return
         txt = "Overall: {} elapsed · ~{} left · ~{} total".format(
-            format_duration(elapsed), format_duration(overall_remaining),
-            format_duration(self._total_duration))
+            format_duration(elapsed),
+            format_duration(overall_remaining),
+            format_duration(self._total_duration),
+        )
         round_elapsed = self._round_sw.elapsed()
         if round_remaining > 0 or round_elapsed > 0:
             txt += "        Round: {} elapsed · ~{} left".format(
                 format_duration(round_elapsed),
-                format_duration(round_remaining))
+                format_duration(round_remaining),
+            )
         self.total_estimate_label.setText(txt)
 
     def _compute_levels(self):
@@ -457,8 +514,8 @@ class ExperimentTab(YamlDropMixin, QWidget):
         sigmap = {}
         for system in _SYSTEMS:
             for i, e in enumerate(self._entries[system]):
-                if isinstance(e, dict) and e.get('$type') == 'signal':
-                    val = e.get('value')
+                if isinstance(e, dict) and e.get("$type") == "signal":
+                    val = e.get("value")
                     if val is not None and val not in sigmap:
                         sigmap[val] = (system, i)
         levels = {s: [0] * len(self._entries[s]) for s in _SYSTEMS}
@@ -471,9 +528,11 @@ class ExperimentTab(YamlDropMixin, QWidget):
                 entries = self._entries[system]
                 for i, e in enumerate(entries):
                     lvl = levels[system][i - 1] + 1 if i > 0 else 0
-                    if (isinstance(e, dict)
-                            and e.get('$type') == 'wait for signal'):
-                        dep = sigmap.get(e.get('value'))
+                    if (
+                        isinstance(e, dict)
+                        and e.get("$type") == "wait for signal"
+                    ):
+                        dep = sigmap.get(e.get("value"))
                         if dep is not None:
                             ds, di = dep
                             lvl = max(lvl, levels[ds][di] + 1)
@@ -538,10 +597,10 @@ class ExperimentTab(YamlDropMixin, QWidget):
         """
         if not isinstance(entry, dict):
             return False
-        type_ = entry.get('$type')
-        if type_ == 'acquire':
+        type_ = entry.get("$type")
+        if type_ == "acquire":
             return True
-        if type_ == 'wait for signal' and entry.get('target') == 'img':
+        if type_ == "wait for signal" and entry.get("target") == "img":
             return True
         return False
 
@@ -568,7 +627,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.overall_bar.setValue(pct)
         self.overall_count.setText("{}/{}".format(done, total))
 
-        done_rounds, total_rounds = self._round_counts(prog.get('img'))
+        done_rounds, total_rounds = self._round_counts(prog.get("img"))
         parts = []
         if total_rounds:
             # 1-based number of the round currently executing, plus a short
@@ -577,21 +636,29 @@ class ExperimentTab(YamlDropMixin, QWidget):
             label = ""
             if 0 <= current_round - 1 < len(self._round_names):
                 label = self._round_names[current_round - 1]
-            parts.append("Round {}/{}{}".format(
-                current_round, total_rounds,
-                ": {}".format(label) if label else ""))
+            parts.append(
+                "Round {}/{}{}".format(
+                    current_round,
+                    total_rounds,
+                    ": {}".format(label) if label else "",
+                )
+            )
         for key in _SYSTEMS:
             if key in prog:
                 cur, tot = prog[key]
                 parts.append(
                     "{} {}/{} ({})".format(
-                        key, cur, tot, self._step_name(key, cur)))
+                        key, cur, tot, self._step_name(key, cur)
+                    )
+                )
         self.step_status.setText("      ".join(parts))
 
         round_remaining = self._update_current_round_bar(
-            prog, done_rounds, total_rounds)
+            prog, done_rounds, total_rounds
+        )
         self._update_time_summary(
-            estimate_remaining(self._durations, prog), round_remaining)
+            estimate_remaining(self._durations, prog), round_remaining
+        )
         self._update_substep_bars()
         self._shade_steps(prog)
         self._check_finished()
@@ -605,8 +672,10 @@ class ExperimentTab(YamlDropMixin, QWidget):
         run controls and unlocks the hardware tabs via the usual state-change
         handlers.
         """
-        if (self._service.state is ExperimentState.RUNNING
-                and self._service.is_finished()):
+        if (
+            self._service.state is ExperimentState.RUNNING
+            and self._service.is_finished()
+        ):
             self._service.end()
 
     def _set_substep_visible(self, system, visible):
@@ -615,7 +684,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
 
     def _update_substep_bars(self):
         """Update the per-subsystem within-step bars (hidden when N/A)."""
-        getter = getattr(self._service, 'step_progress', None)
+        getter = getattr(self._service, "step_progress", None)
         sp = getter() if callable(getter) else {}
         if not isinstance(sp, dict):
             sp = {}
@@ -634,7 +703,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
     def _substep_caption(name, cur, tot):
         # Imaging counts frames; the fluid steps (incubate / inject /
         # pump_out) are time-based and shown in seconds.
-        if name == 'frames':
+        if name == "frames":
             return "frames {}/{}".format(int(cur), int(tot))
         return "{} {:.0f}/{:.0f} s".format(name, cur, tot)
 
@@ -642,7 +711,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
         """``$type`` of the step a subsystem is currently on (or 'done')."""
         entries = self._entries.get(system, [])
         if 0 <= cur < len(entries) and isinstance(entries[cur], dict):
-            return entries[cur].get('$type', '?')
+            return entries[cur].get("$type", "?")
         if entries and cur >= len(entries):
             return "done"
         return "—"
@@ -656,13 +725,13 @@ class ExperimentTab(YamlDropMixin, QWidget):
         SPH-RESI). Falls back to the legacy ``message`` (minus its
         ``round_`` prefix) for protocols built before names existed.
         """
-        name = entry.get('name')
+        name = entry.get("name")
         if name:
             return str(name)
-        msg = entry.get('message')
+        msg = entry.get("message")
         if isinstance(msg, str):
-            return msg[len('round_'):] if msg.startswith('round_') else msg
-        return ''
+            return msg[len("round_") :] if msg.startswith("round_") else msg
+        return ""
 
     def _round_counts(self, img_prog):
         """(completed_rounds, total_rounds) from the imaging acquisitions.
@@ -671,12 +740,15 @@ class ExperimentTab(YamlDropMixin, QWidget):
         imaging handler gives the completed-round count.
         """
         protocol = self._service.protocol or {}
-        img = protocol.get('img', {})
+        img = protocol.get("img", {})
         entries = (
-            img.get('protocol_entries', []) if isinstance(img, dict) else [])
+            img.get("protocol_entries", []) if isinstance(img, dict) else []
+        )
         acquire_idx = [
-            i for i, e in enumerate(entries)
-            if isinstance(e, dict) and e.get('$type') == 'acquire']
+            i
+            for i, e in enumerate(entries)
+            if isinstance(e, dict) and e.get("$type") == "acquire"
+        ]
         total_rounds = len(acquire_idx)
         if not total_rounds:
             return 0, 0
@@ -768,9 +840,10 @@ class ExperimentTab(YamlDropMixin, QWidget):
             self.apply_btn.setEnabled(False)
             return
         entry = entries[row]
-        type_ = entry.get('$type', '?') if isinstance(entry, dict) else '?'
+        type_ = entry.get("$type", "?") if isinstance(entry, dict) else "?"
         self.step_param_label.setText(
-            "{} · step {}: {}".format(_SYSTEM_LABELS[system], row, type_))
+            "{} · step {}: {}".format(_SYSTEM_LABELS[system], row, type_)
+        )
         if not isinstance(entry, dict):
             # Non-dict entry: show it read-only, nothing to edit.
             self._set_value_row(0, "value", entry, editable=False)
@@ -779,12 +852,12 @@ class ExperimentTab(YamlDropMixin, QWidget):
             return
         # '$type' first (read-only — it is the schema discriminator), then
         # the remaining parameters in definition order.
-        keys = [k for k in entry if k != '$type']
-        if '$type' in entry:
-            keys = ['$type'] + keys
+        keys = [k for k in entry if k != "$type"]
+        if "$type" in entry:
+            keys = ["$type"] + keys
         self.step_table.setRowCount(len(keys))
         for r, key in enumerate(keys):
-            self._set_value_row(r, key, entry[key], editable=(key != '$type'))
+            self._set_value_row(r, key, entry[key], editable=(key != "$type"))
         self.apply_btn.setEnabled(True)
 
     def _on_apply(self):
@@ -809,7 +882,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
             if key_item is None or value_item is None:
                 continue
             key = key_item.text()
-            if key == '$type':
+            if key == "$type":
                 continue
             original = value_item.data(Qt.ItemDataRole.UserRole)
             try:
@@ -818,8 +891,10 @@ class ExperimentTab(YamlDropMixin, QWidget):
                 errors.append("{}: {}".format(key, exc))
         if errors:
             QMessageBox.warning(
-                self, "Could not apply some values",
-                "These fields were left unchanged:\n\n" + "\n".join(errors))
+                self,
+                "Could not apply some values",
+                "These fields were left unchanged:\n\n" + "\n".join(errors),
+            )
         # Re-render from the stored entry so displayed text and the cached
         # value types reflect what was actually written.
         self._on_step_selected(self._current_sys, row)
@@ -836,7 +911,8 @@ class ExperimentTab(YamlDropMixin, QWidget):
         value_item.setData(Qt.ItemDataRole.UserRole, value)
         if not editable:
             value_item.setFlags(
-                value_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                value_item.flags() & ~Qt.ItemFlag.ItemIsEditable
+            )
         self.step_table.setItem(r, 1, value_item)
 
     @staticmethod
@@ -858,9 +934,9 @@ class ExperimentTab(YamlDropMixin, QWidget):
         text = text.strip()
         if isinstance(original, bool):  # before int — bool subclasses int
             low = text.lower()
-            if low in ('true', '1', 'yes', 'on'):
+            if low in ("true", "1", "yes", "on"):
                 return True
-            if low in ('false', '0', 'no', 'off'):
+            if low in ("false", "0", "no", "off"):
                 return False
             raise ValueError("expected a boolean")
         if isinstance(original, int):

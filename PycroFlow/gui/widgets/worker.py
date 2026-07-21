@@ -9,8 +9,8 @@ signals are delivered queued). The task keeps itself alive on
 Tests can call :func:`set_synchronous(True)` to run ``fn`` inline (no thread),
 so assertions about the call and the callbacks hold deterministically.
 """
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
+from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 _SYNCHRONOUS = False
 
@@ -42,7 +42,7 @@ class BackgroundTask(QObject):
     """A single fn() run on its own QThread, with GUI-thread callbacks."""
 
     def __init__(self, owner, fn, on_done=None, on_error=None):
-        super().__init__(owner)   # GUI-thread affinity (owner is a widget)
+        super().__init__(owner)  # GUI-thread affinity (owner is a widget)
         self._owner = owner
         self._on_done = on_done
         self._on_error = on_error
@@ -73,7 +73,7 @@ class BackgroundTask(QObject):
         self._thread.wait()
 
     def _dispose(self):
-        tasks = getattr(self._owner, '_bg_tasks', None)
+        tasks = getattr(self._owner, "_bg_tasks", None)
         if tasks is not None:
             tasks.discard(self)
         self.deleteLater()
@@ -91,7 +91,7 @@ def run_in_background(owner, fn, on_done=None, on_error=None):
             if on_done is not None:
                 on_done(result)
         return None
-    if not hasattr(owner, '_bg_tasks'):
+    if not hasattr(owner, "_bg_tasks"):
         owner._bg_tasks = set()
     task = BackgroundTask(owner, fn, on_done, on_error)
     owner._bg_tasks.add(task)

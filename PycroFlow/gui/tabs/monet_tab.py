@@ -17,6 +17,7 @@ placeholder for a mocked monet (tests) or a monet built against a different
 binding (e.g. PyQt5) — constructing the latter would emit "Must construct a
 QApplication before a QWidget" and crash the process.
 """
+
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
 
 
@@ -79,7 +80,8 @@ class MonetTab(QWidget):
                 "Install the monet sibling package to enable "
                 "laser/illumination\n"
                 "control here (pip install -e ../monet).\n\n"
-                "Detail: {}".format(problem))
+                "Detail: {}".format(problem)
+            )
             self._embed_layout.addWidget(self._placeholder)
             return
         # Embed monet's widget as a child. It does not own the QApplication
@@ -109,12 +111,14 @@ class MonetTab(QWidget):
         class is a PyQt6 ``QWidget`` subclass *before* instantiating).
         """
         from PyQt6.QtWidgets import QWidget
+
         try:
             import monet.gui as mg
         except Exception as exc:
             return None, "import failed: {!r}".format(exc)
-        cls = getattr(mg, 'MonetWidget', None) or getattr(
-            mg, 'MonetMainWindow', None)
+        cls = getattr(mg, "MonetWidget", None) or getattr(
+            mg, "MonetMainWindow", None
+        )
         if cls is None:
             return None, "monet.gui has no MonetWidget / MonetMainWindow"
         if not (isinstance(cls, type) and issubclass(cls, QWidget)):
@@ -131,7 +135,7 @@ class MonetTab(QWidget):
         # Pre-select the scope in monet's own combo for convenience (display
         # only — does not connect). Best-effort; private API may be absent.
         if setup_name:
-            combo = getattr(window, '_scope_combo', None)
+            combo = getattr(window, "_scope_combo", None)
             if combo is not None:
                 try:
                     idx = combo.findText(setup_name)

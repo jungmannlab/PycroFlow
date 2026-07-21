@@ -11,6 +11,7 @@ relies on the abstract contract.
 Each device keeps a ``commands`` log of ``(method, kwargs)`` tuples so tests can
 assert the sequence of operations without coupling to vendor command strings.
 """
+
 from __future__ import annotations
 
 import threading
@@ -28,8 +29,14 @@ class EmulatedPump(Pump):
     forgiving behavior of the real firmware (which simply stalls).
     """
 
-    def __init__(self, address='emu-pump', syringe_volume=500.0,
-                 input_pos='in', output_pos='out', waste_pos=None):
+    def __init__(
+        self,
+        address="emu-pump",
+        syringe_volume=500.0,
+        input_pos="in",
+        output_pos="out",
+        waste_pos=None,
+    ):
         self.address = address
         self.syringe_volume = float(syringe_volume)
         self.input_pos = input_pos
@@ -45,9 +52,12 @@ class EmulatedPump(Pump):
     def _log(self, method, **kwargs):
         self.commands.append((method, kwargs))
 
-    def pickup(self, vol, velocity=None, waitForPump=False,
-               override_pause_flag=False):
-        self._log('pickup', vol=vol, velocity=velocity, waitForPump=waitForPump)
+    def pickup(
+        self, vol, velocity=None, waitForPump=False, override_pause_flag=False
+    ):
+        self._log(
+            "pickup", vol=vol, velocity=velocity, waitForPump=waitForPump
+        )
         self.last_velocity = velocity
         self.target_volume = min(self.syringe_volume, self.target_volume + vol)
         if waitForPump:
@@ -55,10 +65,12 @@ class EmulatedPump(Pump):
         else:
             self.moving = True
 
-    def dispense(self, vol, velocity=None, waitForPump=False,
-                 override_pause_flag=False):
-        self._log('dispense', vol=vol, velocity=velocity,
-                  waitForPump=waitForPump)
+    def dispense(
+        self, vol, velocity=None, waitForPump=False, override_pause_flag=False
+    ):
+        self._log(
+            "dispense", vol=vol, velocity=velocity, waitForPump=waitForPump
+        )
         self.last_velocity = velocity
         self.target_volume = max(0.0, self.target_volume - vol)
         if waitForPump:
@@ -67,20 +79,20 @@ class EmulatedPump(Pump):
             self.moving = True
 
     def set_valve(self, pos, move_now=True):
-        if pos == 'in':
+        if pos == "in":
             pos = self.input_pos
-        elif pos == 'out':
+        elif pos == "out":
             pos = self.output_pos
-        self._log('set_valve', pos=pos, move_now=move_now)
+        self._log("set_valve", pos=pos, move_now=move_now)
         self.valve_pos = pos
 
     def wait_until_done(self):
-        self._log('wait_until_done')
+        self._log("wait_until_done")
         self.volume = self.target_volume
         self.moving = False
 
     def stop_current_move(self):
-        self._log('stop_current_move')
+        self._log("stop_current_move")
         # The real pump freezes wherever it is; reflect that by syncing the
         # target to the (unchanged) current volume.
         self.target_volume = self.volume
@@ -93,7 +105,7 @@ class EmulatedPump(Pump):
 class EmulatedValve(Valve):
     """An in-memory multi-position rotary valve."""
 
-    def __init__(self, address='emu-valve', n_positions=8):
+    def __init__(self, address="emu-valve", n_positions=8):
         self.address = address
         self.n_positions = n_positions
         self.position = None
@@ -101,7 +113,7 @@ class EmulatedValve(Valve):
         self.commands = []
 
     def set_valve(self, pos, move_now=True):
-        self.commands.append(('set_valve', {'pos': pos, 'move_now': move_now}))
+        self.commands.append(("set_valve", {"pos": pos, "move_now": move_now}))
         if move_now:
             self.position = pos
             self.moving = False
@@ -110,13 +122,13 @@ class EmulatedValve(Valve):
             self._pending = pos
 
     def wait_until_done(self):
-        self.commands.append(('wait_until_done', {}))
-        if self.moving and hasattr(self, '_pending'):
+        self.commands.append(("wait_until_done", {}))
+        if self.moving and hasattr(self, "_pending"):
             self.position = self._pending
         self.moving = False
 
     def get_status(self):
-        return 'moving' if self.moving else 'idle@{}'.format(self.position)
+        return "moving" if self.moving else "idle@{}".format(self.position)
 
 
 class EmulatedSpillSensor(SpillSensor):
@@ -154,14 +166,16 @@ class EmulatedSpillSensor(SpillSensor):
         self.poll_count += 1
         return self._wet
 
-    def monitor_sensor(self, fn_on_wet: Optional[Callable[[str], None]] = None):
+    def monitor_sensor(
+        self, fn_on_wet: Optional[Callable[[str], None]] = None
+    ):
         self._abort.clear()
 
         def _worker():
             while not self._abort.is_set():
                 if self._connected and self._wet:
                     if fn_on_wet is not None:
-                        fn_on_wet('Spill sensor is wet.')
+                        fn_on_wet("Spill sensor is wet.")
                     return
                 if self._abort.wait(timeout=self.poll_interval):
                     return

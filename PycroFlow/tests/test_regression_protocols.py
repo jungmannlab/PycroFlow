@@ -16,6 +16,7 @@ This test is the safety net for Stage 3 (protocols.py split) and Stage 4
 (typed protocol entries) — both refactors must leave the produced steps
 byte-identical for existing experiments.
 """
+
 import importlib
 import json
 import os
@@ -26,18 +27,17 @@ from pathlib import Path
 import PycroFlow.protocols as pprot
 from PycroFlow.tests.fixtures import configs as configs_pkg
 
-
-_FIXTURES_ROOT = Path(__file__).parent / 'fixtures'
-_SNAPSHOTS_DIR = _FIXTURES_ROOT / 'snapshots'
-_UPDATE = os.environ.get('PYCROFLOW_UPDATE_SNAPSHOTS') == '1'
+_FIXTURES_ROOT = Path(__file__).parent / "fixtures"
+_SNAPSHOTS_DIR = _FIXTURES_ROOT / "snapshots"
+_UPDATE = os.environ.get("PYCROFLOW_UPDATE_SNAPSHOTS") == "1"
 
 
 def _discover_fixtures():
     """Yield (fixture_name, config_dict) for each fixture module."""
     for module_info in pkgutil.iter_modules(configs_pkg.__path__):
         name = module_info.name
-        mod = importlib.import_module(f'{configs_pkg.__name__}.{name}')
-        config = getattr(mod, 'CONFIG', None)
+        mod = importlib.import_module(f"{configs_pkg.__name__}.{name}")
+        config = getattr(mod, "CONFIG", None)
         if config is None:
             continue
         yield name, config
@@ -56,7 +56,7 @@ class TestRegressionProtocols(unittest.TestCase):
     def test_create_steps_snapshots(self):
         fixtures = list(_discover_fixtures())
         if not fixtures:
-            self.skipTest('no fixtures under tests/fixtures/configs/')
+            self.skipTest("no fixtures under tests/fixtures/configs/")
 
         _SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
         failures = []
@@ -65,22 +65,26 @@ class TestRegressionProtocols(unittest.TestCase):
             with self.subTest(fixture=name):
                 builder = pprot.ProtocolBuilder()
                 steps, reservoir_vols = builder.create_steps(config)
-                actual = _normalize({
-                    'steps': steps,
-                    'reservoir_vols': reservoir_vols,
-                })
+                actual = _normalize(
+                    {
+                        "steps": steps,
+                        "reservoir_vols": reservoir_vols,
+                    }
+                )
 
-                snapshot_path = _SNAPSHOTS_DIR / f'{name}.json'
+                snapshot_path = _SNAPSHOTS_DIR / f"{name}.json"
 
                 if _UPDATE or not snapshot_path.exists():
                     snapshot_path.write_text(
-                        json.dumps(actual, indent=2, sort_keys=True, default=str)
+                        json.dumps(
+                            actual, indent=2, sort_keys=True, default=str
+                        )
                     )
                     if not _UPDATE:
                         self.skipTest(
-                            f'wrote initial snapshot for {name!r}; '
-                            f'commit {snapshot_path.relative_to(_FIXTURES_ROOT.parent)} '
-                            f'and re-run.'
+                            f"wrote initial snapshot for {name!r}; "
+                            f"commit {snapshot_path.relative_to(_FIXTURES_ROOT.parent)} "
+                            f"and re-run."
                         )
                     continue
 
@@ -89,14 +93,14 @@ class TestRegressionProtocols(unittest.TestCase):
                     failures.append((name, snapshot_path, expected, actual))
 
         if failures:
-            msg_lines = ['snapshot mismatch:']
+            msg_lines = ["snapshot mismatch:"]
             for name, path, expected, actual in failures:
-                msg_lines.append(f'  fixture {name!r} differs from {path}')
+                msg_lines.append(f"  fixture {name!r} differs from {path}")
                 msg_lines.append(
-                    '    regenerate with PYCROFLOW_UPDATE_SNAPSHOTS=1 if change is intentional.'
+                    "    regenerate with PYCROFLOW_UPDATE_SNAPSHOTS=1 if change is intentional."
                 )
-            self.fail('\n'.join(msg_lines))
+            self.fail("\n".join(msg_lines))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

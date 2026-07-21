@@ -10,6 +10,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: lint (black + flake8)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install lint tools
+        # Pin Black to the version the pre-commit hook / local devs run so CI
+        # and pre-commit agree. flake8 reads [tool.flake8] via Flake8-pyproject.
+        run: |
+          python -m pip install --upgrade pip
+          pip install "black==25.9.0" flake8 Flake8-pyproject
+
+      - name: black --check
+        run: black --check .
+
+      - name: flake8
+        run: flake8 .
+
   unittest:
     name: unittest on Windows (Python ${{ matrix.python-version }})
     runs-on: windows-latest

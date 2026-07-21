@@ -912,7 +912,10 @@ class LegacyArchitecture(AbstractSystem):
         est = self._estimate_entry_duration(self.protocol[i])
         if est:
             self._step_estimate = (
-                time.time(), est, self.protocol[i].get("$type"))
+                time.time(),
+                est,
+                self.protocol[i].get("$type"),
+            )
         try:
             if self.parameters["mode"] == "tubing_stack":
                 if (self.last_protocol_entry != i - 1) or (i == 0):
@@ -964,7 +967,8 @@ class LegacyArchitecture(AbstractSystem):
             return None
         vol = pentry.get("volume")
         velocity = pentry.get("velocity") or self.parameters.get(
-            "max_velocity")
+            "max_velocity"
+        )
         if not vol or not velocity:
             return None
         seconds = 120.0 * float(vol) / float(velocity)  # pickup + dispense

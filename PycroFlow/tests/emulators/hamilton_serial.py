@@ -30,6 +30,7 @@ Typical use in a test::
         assert abs(pump.get_current_volume() - 250) < 1.0
         assert fake.device('3').syringe_steps > 0   # ascii addr of pump '2'
 """
+
 from __future__ import annotations
 
 import re
@@ -37,16 +38,16 @@ import threading
 from contextlib import contextmanager
 from unittest import mock
 
-ETX = '\x03'
-STATUS_READY = '`'
-STATUS_BUSY = '@'
+ETX = "\x03"
+STATUS_READY = "`"
+STATUS_BUSY = "@"
 
 # Opcode patterns applied to the message body (after the leading '/<addr>').
-_RE_PICKUP = re.compile(r'P(\d+)')
-_RE_DISPENSE = re.compile(r'D(\d+)')
-_RE_ABS_MOVE = re.compile(r'A(\d+)')
+_RE_PICKUP = re.compile(r"P(\d+)")
+_RE_DISPENSE = re.compile(r"D(\d+)")
+_RE_ABS_MOVE = re.compile(r"A(\d+)")
 # Move-valve-in-shortest-direction: h2600<pos>; clockwise h2400, ccw h2500.
-_RE_VALVE_SHORTEST = re.compile(r'h2[456]00(\d)')
+_RE_VALVE_SHORTEST = re.compile(r"h2[456]00(\d)")
 
 
 class EmulatedHamiltonDevice:
@@ -77,15 +78,15 @@ class EmulatedHamiltonDevice:
         self.last_command = message
 
         # --- Queries ---------------------------------------------------------
-        if message == '?':  # absolute syringe position
+        if message == "?":  # absolute syringe position
             data = STATUS_READY + str(self.syringe_steps)
-        elif message.startswith('?11000'):  # syringe-mode query
+        elif message.startswith("?11000"):  # syringe-mode query
             # Host reads reply[3] as the resolution digit, so the payload must
             # start with the mode digit.
             data = STATUS_READY + str(self.resolution_mode)
-        elif message.startswith('?'):  # other queries: benign ready + 0
-            data = STATUS_READY + '0'
-        elif message.startswith('Q'):  # pump/valve status query (incl. 'QR')
+        elif message.startswith("?"):  # other queries: benign ready + 0
+            data = STATUS_READY + "0"
+        elif message.startswith("Q"):  # pump/valve status query (incl. 'QR')
             data = STATUS_READY
         else:
             # --- Action commands --------------------------------------------
@@ -97,7 +98,7 @@ class EmulatedHamiltonDevice:
         return response_body
 
     def _apply_action(self, message):
-        if 'Z' in message or 'Y' in message or 'h20000' in message:
+        if "Z" in message or "Y" in message or "h20000" in message:
             self.initialized = True
 
         m = _RE_VALVE_SHORTEST.search(message)
@@ -123,7 +124,7 @@ class FakeHamiltonSerial:
 
     def __init__(self, *args, **kwargs):
         self._open = False
-        self._rx = bytearray()          # bytes waiting to be readline()'d
+        self._rx = bytearray()  # bytes waiting to be readline()'d
         self._lock = threading.Lock()
         self.devices = {}
         # (address, message) for every command seen, across all devices.
@@ -176,12 +177,12 @@ class FakeHamiltonSerial:
 
     def readline(self):
         with self._lock:
-            idx = self._rx.find(b'\n')
+            idx = self._rx.find(b"\n")
             if idx == -1:
                 line, self._rx = bytes(self._rx), bytearray()
             else:
-                line = bytes(self._rx[:idx + 1])
-                del self._rx[:idx + 1]
+                line = bytes(self._rx[: idx + 1])
+                del self._rx[: idx + 1]
         return line
 
     def read(self, size=1):
@@ -201,17 +202,17 @@ class FakeHamiltonSerial:
     def _split_frames(text):
         # Commands are CRLF-terminated; a single write carries exactly one, but
         # be tolerant of batching.
-        return [f for f in re.split(r'\r\n', text) if f]
+        return [f for f in re.split(r"\r\n", text) if f]
 
     def _handle_frame(self, frame):
-        if not frame.startswith('/'):
+        if not frame.startswith("/"):
             # Unaddressed/garbage frame: reply ready so callers don't hang.
-            return '/0' + STATUS_READY + ETX + '\r\n'
+            return "/0" + STATUS_READY + ETX + "\r\n"
         address = frame[1]
         message = frame[2:]
         self.command_log.append((address, message))
         body = self.device(address).handle(message)
-        return '/0' + body + ETX + '\r\n'
+        return "/0" + body + ETX + "\r\n"
 
 
 @contextmanager
@@ -228,8 +229,9 @@ def patch_serial():
         return fake
 
     with mock.patch(
-            'PycroFlow.pyHamilton.communication.serial.Serial',
-            side_effect=_factory):
+        "PycroFlow.pyHamilton.communication.serial.Serial",
+        side_effect=_factory,
+    ):
         yield fake
 
 
