@@ -16,6 +16,7 @@ from __future__ import annotations
 import enum
 import os
 import threading
+from datetime import datetime
 from typing import Callable, Dict, List, Optional
 
 import yaml
@@ -165,6 +166,52 @@ class ExperimentService:
         except Exception as exc:   # never fail a load over logging
             logger.warning("could not redirect logs: {!r}", exc)
 
+    def save_run_record(self):
+        """Write the design and Run Sequence about to run into ``save_dir``.
+
+        A run's inputs belong with its output: the experiment design as
+        loaded (including any GUI edits) and the compiled Run Sequence that
+        was actually executed. Filenames carry a timestamp, so re-running
+        into the same acquisition folder records each run rather than
+        overwriting the previous one's evidence.
+
+        Returns
+        -------
+        list of str
+            The files written (empty when there is nothing to write, or on
+            failure — a save-record problem must never stop a run).
+        """
+        design = self._experiment_design
+        if not design:
+            # No design means no acquisition folder — a bare protocol loaded
+            # from a file already exists on disk, and writing the record
+            # relative to the cwd would scatter files wherever the app runs.
+            logger.debug(
+                "no experiment design loaded; not saving a run record")
+            return []
+        stamp = datetime.now().strftime('%y%m%d-%H%M%S')
+        base = design.get('base_name') or 'experiment'
+        save_dir = os.path.abspath(design.get('save_dir') or '.')
+        artifacts = [('design', design), ('run_sequence', self._protocol)]
+        written = []
+        try:
+            os.makedirs(save_dir, exist_ok=True)
+            for kind, data in artifacts:
+                if not data:
+                    continue
+                path = os.path.join(
+                    save_dir, '{}_{}_{}.yaml'.format(base, stamp, kind))
+                with open(path, 'w') as f:
+                    yaml.dump(data, f, default_flow_style=False,
+                              sort_keys=False)
+                written.append(path)
+        except Exception as exc:   # never block a run over bookkeeping
+            logger.warning("could not save the run record: {!r}", exc)
+            return written
+        if written:
+            logger.info("Saved run record: {}", ', '.join(written))
+        return written
+
     @property
     def experiment_design(self) -> Optional[Dict]:
         return self._experiment_design
@@ -257,6 +304,7 @@ class ExperimentService:
             ExperimentState.ORCHESTRATING,
             ExperimentState.PAUSED,
         ):
+            self.save_run_record()
             self._orchestrator.start_protocol(system_steps or {})
             self._set_state(ExperimentState.RUNNING)
 

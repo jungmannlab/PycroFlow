@@ -64,14 +64,33 @@ class FluidTab(QWidget):
         layout.addWidget(self.stop_btn)
         layout.addStretch()
 
+    @staticmethod
+    def _hint(text):
+        """A small grey explanatory line to sit under a group's controls."""
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setStyleSheet("color: gray;")
+        return label
+
     def _build_tubing_group(self):
         box = QGroupBox("Tubing operations")
-        row = QHBoxLayout(box)
+        outer = QVBoxLayout(box)
+        row = QHBoxLayout()
         self.fill_btn = QPushButton("Fill tubings")
         self.clean_btn = QPushButton("Clean tubings")
+        self.fill_btn.setToolTip(
+            "Prime every tubing segment of the experiment's reservoirs, so "
+            "no air or old liquid is left between reservoir and sample.")
+        self.clean_btn.setToolTip(
+            "Run the cleaning procedure through the design's cleaning "
+            "reservoirs. Needles must sit in the same container first.")
         row.addWidget(self.fill_btn)
         row.addWidget(self.clean_btn)
         row.addStretch()
+        outer.addLayout(row)
+        outer.addWidget(self._hint(
+            "Whole-system procedures over the reservoirs the loaded "
+            "experiment design uses — not the full setup manifold."))
         self.fill_btn.clicked.connect(self._on_fill)
         self.clean_btn.clicked.connect(self._on_clean)
         return box
@@ -92,6 +111,21 @@ class FluidTab(QWidget):
         self.stroke_pickup.addItems(["in", "out"])
         self.stroke_dispense = QComboBox()
         self.stroke_dispense.addItems(["out", "in"])
+        self.stroke_pump.setToolTip(
+            "pump_a drives liquid from a reservoir to the sample; "
+            "pump_out is the extraction (waste) pump.")
+        self.stroke_vol.setToolTip(
+            "Total volume. Larger than the syringe is split into "
+            "back-to-back syringe strokes automatically.")
+        self.stroke_vel.setToolTip(
+            "Blank uses the design's max_velocity. The pump rejects values "
+            "outside its own range — check errors.log if nothing moves.")
+        self.stroke_pickup.setToolTip(
+            "Which port the syringe draws from: 'in' = the reservoir side "
+            "(as currently routed), 'out' = the sample/waste side.")
+        self.stroke_dispense.setToolTip(
+            "Which port the syringe pushes to. Any liquid already in the "
+            "syringe is dispensed here first.")
         sform.addRow("Pump", self.stroke_pump)
         sform.addRow("Volume (µL)", self.stroke_vol)
         sform.addRow("Velocity (µL/min)", self.stroke_vel)
@@ -99,6 +133,10 @@ class FluidTab(QWidget):
         sform.addRow("Dispense", self.stroke_dispense)
         self.stroke_btn = QPushButton("Run stroke")
         sform.addRow(self.stroke_btn)
+        sform.addRow(self._hint(
+            "Moves the syringe only — it does NOT change reservoir routing, "
+            "so it draws from wherever the valves currently point. Use "
+            "\"Set valves to reservoir\" below first."))
         self.stroke_btn.clicked.connect(self._on_stroke)
         outer.addWidget(stroke)
 
@@ -118,6 +156,17 @@ class FluidTab(QWidget):
         self.move_pickup_dir.addItems(["in", "out"])
         self.move_dispense_dir = QComboBox()
         self.move_dispense_dir.addItems(["in", "out"])
+        self.move_pickup_res.setToolTip(
+            "Reservoir id to route to before each pickup. Leave blank to "
+            "keep the current routing. Only reservoirs the loaded design "
+            "uses can be routed to here.")
+        self.move_dispense_res.setToolTip(
+            "Reservoir id to route to before each dispense. Leave blank to "
+            "keep the current routing.")
+        self.move_vol.setToolTip(
+            "Total volume, split into syringe-sized strokes; the valves are "
+            "re-routed for every pickup and dispense of each stroke.")
+        self.move_vel.setToolTip("Blank uses the design's max_velocity.")
         mform.addRow("Pump", self.move_pump)
         mform.addRow("Volume (µL)", self.move_vol)
         mform.addRow("Velocity (µL/min)", self.move_vel)
@@ -127,27 +176,47 @@ class FluidTab(QWidget):
         mform.addRow("Dispense dir", self.move_dispense_dir)
         self.move_btn = QPushButton("Run move")
         mform.addRow(self.move_btn)
+        mform.addRow(self._hint(
+            "Sets the valves itself: routes to the pickup reservoir, draws, "
+            "routes to the dispense reservoir, pushes — repeating per "
+            "syringe stroke. Anything already in the syringe is dispensed "
+            "first. Reservoir routing here goes through the loaded design, "
+            "so ids it does not use are rejected."))
         self.move_btn.clicked.connect(self._on_move)
         outer.addWidget(move)
 
-        # Direct valve setting
+        # Direct valve setting. The reservoirs offered come from the *setup's*
+        # manifold, not the loaded design — testing the plumbing means
+        # reaching every wired reservoir, including ones no design names.
         valve = QGroupBox("Set valves to reservoir")
         vform = QFormLayout(valve)
-        self.valve_res = QLineEdit()
-        self.valve_res.setPlaceholderText("reservoir id")
+        self.valve_res = QComboBox()
+        self.valve_res.setToolTip(
+            "Every reservoir wired in the selected setup's fluid.reservoirs "
+            "— including ones the loaded experiment design does not use.")
         self.valve_btn = QPushButton("Set valves")
         vform.addRow("Reservoir", self.valve_res)
+        # What this reservoir's routing actually does, for the selected id.
+        self.valve_route = self._hint("")
+        vform.addRow(self.valve_route)
         vform.addRow(self.valve_btn)
+        vform.addRow(self._hint(
+            "Routing only — no liquid is moved. This is the route the pump "
+            "controls above will then use."))
         self.valve_btn.clicked.connect(self._on_set_valves)
+        self.valve_res.currentIndexChanged.connect(self._update_route_hint)
         outer.addWidget(valve)
+        self._refresh_reservoirs()
 
         return box
 
     def refresh(self):
-        """Update the connection label from the fluid system."""
+        """Update the connection label and the setup's reservoir list."""
         connected = self._svc.fluid_system is not None
         self.status_label.setText(
             "connected" if connected else "not connected")
+        # The setup (hence its manifold) can change between refreshes.
+        self._refresh_reservoirs()
 
     def set_status_text(self, text):
         """Set the status label (e.g. 'connecting…') from the coordinator."""
@@ -233,9 +302,39 @@ class FluidTab(QWidget):
                 self.move_pump.currentText(), **kwargs),
             "Pump move")
 
+    def _refresh_reservoirs(self):
+        """Re-fill the reservoir dropdown from the loaded setup's manifold."""
+        current = self.valve_res.currentData()
+        self.valve_res.clear()
+        for rid in self._svc.reservoir_ids():
+            self.valve_res.addItem(str(rid), rid)
+        if current is not None:
+            index = self.valve_res.findData(current)
+            if index >= 0:
+                self.valve_res.setCurrentIndex(index)
+        self.valve_btn.setEnabled(self.valve_res.count() > 0)
+        self._update_route_hint()
+
+    def _update_route_hint(self):
+        """Describe the selected reservoir's route below the dropdown."""
+        if getattr(self, 'valve_route', None) is None:
+            return   # called from _refresh_reservoirs during construction
+        rid = self.valve_res.currentData()
+        if rid is None:
+            self.valve_route.setText(
+                "No reservoirs wired — select a setup first.")
+            return
+        try:
+            self.valve_route.setText(self._svc.describe_reservoir_route(rid))
+        except Exception as exc:
+            self.valve_route.setText("Route unavailable: {!r}".format(exc))
+
     def _on_set_valves(self):
-        rid, ok = self._num(self.valve_res, "Reservoir id", True, int)
-        if not ok:
+        rid = self.valve_res.currentData()
+        if rid is None:
+            QMessageBox.warning(
+                self, "No reservoir",
+                "The selected setup wires no reservoirs to route to.")
             return
         self._run(lambda: self._svc.set_valves(rid), "Set valves")
 

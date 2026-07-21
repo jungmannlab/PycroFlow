@@ -12,6 +12,7 @@ a protocol in a startup script) does not flood the terminal. Until
 from loguru import logger
 import os
 import sys
+import threading
 
 try:
     from importlib.metadata import PackageNotFoundError, version
@@ -39,6 +40,7 @@ _LOG_FORMAT = (
 
 
 _LOGGING_CONFIGURED = False
+_EXCEPTHOOKS_INSTALLED = False
 # The arguments the last setup_logging() call used, so redirect_logging() can
 # re-install the same sinks in a different directory.
 _LOG_CONFIG = {}
@@ -82,17 +84,26 @@ def clean_old_logs(prefix='pycroflow.log', directory='.'):
 
 
 def setup_logging(logfile='pycroflow.log', clean_old=False,
-                  stderr_level='ERROR', hamilton_logfile='hamilton.log'):
+                  stderr_level='ERROR', hamilton_logfile='hamilton.log',
+                  error_logfile='errors.log'):
     """Configure loguru sinks for PycroFlow.
 
-    Three sinks are installed:
+    Four sinks are installed:
 
     - ``logfile`` (default ``pycroflow.log``): everything except the
       ``pyHamilton`` / ``monet`` subpackages.
     - ``hamilton_logfile`` (default ``hamilton.log``): the verbose
       ``pyHamilton`` serial traffic, kept out of both the terminal and the
       main log. Pass ``hamilton_logfile=None`` to disable it.
+    - ``error_logfile`` (default ``errors.log``): WARNING and above from
+      *everything* (including pyHamilton / monet), with tracebacks — the
+      short file to read when a run misbehaved, instead of scrolling back
+      through a terminal that may already be gone. Pass None to skip it.
     - ``sys.stderr`` at ``stderr_level`` (default ``ERROR``).
+
+    Uncaught exceptions — including ones raised in the subsystem threads —
+    are routed into these sinks too (see :func:`install_excepthooks`), so a
+    crash is recorded in the log rather than only printed.
 
     Safe to call multiple times — existing sinks are removed first. Pass
     ``clean_old=True`` to delete any pre-existing rotated log files (the old
@@ -103,21 +114,25 @@ def setup_logging(logfile='pycroflow.log', clean_old=False,
     logfile : str
         Path for the main rotating log file.
     clean_old : bool
-        Delete pre-existing rotated log files for ``logfile`` (and
-        ``hamilton_logfile``) before configuring.
+        Delete pre-existing rotated log files for ``logfile``,
+        ``hamilton_logfile`` and ``error_logfile`` before configuring.
     stderr_level : str
         Minimum level shown on the terminal.
     hamilton_logfile : str or None
         Path for the pyHamilton-only log file, or None to skip it.
+    error_logfile : str or None
+        Path for the warnings-and-errors log file, or None to skip it.
     """
     global _LOGGING_CONFIGURED
     _LOG_CONFIG.update(
         logfile=logfile, stderr_level=stderr_level,
-        hamilton_logfile=hamilton_logfile)
+        hamilton_logfile=hamilton_logfile, error_logfile=error_logfile)
     if clean_old:
         clean_old_logs(prefix=logfile)
         if hamilton_logfile:
             clean_old_logs(prefix=hamilton_logfile)
+        if error_logfile:
+            clean_old_logs(prefix=error_logfile)
     logger.remove()
     logger.add(
         logfile,
@@ -138,8 +153,61 @@ def setup_logging(logfile='pycroflow.log', clean_old=False,
             enqueue=True,
             serialize=False,
         )
+    if error_logfile:
+        # Everything that went wrong, in one short file, with tracebacks —
+        # deliberately unfiltered so a pyHamilton/monet failure shows up too.
+        logger.add(
+            error_logfile,
+            format=_LOG_FORMAT,
+            level='WARNING',
+            rotation="1 MB",
+            retention=5,
+            enqueue=True,
+            backtrace=True,
+            diagnose=False,
+            serialize=False,
+        )
     logger.add(sys.stderr, format=_LOG_FORMAT, level=stderr_level)
     _LOGGING_CONFIGURED = True
+    install_excepthooks()
+
+
+def install_excepthooks():
+    """Route uncaught exceptions into the log sinks. Idempotent.
+
+    An unhandled exception (in the main thread, a subsystem thread, or an
+    unretrieved task) otherwise only prints to stderr, which is lost once the
+    terminal is gone — precisely the crash worth having on disk next to the
+    acquisition. ``KeyboardInterrupt`` keeps its normal behaviour.
+    """
+    global _EXCEPTHOOKS_INSTALLED
+    if _EXCEPTHOOKS_INSTALLED:
+        return
+
+    previous = sys.excepthook
+
+    def _hook(exc_type, exc, tb):
+        if not issubclass(exc_type, KeyboardInterrupt):
+            logger.opt(exception=(exc_type, exc, tb)).error(
+                "Uncaught exception")
+        previous(exc_type, exc, tb)
+
+    sys.excepthook = _hook
+
+    if hasattr(threading, 'excepthook'):
+        previous_thread_hook = threading.excepthook
+
+        def _thread_hook(args):
+            if not issubclass(args.exc_type, SystemExit):
+                exc_info = (args.exc_type, args.exc_value,
+                            args.exc_traceback)
+                logger.opt(exception=exc_info).error(
+                    "Uncaught exception in thread {}",
+                    getattr(args.thread, 'name', '?'))
+            previous_thread_hook(args)
+
+        threading.excepthook = _thread_hook
+    _EXCEPTHOOKS_INSTALLED = True
 
 
 def redirect_logging(directory):
@@ -173,9 +241,12 @@ def redirect_logging(directory):
         _LOG_CONFIG.get('logfile') or 'pycroflow.log'))
     if os.path.abspath(_LOG_CONFIG.get('active_logfile') or '') == logfile:
         return logfile   # already logging there
-    hamilton = _LOG_CONFIG.get('hamilton_logfile')
-    if hamilton:
-        hamilton = os.path.join(directory, os.path.basename(hamilton))
+
+    def _beside(key):
+        name = _LOG_CONFIG.get(key)
+        return os.path.join(directory, os.path.basename(name)) if name \
+            else None
+
     try:
         os.makedirs(directory, exist_ok=True)
         previous = _LOG_CONFIG.get('active_logfile') or _LOG_CONFIG.get(
@@ -183,7 +254,8 @@ def redirect_logging(directory):
         setup_logging(
             logfile=logfile, clean_old=False,
             stderr_level=_LOG_CONFIG.get('stderr_level', 'ERROR'),
-            hamilton_logfile=hamilton)
+            hamilton_logfile=_beside('hamilton_logfile'),
+            error_logfile=_beside('error_logfile'))
     except OSError as exc:
         # A bad/unwritable save_dir must not take the logging down with it.
         logger.warning(

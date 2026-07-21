@@ -94,6 +94,12 @@ class TestMainWindow(unittest.TestCase):
         from PyQt6.QtWidgets import QApplication
         cls.app = QApplication.instance() or QApplication([])
 
+    def tearDown(self):
+        # Loading a design chdirs to its folder; keep test output out of the
+        # checkout for whatever runs next.
+        from PycroFlow.tests import chdir_to_test_output
+        chdir_to_test_output()
+
     def _build(self):
         from PycroFlow.services import ExperimentService, SystemService
         from PycroFlow.gui.main_window import PycroFlowMainWindow
@@ -889,9 +895,15 @@ class TestConnectionFlow(unittest.TestCase):
 def _example_design():
     import PycroFlow
     from PycroFlow.services import ExperimentService
+    from PycroFlow.tests import chdir_to_test_output
     path = os.path.join(
         os.path.dirname(PycroFlow.__file__), 'examples', 'sph_resi_6plex.yaml')
-    return ExperimentService().load_experiment_design(path), path
+    try:
+        return ExperimentService().load_experiment_design(path), path
+    finally:
+        # The load chdirs to the design's folder; keep test output out of
+        # the checkout.
+        chdir_to_test_output()
 
 
 @unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
@@ -1230,6 +1242,12 @@ class TestExperimentDesignTab(unittest.TestCase):
         from PyQt6.QtWidgets import QApplication
         cls.app = QApplication.instance() or QApplication([])
 
+    def tearDown(self):
+        # Loading a design chdirs to its folder; keep test output out of the
+        # checkout for whatever runs next.
+        from PycroFlow.tests import chdir_to_test_output
+        chdir_to_test_output()
+
     def test_load_and_translate(self):
         from PycroFlow.services import ExperimentService
         from PycroFlow.gui.tabs.experiment_design_tab import (
@@ -1425,11 +1443,13 @@ class TestFluidTab(unittest.TestCase):
         from PycroFlow.gui.widgets import worker
         worker.set_synchronous(False)
 
-    def _tab(self):
+    def _tab(self, reservoir_ids=(1, 3, 8, 20)):
         from unittest.mock import MagicMock
         from PycroFlow.gui.tabs.fluid_tab import FluidTab
         svc = MagicMock(name='system_service')
         svc.fluid_system = object()
+        # The manual valve dropdown is filled from the setup's manifold.
+        svc.reservoir_ids.return_value = list(reservoir_ids)
         return FluidTab(svc), svc
 
     def test_fill_calls_service(self):
@@ -1480,21 +1500,63 @@ class TestFluidTab(unittest.TestCase):
             'pump_a', vol=80.0, pickup_dir='in', dispense_dir='in',
             pickup_res=5, dispense_res=7)
 
+    def test_valve_dropdown_offers_the_setups_manifold(self):
+        # Sparse manifolds (ibidi) are common: the ids offered are exactly
+        # those the setup wires, not a 1..N range nor the design's subset.
+        tab, _ = self._tab(reservoir_ids=(2, 3, 8, 20))
+        self.assertEqual(
+            [tab.valve_res.itemData(i) for i in range(tab.valve_res.count())],
+            [2, 3, 8, 20])
+
     def test_set_valves_calls_service(self):
         tab, svc = self._tab()
-        tab.valve_res.setText('3')
+        tab.valve_res.setCurrentIndex(tab.valve_res.findData(8))
         tab._on_set_valves()
-        svc.set_valves.assert_called_once_with(3)
+        svc.set_valves.assert_called_once_with(8)
 
-    def test_set_valves_required_empty_warns(self):
+    def test_set_valves_without_wired_reservoirs_warns(self):
         from unittest.mock import patch
         from PycroFlow.gui.tabs import fluid_tab as ft
-        tab, svc = self._tab()
-        tab.valve_res.setText('')
+        tab, svc = self._tab(reservoir_ids=())
+        self.assertFalse(tab.valve_btn.isEnabled())
         with patch.object(ft.QMessageBox, 'warning') as warn:
             tab._on_set_valves()
         warn.assert_called_once()
         svc.set_valves.assert_not_called()
+
+    def test_route_hint_follows_the_selected_reservoir(self):
+        tab, svc = self._tab(reservoir_ids=(2, 8))
+        svc.describe_reservoir_route.side_effect = (
+            lambda rid: 'route for {}'.format(rid))
+        tab.valve_res.setCurrentIndex(tab.valve_res.findData(8))
+        self.assertEqual(tab.valve_route.text(), 'route for 8')
+        tab.valve_res.setCurrentIndex(tab.valve_res.findData(2))
+        self.assertEqual(tab.valve_route.text(), 'route for 2')
+
+    def test_route_hint_without_a_setup(self):
+        tab, _ = self._tab(reservoir_ids=())
+        self.assertIn('No reservoirs wired', tab.valve_route.text())
+
+    def test_manual_controls_are_explained(self):
+        # The two pump groups differ in whether they re-route the valves;
+        # that difference must be stated, not left to be discovered.
+        tab, _ = self._tab()
+        from PyQt6.QtWidgets import QLabel
+        hints = ' '.join(lbl.text() for lbl in tab.findChildren(QLabel))
+        self.assertIn('does NOT change reservoir routing', hints)
+        self.assertIn('Sets the valves itself', hints)
+        self.assertIn('no liquid is moved', hints)
+        self.assertTrue(tab.stroke_pump.toolTip())
+        self.assertTrue(tab.move_pickup_res.toolTip())
+        self.assertTrue(tab.valve_res.toolTip())
+
+    def test_refresh_follows_a_setup_change(self):
+        tab, svc = self._tab(reservoir_ids=(1, 2))
+        svc.reservoir_ids.return_value = [5, 6, 7]
+        tab.refresh()
+        self.assertEqual(
+            [tab.valve_res.itemData(i) for i in range(tab.valve_res.count())],
+            [5, 6, 7])
 
     def test_stop_calls_service(self):
         tab, svc = self._tab()

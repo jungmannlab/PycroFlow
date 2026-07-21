@@ -10,6 +10,9 @@ from __future__ import annotations
 from loguru import logger
 
 
+from PycroFlow.configs import IBIDI_MULTIFLOW
+
+
 def _as_wavelength(value):
     """Return ``value`` as an int wavelength if it parses, else unchanged.
 
@@ -419,10 +422,106 @@ class SystemService:
         self._require('fluid_system')
         self.fluid_system.deliver_fluid(reservoir_id, volume)
 
+    def reservoir_route(self, reservoir_id) -> dict:
+        """Return the ``{valve address: position}`` map for a reservoir.
+
+        Read from the setup's manifold, so it answers "what would setting
+        the valves to this reservoir actually do?" whether or not the loaded
+        design uses it. Empty dict if the id is not wired.
+        """
+        from PycroFlow.configs import setup_reservoirs
+
+        for entry in setup_reservoirs(self._setup):
+            if entry.get('id') == reservoir_id:
+                return dict(entry.get('valve_pos') or {})
+        return {}
+
+    def _valve_labels(self) -> dict:
+        """Map each valve address in the setup to a human-readable name."""
+        fluid = (self._setup or {}).get('fluid') or {}
+        labels = {}
+        pumps = fluid.get('pumps') or {}
+        for name in ('pump_a', 'pump_out'):
+            address = (pumps.get(name) or {}).get('address')
+            if address is not None:
+                labels[address] = name
+        mux = fluid.get('multiplexer') or {}
+        if mux.get('driver') == IBIDI_MULTIFLOW:
+            labels[mux.get('address', 'ibidi')] = 'ibidi multiplexer'
+        for valve in mux.get('valves') or []:
+            address = valve.get('address')
+            if address is not None:
+                labels[address] = 'MVP valve {}'.format(address)
+        return labels
+
+    def describe_reservoir_route(self, reservoir_id) -> str:
+        """Describe, in words, how a reservoir is reached.
+
+        Spells out which valve goes where — including that the ibidi
+        multiplexer opens several channels at once and closes the rest — so
+        the manual controls say what they are about to do to the hardware.
+
+        Returns
+        -------
+        str
+            A one-line description, or an explanatory line when the
+            reservoir is not wired / no setup is loaded.
+        """
+        if self._setup is None:
+            return "No setup loaded."
+        route = self.reservoir_route(reservoir_id)
+        if not route:
+            return "Reservoir {} is not wired in setup {!r}.".format(
+                reservoir_id, self._setup_name)
+        labels = self._valve_labels()
+        parts = []
+        for address, position in route.items():
+            name = labels.get(address, "valve {}".format(address))
+            if isinstance(position, (list, tuple, set)):
+                channels = ', '.join(str(c) for c in position)
+                parts.append(
+                    "{} opens channels {} (all others closed)".format(
+                        name, channels))
+            else:
+                parts.append("{} → {}".format(name, position))
+        in_design = False
+        if self.fluid_system is not None:
+            in_design = reservoir_id in getattr(
+                self.fluid_system, 'reservoir_paths', {})
+        return "Reservoir {}: {}. {}".format(
+            reservoir_id, '; '.join(parts),
+            "Used by the loaded experiment design."
+            if in_design else "Wired in the setup, not used by the design.")
+
     def set_valves(self, reservoir_id: int) -> None:
-        """Route the manifold valves to access ``reservoir_id`` (manual)."""
+        """Route the manifold valves to access ``reservoir_id`` (manual).
+
+        Manual control is not limited to the reservoirs the loaded experiment
+        design names: any reservoir wired in the *setup's* manifold can be
+        reached, which is what testing the plumbing needs. Design-selected
+        reservoirs still go through the fluid system's own routing.
+
+        Raises
+        ------
+        KeyError
+            ``reservoir_id`` is not wired in the setup's manifold.
+        """
         self._require('fluid_system')
-        self.fluid_system._set_valves(reservoir_id)
+        try:
+            self.fluid_system._set_valves(reservoir_id)
+            return
+        except KeyError:
+            pass   # not part of the design; fall back to the setup manifold
+        from PycroFlow.configs import setup_reservoirs
+
+        for entry in setup_reservoirs(self._setup):
+            if entry.get('id') == reservoir_id:
+                self.fluid_system.set_valve_positions(entry['valve_pos'])
+                return
+        raise KeyError(
+            "reservoir {!r} is not wired in setup {!r}'s fluid.reservoirs "
+            "(which wires {})".format(
+                reservoir_id, self._setup_name, self.reservoir_ids()))
 
     def stop_all_moves(self) -> None:
         """Emergency stop on the fluid system. Safe to call from anywhere."""

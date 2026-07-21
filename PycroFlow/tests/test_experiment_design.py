@@ -12,6 +12,7 @@ from PycroFlow.schemas import (
     ExperimentDesignValidationError,
 )
 from PycroFlow.services import ExperimentService
+from PycroFlow.tests import chdir_to_test_output
 
 
 _EXAMPLE = os.path.join(
@@ -19,8 +20,14 @@ _EXAMPLE = os.path.join(
 
 
 def _example_design():
+    # Loading a design from disk chdirs to its folder (so run output lands
+    # beside it). Restore the test output dir, or later tests write their
+    # run records into the checkout.
     svc = ExperimentService()
-    return svc.load_experiment_design(_EXAMPLE)
+    try:
+        return svc.load_experiment_design(_EXAMPLE)
+    finally:
+        chdir_to_test_output()
 
 
 class TestExperimentDesignSchema(unittest.TestCase):
@@ -402,9 +409,12 @@ class TestTranslate(unittest.TestCase):
                          os.path.realpath(folder))
 
     def test_load_from_dict_keeps_cwd(self):
+        # Build the design first: loading it *from a path* chdirs, which is
+        # exactly what this test asserts does NOT happen for a dict.
+        design = _example_design()
         original = os.getcwd()
         self.addCleanup(os.chdir, original)
-        ExperimentService().load_experiment_design(_example_design())
+        ExperimentService().load_experiment_design(design)
         self.assertEqual(os.getcwd(), original)
 
 
