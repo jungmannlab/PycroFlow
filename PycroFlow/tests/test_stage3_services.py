@@ -13,6 +13,20 @@ from PycroFlow.services import (
 from PycroFlow.services import mm_core
 
 
+def _fake_monet(configs):
+    """Patch ``sys.modules['monet']`` with a stub exposing ``CONFIGS``.
+
+    The real monet (if installed at all) knows nothing of this repo's setup
+    names, so the illumination tests supply their own config registry.
+    """
+    import sys
+    import types
+
+    fake = types.ModuleType('monet')
+    fake.CONFIGS = configs
+    return patch.dict(sys.modules, {'monet': fake})
+
+
 class TestHALAbcsRegisterConcrete(unittest.TestCase):
 
     def test_hamilton_pump_is_hal_pump(self):
@@ -193,21 +207,47 @@ class TestSystemService(unittest.TestCase):
 
     def test_connect_illumination_builds_and_stores(self):
         sentinel = object()
+        svc = SystemService()
+        svc.load_setup('Mercury')
         with patch('PycroFlow.illumination.IlluminationSystem',
-                   return_value=sentinel):
-            svc = SystemService()
+                   return_value=sentinel), _fake_monet({'Mercury': {}}):
             result = svc.connect_illumination()
         self.assertIs(result, sentinel)
         self.assertIs(svc.illumination_system, sentinel)
 
-    def test_laser_options_from_monet_config(self):
-        import sys
-        import types
+    def test_connect_illumination_without_monet_config_raises(self):
+        # No setup loaded -> nothing declares a monet config.
+        svc = SystemService()
+        with self.assertRaises(RuntimeError):
+            svc.connect_illumination()
+
+    def test_connect_illumination_unknown_monet_config_raises(self):
+        # The setup names a monet config that monet does not know: fail at
+        # connect (so the GUI shows "not connected") rather than mid-run.
         svc = SystemService()
         svc.load_setup('Mercury')
-        fake = types.ModuleType('monet')
-        fake.CONFIGS = {'Mercury': {'lasers': {640: {}, 488: {}, 561: {}}}}
-        with patch.dict(sys.modules, {'monet': fake}):
+        with _fake_monet({'SomeOtherScope': {}}):
+            with self.assertRaises(KeyError):
+                svc.connect_illumination()
+        self.assertIsNone(svc.illumination_system)
+
+    def test_monet_config_may_differ_from_setup_name(self):
+        # A fluidics setup (Ibidi) running on another microscope (Mercury)
+        # illuminates with that microscope's monet config.
+        svc = SystemService()
+        svc.load_setup('Ibidi')
+        self.assertEqual(svc.setup_name(), 'Ibidi')
+        self.assertEqual(svc.get_monet_setup(), 'Mercury')
+        with _fake_monet({'Mercury': {'lasers': {560: {}, 488: {}}}}):
+            self.assertEqual(svc.laser_options(), [488, 560])
+            with patch('PycroFlow.illumination.IlluminationSystem') as IS:
+                svc.connect_illumination()
+        IS.assert_called_once_with(setup='Mercury')
+
+    def test_laser_options_from_monet_config(self):
+        svc = SystemService()
+        svc.load_setup('Mercury')
+        with _fake_monet({'Mercury': {'lasers': {640: {}, 488: {}, 561: {}}}}):
             self.assertEqual(svc.laser_options(), [488, 561, 640])
 
     def test_laser_options_empty_without_real_config(self):
@@ -222,7 +262,8 @@ class TestSystemService(unittest.TestCase):
         # The monet config name is taken from the chosen microscope setup.
         svc = SystemService()
         svc.load_setup('Mercury')   # non-emulated -> real illumination path
-        with patch('PycroFlow.illumination.IlluminationSystem') as IS:
+        with patch('PycroFlow.illumination.IlluminationSystem') as IS, \
+                _fake_monet({'Mercury': {}}):
             svc.connect_illumination()
         IS.assert_called_once_with(setup='Mercury')
 

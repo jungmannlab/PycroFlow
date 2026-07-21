@@ -50,6 +50,7 @@ class SystemService:
         self.illumination_system = illumination_system
         self._setup = None
         self._setup_name = None
+        self._monet_config = None
 
     # --- Setup (per-microscope hardware) -------------------------------
 
@@ -66,10 +67,11 @@ class SystemService:
         dict
             The parsed setup config.
         """
-        from PycroFlow.configs import load_setup
+        from PycroFlow.configs import load_setup, monet_config
 
         self._setup = load_setup(name)
         self._setup_name = self._setup.get('setup', name)
+        self._monet_config = monet_config(self._setup)
         if self._setup.get('emulated'):
             # Warm the emulator import on THIS (main) thread. Importing the
             # tests package runs install_hardware_mocks(), whose subprocess
@@ -82,9 +84,18 @@ class SystemService:
     def setup(self):
         return self._setup
 
-    def get_monet_setup(self):
-        """Return the setup name (a ``monet.CONFIGS`` key) for Monet."""
+    def setup_name(self):
+        """Return the loaded setup's own name (as in the setup selector)."""
         return self._setup_name
+
+    def get_monet_setup(self):
+        """Return the monet ``CONFIGS`` key the loaded setup illuminates with.
+
+        This names the *microscope* whose lasers are driven, which need not be
+        the setup's own name (e.g. an ``Ibidi`` fluidics setup running on the
+        ``Mercury`` microscope declares ``illumination.config: Mercury``).
+        """
+        return self._monet_config
 
     def is_emulated(self) -> bool:
         """Whether the loaded setup runs against emulated hardware."""
@@ -96,11 +107,9 @@ class SystemService:
         Empty when no setup is loaded. Used by the GUI to restrict the
         experiment design's reservoir-id inputs to the setup's hardware.
         """
-        if not self._setup:
-            return []
-        manifold = (self._setup.get('hamilton', {})
-                    or {}).get('reservoir_a_manifold', [])
-        ids = [e['id'] for e in manifold
+        from PycroFlow.configs import setup_reservoirs
+
+        ids = [e['id'] for e in setup_reservoirs(self._setup)
                if isinstance(e, dict) and 'id' in e]
         return sorted(ids)
 
@@ -237,23 +246,66 @@ class SystemService:
         """Build the illumination system.
 
         For an emulated setup an :class:`EmulatedIlluminationSystem` is built.
-        Otherwise a real :class:`PycroFlow.illumination.IlluminationSystem`
-        is built, given the microscope setup's monet config name; its monet
-        control loads lazily on first laser use.
+        Otherwise the setup's monet config name is validated against
+        ``monet.CONFIGS`` and a real
+        :class:`PycroFlow.illumination.IlluminationSystem` is built with it.
+        The lasers themselves still open lazily on first use, so connecting
+        does not claim the laser COM port (the Monet tab stays usable) — but a
+        misconfigured setup fails here instead of mid-run.
 
         Returns
         -------
         object
             The constructed illumination system.
+
+        Raises
+        ------
+        RuntimeError
+            The setup declares no monet config name.
+        KeyError
+            The monet config name is not among ``monet.CONFIGS``.
         """
         if self.is_emulated():
             from PycroFlow.tests.emulators import EmulatedIlluminationSystem
             self.illumination_system = EmulatedIlluminationSystem()
         else:
             import PycroFlow.illumination as il
-            self.illumination_system = il.IlluminationSystem(
-                setup=self.get_monet_setup())
+            name = self.get_monet_setup()
+            self._check_monet_config(name)
+            self.illumination_system = il.IlluminationSystem(setup=name)
         return self.illumination_system
+
+    @staticmethod
+    def _check_monet_config(name) -> None:
+        """Verify ``name`` is a usable monet config key. Raise if it is not.
+
+        When monet is absent or mocked (``CONFIGS`` is not a dict, as in the
+        test suite) the check is skipped with a warning rather than failing —
+        the same defensiveness as :meth:`laser_options`.
+        """
+        if not name:
+            raise RuntimeError(
+                "the loaded setup declares no monet config; set "
+                "'illumination: {config: <monet CONFIGS key>}' in its "
+                "setup YAML")
+        try:
+            import monet
+        except Exception as exc:
+            logger.warning(
+                "monet is not importable ({!r}); connecting illumination "
+                "without validating config {!r}".format(exc, name))
+            return
+        configs = getattr(monet, 'CONFIGS', None)
+        if not isinstance(configs, dict):
+            logger.warning(
+                "monet.CONFIGS is unavailable; connecting illumination "
+                "without validating config {!r}".format(name))
+            return
+        if name not in configs:
+            raise KeyError(
+                "monet config {!r} does not exist. The setup's "
+                "illumination.config must name the microscope's monet "
+                "config; available: {}".format(name, sorted(configs)))
 
     # --- Disconnection -------------------------------------------------
 

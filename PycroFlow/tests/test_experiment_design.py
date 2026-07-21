@@ -132,7 +132,7 @@ class TestSetupConfigs(unittest.TestCase):
         setup = configs.load_setup('Mercury')
         self.assertFalse(setup['emulated'])
         # tubing records convert to a tuple-keyed dict
-        self.assertIn(('pump_a', 'sample'), setup['tubing'])
+        self.assertIn(('pump_a', 'sample'), setup['fluid']['tubing'])
 
     def test_assemble_filters_and_attaches(self):
         setup = configs.load_setup('Emulator')
@@ -152,6 +152,67 @@ class TestSetupConfigs(unittest.TestCase):
         with self.assertRaises(KeyError):
             configs.assemble_hamilton_config(
                 setup, {'reservoir_names': {999: 'nope'}})
+
+    def test_multiplexer_drivers_flatten_to_legacy_config(self):
+        # LegacyArchitecture still consumes the flat vendor-shaped dict:
+        # hamilton-mvp fills valve_a, ibidi-multiflow fills 'ibidi' instead.
+        settings = {'reservoir_names': {1: 'R1'}}
+        mvp, _ = configs.assemble_hamilton_config(
+            configs.load_setup('Mercury'), settings)
+        self.assertEqual([v['address'] for v in mvp['valve_a']], [3, 5])
+        self.assertNotIn('ibidi', mvp)
+
+        ibidi, _ = configs.assemble_hamilton_config(
+            configs.load_setup('IbidiEmulator'), settings)
+        self.assertEqual(ibidi['valve_a'], [])
+        self.assertEqual(ibidi['ibidi']['channels'], 24)
+        self.assertNotIn('driver', ibidi['ibidi'])
+
+    def test_unknown_multiplexer_driver_raises(self):
+        setup = configs.load_setup('Emulator')
+        setup['fluid']['multiplexer']['driver'] = 'nonexistent-mux'
+        with self.assertRaises(ValueError):
+            configs.assemble_hamilton_config(
+                setup, {'reservoir_names': {1: 'R1'}})
+
+    def test_legacy_vendor_layout_normalizes(self):
+        # The old vendor-grouped layout ('hamilton:' + top-level 'tubing:',
+        # with the ibidi block nested inside) still loads, and assembles to
+        # the same config as its role-based twin.
+        import yaml
+
+        new = configs.load_setup('IbidiEmulator')
+        old_yaml = yaml.safe_load("""
+            setup: IbidiEmulator
+            emulated: true
+            hamilton:
+              system_type: legacy
+              interface: {COM: '0', baud: 9600}
+              valve_a: []
+              ibidi: {port: '7', baud: 115200, channels: 24, address: ibidi}
+              flush_pos: {inject: in, flush: out}
+              pump_a: {address: 1, instrument_type: '4', valve_type: Y,
+                       syringe: 500u, input_pos: in, output_pos: out,
+                       motorsteps_per_step: 1, speed_factor: 2}
+              pump_out: {address: 0, instrument_type: '4', valve_type: Y,
+                         syringe: 5.0m, input_pos: in, output_pos: out,
+                         motorsteps_per_step: 1, speed_factor: 2}
+              reservoir_a_manifold:
+                - {id: 1, valve_pos: {ibidi: 1, 1: in}}
+            tubing:
+              - {from: R1, to: pump_a, volume: 325}
+        """)
+        old = configs._normalize_setup(old_yaml)
+        self.assertEqual(configs.monet_config(old), 'IbidiEmulator')
+        self.assertEqual(
+            [e['id'] for e in configs.setup_reservoirs(old)], [1])
+
+        settings = {'reservoir_names': {1: 'R1'}}
+        ham_old, tub_old = configs.assemble_hamilton_config(old, settings)
+        ham_new, tub_new = configs.assemble_hamilton_config(new, settings)
+        self.assertEqual(ham_old, ham_new)
+        self.assertEqual(tub_old[('R1', 'pump_a')],
+                         tub_new[('R1', 'pump_a')])
 
 
 class TestBuilderSplit(unittest.TestCase):
