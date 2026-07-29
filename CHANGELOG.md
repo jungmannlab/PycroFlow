@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Per-subsystem selection: an `enabled` flag on the fluid / img / illu
+  sections of an experiment design lets a subsystem be deselected. The
+  builder omits deselected subsystems from the compiled Run Sequence, prunes
+  cross-subsystem `wait for signal` entries that targeted a dropped
+  subsystem, and raises if nothing is selected; the orchestrator only wires
+  hardware for subsystems present in the protocol.
 - Shared `.pre-commit-config.yaml` (pre-commit-hooks + Black + flake8 via
   Flake8-pyproject), matching the rest of the DNA-PAINT stack.
 - `black --check` and `flake8` lint job in CI.

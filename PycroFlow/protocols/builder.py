@@ -123,7 +123,7 @@ class ProtocolBuilder:
             # (``enabled: false``). All step lists are still generated above so
             # the round structure is intact; deselected ones are simply not
             # emitted, and orphaned cross-subsystem waits are pruned below.
-            if not section or section.get("enabled", True) is False:
+            if not section or section.get("enabled", True) in (False, "false"):
                 continue
             protocol[system] = {"protocol_entries": steps[system]}
             if "parameters" in section.keys():
@@ -134,6 +134,15 @@ class ProtocolBuilder:
         # would never be satisfied. Remove them (a wait is orphaned iff its
         # ``target`` names a subsystem not in the emitted protocol).
         self._prune_orphan_waits(protocol)
+
+        # An empty protocol means every subsystem was absent or deselected;
+        # this would otherwise validate and run as a silent no-op that reports
+        # success without doing anything. Fail loudly instead.
+        if not protocol:
+            raise ValueError(
+                "No subsystems selected: enable at least one of "
+                "fluid / img / illu in the experiment design."
+            )
 
         # Pin the wire format: catch malformed entries (unknown $type, missing
         # required fields, typos in field names) here before the orchestrator
@@ -206,7 +215,15 @@ class ProtocolBuilder:
                 default_style='"',
             )
 
-        return fname, self.steps
+        # Derive the returned step lists from the compiled ``protocol`` rather
+        # than ``self.steps``: the former reflects deselected-subsystem drops
+        # and orphan-wait pruning, so callers see exactly what was written to
+        # disk instead of the raw (pre-prune) step lists.
+        steps = {
+            system: content["protocol_entries"]
+            for system, content in protocol.items()
+        }
+        return fname, steps
 
     # Registry mapping the user-facing experiment type (case-insensitive)
     # to the ProtocolBuilder method that knows how to expand it. New
