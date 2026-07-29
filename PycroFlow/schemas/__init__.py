@@ -10,6 +10,7 @@ hard way mid-run.
 Stage 4 of the restructuring will turn these from validation-only into
 the canonical typed representation of protocol entries.
 """
+
 from PycroFlow.schemas.protocol_schema import (
     Protocol,
     ProtocolEntry,

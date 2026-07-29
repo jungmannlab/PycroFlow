@@ -16,7 +16,7 @@ def log_filter(record):
     return "pyHamilton" in record["name"]
 
 
-def clean_old_logs(prefix='pyhamilton.log', directory='.'):
+def clean_old_logs(prefix="pyhamilton.log", directory="."):
     """Delete rotated pyHamilton log files. Opt-in; no longer runs at import."""
     try:
         files = os.listdir(directory)
@@ -30,7 +30,7 @@ def clean_old_logs(prefix='pyhamilton.log', directory='.'):
                 pass
 
 
-def setup_logging(logfile='hamilton.log', clean_old=False):
+def setup_logging(logfile="hamilton.log", clean_old=False):
     """Add a pyHamilton-only file sink. Safe to call multiple times."""
     if clean_old:
         clean_old_logs(prefix=logfile)
@@ -56,7 +56,7 @@ def rem_old_logfiles():
     clean_old_logs()
 
 
-#List of pumps. Initially the list is empty
+# List of pumps. Initially the list is empty
 pumps = []
 pumpLength = 16
 
@@ -64,19 +64,28 @@ pumpLength = 16
 def connect(port, baudrate):
     initializeSerial(port, baudrate)
 
+
 def disconnect():
     disconnectSerial()
+
 
 def executeCommand(pump, command, waitForPump=False):
     if pump.checkValidity(command):
         sendCommand(pump.asciiAddress, command, waitForPump)
 
+
 def definePump(address: str, type: util.PSDTypes, syringe: util.SyringeTypes):
     if len(pumps) < pumpLength:
         newPump = PSD(address, type)
         logging.debug("Enable h Factor Commands and Queries")
-        sendCommand(newPump.asciiAddress, newPump.command.enableHFactorCommandsAndQueries() + newPump.command.executeCommandBuffer())
-        result = sendCommand(newPump.asciiAddress, newPump.command.syringeModeQuery(), True)
+        sendCommand(
+            newPump.asciiAddress,
+            newPump.command.enableHFactorCommandsAndQueries()
+            + newPump.command.executeCommandBuffer(),
+        )
+        result = sendCommand(
+            newPump.asciiAddress, newPump.command.syringeModeQuery(), True
+        )
         resolution = result[3:4]
         newPump.setResolution(int(resolution))
         newPump.calculateSteps()

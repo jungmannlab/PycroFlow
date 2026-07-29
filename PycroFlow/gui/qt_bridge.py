@@ -11,6 +11,7 @@ these signals run safely on the GUI thread.
 Tabs/widgets connect to :class:`QtBridge` signals instead of registering
 service observers directly, so no widget ever runs on a worker thread.
 """
+
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from PycroFlow.services.experiment_service import ExperimentState

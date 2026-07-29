@@ -3,6 +3,7 @@
 Currently only :class:`SpillSensor`; future leak detectors, pressure
 sensors, etc. can subclass without changing orchestration code.
 """
+
 from __future__ import annotations
 
 import abc
@@ -25,7 +26,9 @@ class SpillSensor(abc.ABC):
         """One-shot read. Returns True (wet) / False (dry) / None (error)."""
 
     @abc.abstractmethod
-    def monitor_sensor(self, fn_on_wet: Optional[Callable[[str], None]] = None) -> None:
+    def monitor_sensor(
+        self, fn_on_wet: Optional[Callable[[str], None]] = None
+    ) -> None:
         """Start a background monitoring thread that invokes ``fn_on_wet``
         when a wet reading is observed."""
 

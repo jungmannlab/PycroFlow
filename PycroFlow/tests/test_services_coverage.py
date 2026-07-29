@@ -1,5 +1,6 @@
 """Additional coverage for the services layer (lifecycle, manual control,
 MM Core ownership) beyond the happy paths in test_stage3_services."""
+
 import os
 import tempfile
 import types
@@ -7,22 +8,24 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from PycroFlow.services import (
-    ExperimentService, ExperimentState, SystemService, mm_core,
+    ExperimentService,
+    ExperimentState,
+    SystemService,
+    mm_core,
 )
 from PycroFlow.services import get_core, get_studio, reset_core
-
 
 # ---------------------------------------------------------------------------
 # ExperimentService lifecycle
 # ---------------------------------------------------------------------------
 
-_MINIMAL = {'fluid': {'protocol_entries': []}}
+_MINIMAL = {"fluid": {"protocol_entries": []}}
 
 
 def _loaded_service_with_mock_orchestrator():
     svc = ExperimentService()
-    svc.load_protocol(_MINIMAL)        # builds a real (unstarted) orchestrator
-    svc._orchestrator = MagicMock(name='orchestrator')  # swap in a stub
+    svc.load_protocol(_MINIMAL)  # builds a real (unstarted) orchestrator
+    svc._orchestrator = MagicMock(name="orchestrator")  # swap in a stub
     return svc
 
 
@@ -36,8 +39,8 @@ class ExperimentLifecycleTest(unittest.TestCase):
 
     def test_start_forwards_system_steps(self):
         svc = _loaded_service_with_mock_orchestrator()
-        svc.start(system_steps={'fluid': 3})
-        svc._orchestrator.start_protocol.assert_called_once_with({'fluid': 3})
+        svc.start(system_steps={"fluid": 3})
+        svc._orchestrator.start_protocol.assert_called_once_with({"fluid": 3})
 
     def test_pause_resume_transitions(self):
         svc = _loaded_service_with_mock_orchestrator()
@@ -73,7 +76,7 @@ class ExperimentLifecycleTest(unittest.TestCase):
         svc.start()
         svc.end()
         self.assertEqual(svc.state, ExperimentState.FINISHED)
-        with patch.object(svc, '_build_orchestrator') as build:
+        with patch.object(svc, "_build_orchestrator") as build:
             svc.start()
         build.assert_called_once()
         self.assertEqual(svc.state, ExperimentState.RUNNING)
@@ -96,7 +99,7 @@ class ExperimentLifecycleTest(unittest.TestCase):
 
     def test_clear_design_forgets_design_only(self):
         svc = _loaded_service_with_mock_orchestrator()
-        svc._experiment_design = {'base_name': 'x'}
+        svc._experiment_design = {"base_name": "x"}
         svc.clear_design()
         self.assertIsNone(svc.experiment_design)
         # The loaded run sequence is untouched.
@@ -107,7 +110,7 @@ class ExperimentLifecycleTest(unittest.TestCase):
         svc.start()
         svc.abort()
         self.assertEqual(svc.state, ExperimentState.ABORTED)
-        with patch.object(svc, '_build_orchestrator') as build:
+        with patch.object(svc, "_build_orchestrator") as build:
             svc.start()
         build.assert_called_once()
         self.assertEqual(svc.state, ExperimentState.RUNNING)
@@ -130,20 +133,21 @@ class ExperimentLifecycleTest(unittest.TestCase):
 
     def test_load_from_yaml(self):
         svc = ExperimentService()
-        fd, path = tempfile.mkstemp(suffix='.yaml')
+        fd, path = tempfile.mkstemp(suffix=".yaml")
         try:
-            with os.fdopen(fd, 'w') as f:
+            with os.fdopen(fd, "w") as f:
                 f.write("fluid:\n  protocol_entries: []\n")
             svc.load_protocol_from_yaml(path)
         finally:
             os.unlink(path)
         self.assertEqual(svc.state, ExperimentState.LOADED)
-        self.assertEqual(svc.protocol, {'fluid': {'protocol_entries': []}})
+        self.assertEqual(svc.protocol, {"fluid": {"protocol_entries": []}})
 
 
 # ---------------------------------------------------------------------------
 # SystemService manual control
 # ---------------------------------------------------------------------------
+
 
 class SystemServiceTest(unittest.TestCase):
     def test_fluid_commands_delegate(self):
@@ -181,7 +185,7 @@ class SystemServiceTest(unittest.TestCase):
 
     def test_stop_all_moves_swallows_errors(self):
         fluid = MagicMock()
-        fluid.stop_all_moves.side_effect = RuntimeError('boom')
+        fluid.stop_all_moves.side_effect = RuntimeError("boom")
         # Should log and not propagate.
         SystemService(fluid_system=fluid).stop_all_moves()
 
@@ -190,14 +194,14 @@ class SystemServiceTest(unittest.TestCase):
         fluid = types.SimpleNamespace(pump_a=object())
         svc = SystemService(fluid_system=fluid)
         with self.assertRaises(RuntimeError):
-            svc.manual_pump('pump_a')
+            svc.manual_pump("pump_a")
 
     def test_manual_pump_unknown_pump(self):
         # has _pump but no such pump attribute.
-        fluid = types.SimpleNamespace(_pump=lambda *a, **k: 'ok')
+        fluid = types.SimpleNamespace(_pump=lambda *a, **k: "ok")
         svc = SystemService(fluid_system=fluid)
         with self.assertRaises(KeyError):
-            svc.manual_pump('pump_zzz')
+            svc.manual_pump("pump_zzz")
 
     def test_close_is_idempotent_and_calls_through(self):
         fluid = MagicMock()
@@ -212,6 +216,7 @@ class SystemServiceTest(unittest.TestCase):
 # mm_core ownership
 # ---------------------------------------------------------------------------
 
+
 class MmCoreTest(unittest.TestCase):
     def setUp(self):
         reset_core()
@@ -220,8 +225,9 @@ class MmCoreTest(unittest.TestCase):
         reset_core()
 
     def test_get_studio_caches(self):
-        with patch('pycromanager.Studio',
-                   return_value=MagicMock(name='Studio')) as studio_cls:
+        with patch(
+            "pycromanager.Studio", return_value=MagicMock(name="Studio")
+        ) as studio_cls:
             a = get_studio()
             b = get_studio()
         self.assertIs(a, b)
@@ -229,7 +235,7 @@ class MmCoreTest(unittest.TestCase):
         self.assertTrue(mm_core.is_initialized())
 
     def test_reset_core_clears_cache(self):
-        with patch('pycromanager.Core', return_value=MagicMock()):
+        with patch("pycromanager.Core", return_value=MagicMock()):
             get_core()
         self.assertTrue(mm_core.is_initialized())
         reset_core()
@@ -239,10 +245,11 @@ class MmCoreTest(unittest.TestCase):
         # monet is mocked at import; share_with_monet should assign our Core
         # onto monet.beampath.pycrocore.
         import monet.beampath as mbp
-        with patch('pycromanager.Core', return_value=MagicMock(name='Core')):
+
+        with patch("pycromanager.Core", return_value=MagicMock(name="Core")):
             mm_core.share_with_monet()
             self.assertIs(mbp.pycrocore, get_core())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

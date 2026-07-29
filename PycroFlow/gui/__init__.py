@@ -15,4 +15,5 @@ Launch with the ``pycroflow-gui`` console script or
 def main(argv=None):
     """Lazy entry point — defers the PyQt6 import to call time."""
     from PycroFlow.gui.app import main as _main
+
     return _main(argv)

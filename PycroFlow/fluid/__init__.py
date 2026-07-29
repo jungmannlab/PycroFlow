@@ -9,6 +9,7 @@ the follow-up extraction that the plan calls for.
 Back-compat: ``import PycroFlow.hamilton_architecture as ha`` still works
 via the shim at ``PycroFlow/hamilton_architecture.py``.
 """
+
 from PycroFlow.fluid.legacy import LegacyArchitecture
 
 __all__ = ["LegacyArchitecture"]

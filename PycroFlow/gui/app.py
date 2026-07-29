@@ -4,6 +4,7 @@ Builds the shared service objects, makes monet share PycroFlow's
 Micro-Manager Core (so the embedded monet tab and PycroFlow imaging use one
 connection in one process), and runs the Qt event loop.
 """
+
 import sys
 
 import PycroFlow
@@ -16,7 +17,8 @@ def _require_pyqt6():
     except ImportError:
         sys.stderr.write(
             "PyQt6 is required for the PycroFlow GUI but is not installed.\n"
-            "Install it with:  pip install -e \".[gui]\"\n")
+            'Install it with:  pip install -e ".[gui]"\n'
+        )
         raise SystemExit(2)
 
 
@@ -49,5 +51,5 @@ def main(argv=None):
     return app.exec()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

@@ -11,21 +11,31 @@ swaps the sub-form.
 ``target-rounds`` round-trip); ``to_model()`` validates it against the model
 and raises the schema's validation error on bad input.
 """
+
 import ast
 import typing
 from typing import Union, get_args, get_origin
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QLabel,
-    QLineEdit, QCheckBox, QComboBox, QPushButton, QGridLayout, QToolButton,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QFormLayout,
+    QGroupBox,
+    QLabel,
+    QLineEdit,
+    QCheckBox,
+    QComboBox,
+    QPushButton,
+    QGridLayout,
+    QToolButton,
 )
 
 from pydantic import BaseModel
 from pydantic_core import PydanticUndefined
 
 from PycroFlow.schemas.experiment_design import field_meta
-
 
 # --- type helpers --------------------------------------------------------
 
@@ -88,7 +98,7 @@ def _coerce_scalar(text, ann):
 
 def _variant_label(model_cls):
     """The discriminator literal of a model with a ``type`` field."""
-    fi = model_cls.model_fields.get('type')
+    fi = model_cls.model_fields.get("type")
     if fi is not None:
         args = get_args(fi.annotation)
         if args:
@@ -97,6 +107,7 @@ def _variant_label(model_cls):
 
 
 # --- editor context (shared, observable dropdown options) ---------------
+
 
 class FormContext:
     """Named dropdown option lists shared down a form tree, with live updates.
@@ -109,11 +120,12 @@ class FormContext:
 
     def __init__(self, options=None):
         self._options = {k: list(v) for k, v in (options or {}).items()}
-        self._subs = {}   # key -> [callback]
+        self._subs = {}  # key -> [callback]
 
     def get(self, key, default=None):
-        return list(self._options.get(key, default if default is not None
-                                      else []))
+        return list(
+            self._options.get(key, default if default is not None else [])
+        )
 
     def subscribe(self, key, callback):
         self._subs.setdefault(key, []).append(callback)
@@ -133,6 +145,7 @@ class FormContext:
 
 
 # --- field editors -------------------------------------------------------
+
 
 class _ScalarEditor(QWidget):
     def __init__(self, ann, optional, value, parent=None):
@@ -164,7 +177,7 @@ class _ScalarEditor(QWidget):
         if isinstance(self._w, QCheckBox):
             return self._w.isChecked()
         text = self._w.text().strip()
-        if text == '':
+        if text == "":
             # Empty -> None; to_dict drops it so pydantic applies the field
             # default (or raises a clear 'required' error).
             return None
@@ -180,7 +193,7 @@ class _ListScalarEditor(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         self._w = QLineEdit()
         if value:
-            self._w.setText(', '.join(str(v) for v in value))
+            self._w.setText(", ".join(str(v) for v in value))
         self._w.setPlaceholderText("comma-separated")
         lay.addWidget(self._w)
 
@@ -188,7 +201,7 @@ class _ListScalarEditor(QWidget):
         text = self._w.text().strip()
         if not text:
             return []
-        items = [p.strip() for p in text.split(',') if p.strip()]
+        items = [p.strip() for p in text.split(",") if p.strip()]
         return [_coerce_scalar(p, self._item_ann) for p in items]
 
 
@@ -208,9 +221,9 @@ class _ChoiceEditor(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         self._combo = QComboBox()
         if allow_none:
-            self._combo.addItem('')   # blank -> None
+            self._combo.addItem("")  # blank -> None
         self._combo.addItems(opts)
-        cur = '' if value is None else str(value)
+        cur = "" if value is None else str(value)
         idx = self._combo.findText(cur)
         if idx >= 0:
             self._combo.setCurrentIndex(idx)
@@ -228,12 +241,12 @@ class _ChoiceEditor(QWidget):
         """
         cur = self._combo.currentText()
         opts = [str(o) for o in options]
-        if cur not in ('', *opts):
+        if cur not in ("", *opts):
             opts.append(cur)
         self._combo.blockSignals(True)
         self._combo.clear()
         if self._allow_none:
-            self._combo.addItem('')
+            self._combo.addItem("")
         self._combo.addItems(opts)
         idx = self._combo.findText(cur)
         if idx >= 0:
@@ -242,8 +255,8 @@ class _ChoiceEditor(QWidget):
 
     def get_value(self):
         text = self._combo.currentText()
-        if text == '':
-            return None   # to_dict drops it -> field default / required error
+        if text == "":
+            return None  # to_dict drops it -> field default / required error
         return _coerce_scalar(text, self._ann)
 
 
@@ -255,9 +268,18 @@ class _ListChoiceEditor(QGroupBox):
     SPH-RESI RESI-rounds.
     """
 
-    def __init__(self, item_ann, value, title, choices_key=None,
-                 static_options=None, allow_none=False, context=None,
-                 row_label=None, parent=None):
+    def __init__(
+        self,
+        item_ann,
+        value,
+        title,
+        choices_key=None,
+        static_options=None,
+        allow_none=False,
+        context=None,
+        row_label=None,
+        parent=None,
+    ):
         super().__init__(title, parent)
         self.is_block = True
         self._item_ann = item_ann
@@ -268,14 +290,14 @@ class _ListChoiceEditor(QGroupBox):
         # Optional per-row label template, numbered 1..n (e.g.
         # 'imager round {}'); the labels renumber on add/remove.
         self._row_label = row_label
-        self._items = []   # [(row_widget, _ChoiceEditor, label_or_None)]
+        self._items = []  # [(row_widget, _ChoiceEditor, label_or_None)]
         self._lay = QVBoxLayout(self)
         self._items_lay = QVBoxLayout()
         self._lay.addLayout(self._items_lay)
         add = QPushButton("Add")
         add.clicked.connect(lambda: self._add_item(None))
         self._lay.addWidget(add)
-        for v in (value or []):
+        for v in value or []:
             self._add_item(v)
 
     def _options(self):
@@ -294,9 +316,13 @@ class _ListChoiceEditor(QGroupBox):
             label = QLabel()
             rlay.addWidget(label)
         ed = _ChoiceEditor(
-            self._options(), val, self._allow_none, self._item_ann)
-        if (self._choices_key and self._ctx is not None
-                and hasattr(self._ctx, 'subscribe')):
+            self._options(), val, self._allow_none, self._item_ann
+        )
+        if (
+            self._choices_key
+            and self._ctx is not None
+            and hasattr(self._ctx, "subscribe")
+        ):
             self._ctx.subscribe(self._choices_key, ed.set_options)
         rlay.addWidget(ed, 1)
         rm = QPushButton("✕")
@@ -324,7 +350,7 @@ class _ListChoiceEditor(QGroupBox):
         out = []
         for _, ed, _ in self._items:
             v = ed.get_value()
-            if v is not None and v != '':
+            if v is not None and v != "":
                 out.append(v)
         return out
 
@@ -339,10 +365,21 @@ class _MappingEditor(QGroupBox):
     a dropdown restricted to those options (e.g. the setup's reservoir ids).
     """
 
-    def __init__(self, key_ann, val_ann, value, title, *, columns=None,
-                 display_value_first=False, key_choices=None,
-                 value_choices=None, provides=None, context=None,
-                 parent=None):
+    def __init__(
+        self,
+        key_ann,
+        val_ann,
+        value,
+        title,
+        *,
+        columns=None,
+        display_value_first=False,
+        key_choices=None,
+        value_choices=None,
+        provides=None,
+        context=None,
+        parent=None,
+    ):
         super().__init__(title, parent)
         self.is_block = True
         self._key_ann = key_ann
@@ -355,7 +392,7 @@ class _MappingEditor(QGroupBox):
         self._provides = provides
         self._ctx = context
         self._rows = []
-        self._next_row = 0   # monotonic grid row, so removals never collide
+        self._next_row = 0  # monotonic grid row, so removals never collide
         self._lay = QVBoxLayout(self)
         self._grid = QGridLayout()
         self._lay.addLayout(self._grid)
@@ -365,29 +402,30 @@ class _MappingEditor(QGroupBox):
                 self._grid.addWidget(lbl, self._next_row, c)
             self._next_row += 1
         add = QPushButton("Add")
-        add.clicked.connect(lambda: self._add_row('', ''))
+        add.clicked.connect(lambda: self._add_row("", ""))
         self._lay.addWidget(add)
         for k, v in (value or {}).items():
             self._add_row(k, v)
 
     @staticmethod
     def _make_cell(val, choices):
-        if choices:   # non-empty -> dropdown; empty/None -> free text
+        if choices:  # non-empty -> dropdown; empty/None -> free text
             opts = [str(c) for c in choices]
-            if val not in (None, '') and str(val) not in opts:
+            if val not in (None, "") and str(val) not in opts:
                 opts.append(str(val))
             combo = QComboBox()
             combo.addItems(opts)
-            idx = combo.findText('' if val in (None, '') else str(val))
+            idx = combo.findText("" if val in (None, "") else str(val))
             if idx >= 0:
                 combo.setCurrentIndex(idx)
             return combo
-        return QLineEdit('' if val in (None, '') else str(val))
+        return QLineEdit("" if val in (None, "") else str(val))
 
     @staticmethod
     def _cell_text(w):
-        return (w.currentText() if isinstance(w, QComboBox)
-                else w.text()).strip()
+        return (
+            w.currentText() if isinstance(w, QComboBox) else w.text()
+        ).strip()
 
     def _add_row(self, k, v):
         r = self._next_row
@@ -418,8 +456,7 @@ class _MappingEditor(QGroupBox):
     def _notify(self):
         if self._provides and self._ctx is not None:
             vals = [self._cell_text(val_w) for _, val_w, _ in self._rows]
-            self._ctx.set_options(
-                self._provides, [v for v in vals if v])
+            self._ctx.set_options(self._provides, [v for v in vals if v])
 
     def _remove(self, row):
         for w in row:
@@ -432,10 +469,11 @@ class _MappingEditor(QGroupBox):
         out = {}
         for key_w, val_w, _ in self._rows:
             k = self._cell_text(key_w)
-            if k == '':
+            if k == "":
                 continue
             out[_coerce_scalar(k, self._key_ann)] = _coerce_scalar(
-                self._cell_text(val_w), self._val_ann)
+                self._cell_text(val_w), self._val_ann
+            )
         return out
 
 
@@ -454,7 +492,7 @@ class _ListModelEditor(QGroupBox):
         add = QPushButton("Add item")
         add.clicked.connect(lambda: self._add_item({}))
         self._lay.addWidget(add)
-        for item in (value or []):
+        for item in value or []:
             self._add_item(item)
 
     def _add_item(self, data):
@@ -492,7 +530,7 @@ class _DictModelEditor(QGroupBox):
         self._items_lay = QVBoxLayout()
         self._lay.addLayout(self._items_lay)
         add = QPushButton("Add entry")
-        add.clicked.connect(lambda: self._add_item('', {}))
+        add.clicked.connect(lambda: self._add_item("", {}))
         self._lay.addWidget(add)
         for k, v in (value or {}).items():
             self._add_item(k, v)
@@ -550,7 +588,7 @@ class _UnionModelEditor(QGroupBox):
         self._lay.addWidget(self._holder)
         self._form = None
 
-        initial = (value or {}).get('type')
+        initial = (value or {}).get("type")
         if initial in self._by_label:
             self._combo.setCurrentText(initial)
         self._rebuild(value or {})
@@ -562,12 +600,13 @@ class _UnionModelEditor(QGroupBox):
         cls = self._by_label[self._combo.currentText()]
         # The variant 'type' is the selector above, so skip it in the sub-form.
         self._form = SchemaForm(
-            cls, value, context=self._context, skip_fields={'type'})
+            cls, value, context=self._context, skip_fields={"type"}
+        )
         self._holder_lay.addWidget(self._form)
 
     def get_value(self):
         data = self._form.to_dict()
-        data['type'] = self._combo.currentText()
+        data["type"] = self._combo.currentText()
         return data
 
 
@@ -581,13 +620,14 @@ class _LiteralEditor(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         self._w = QLineEdit()
         if value is not None:
-            self._w.setText(repr(value) if not isinstance(value, str)
-                            else value)
+            self._w.setText(
+                repr(value) if not isinstance(value, str) else value
+            )
         lay.addWidget(self._w)
 
     def get_value(self):
         text = self._w.text().strip()
-        if text == '':
+        if text == "":
             return None
         try:
             return ast.literal_eval(text)
@@ -596,7 +636,7 @@ class _LiteralEditor(QWidget):
 
 
 def _has_choices(meta):
-    return 'choices' in meta or 'choices_from' in meta
+    return "choices" in meta or "choices_from" in meta
 
 
 def _make_editor(ann, optional, value, label, meta, context):
@@ -613,33 +653,48 @@ def _make_editor(ann, optional, value, label, meta, context):
         if _has_choices(meta):
             # list of dropdowns (add/remove rows), e.g. Exchange imagers.
             return _ListChoiceEditor(
-                item_ann, value, meta.get('title', label),
-                choices_key=meta.get('choices_from'),
-                static_options=meta.get('choices'),
-                allow_none=meta.get('allow_none', False), context=context,
-                row_label=meta.get('row_label'))
+                item_ann,
+                value,
+                meta.get("title", label),
+                choices_key=meta.get("choices_from"),
+                static_options=meta.get("choices"),
+                allow_none=meta.get("allow_none", False),
+                context=context,
+                row_label=meta.get("row_label"),
+            )
         return _ListScalarEditor(item_ann, value)
     if _is_dict(ann):
         kt, vt = (get_args(ann) + (str, str))[:2]
         if _is_model(vt):
             return _DictModelEditor(vt, value, label, context)
         return _MappingEditor(
-            kt, vt, value, label,
-            columns=meta.get('columns'),
-            display_value_first=meta.get('display_value_first', False),
-            key_choices=(context.get(meta['key_choices_from'])
-                         if 'key_choices_from' in meta else None),
-            value_choices=(context.get(meta['value_choices_from'])
-                           if 'value_choices_from' in meta else None),
-            provides=meta.get('provides'), context=context)
+            kt,
+            vt,
+            value,
+            label,
+            columns=meta.get("columns"),
+            display_value_first=meta.get("display_value_first", False),
+            key_choices=(
+                context.get(meta["key_choices_from"])
+                if "key_choices_from" in meta
+                else None
+            ),
+            value_choices=(
+                context.get(meta["value_choices_from"])
+                if "value_choices_from" in meta
+                else None
+            ),
+            provides=meta.get("provides"),
+            context=context,
+        )
     # A scalar with a declared option set -> a single dropdown.
     if _has_choices(meta):
-        key = meta.get('choices_from')
-        opts = meta.get('choices')
+        key = meta.get("choices_from")
+        opts = meta.get("choices")
         if opts is None:
             opts = context.get(key, [])
-        editor = _ChoiceEditor(opts, value, meta.get('allow_none', False), ann)
-        if key is not None and hasattr(context, 'subscribe'):
+        editor = _ChoiceEditor(opts, value, meta.get("allow_none", False), ann)
+        if key is not None and hasattr(context, "subscribe"):
             context.subscribe(key, editor.set_options)
         return editor
     if ann in (int, float, str, bool):
@@ -679,7 +734,8 @@ class _ModelEditor(QGroupBox):
 
     def _set_expanded(self, expanded):
         self._toggle.setArrowType(
-            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
         self._form.setVisible(expanded)
 
     def get_value(self):
@@ -689,8 +745,15 @@ class _ModelEditor(QGroupBox):
 class SchemaForm(QWidget):
     """Editable form generated from a pydantic model class."""
 
-    def __init__(self, model_cls, data=None, parent=None, *, context=None,
-                 skip_fields=None):
+    def __init__(
+        self,
+        model_cls,
+        data=None,
+        parent=None,
+        *,
+        context=None,
+        skip_fields=None,
+    ):
         super().__init__(parent)
         self._model_cls = model_cls
         # context: dynamic dropdown options shared down the form tree, keyed by
@@ -698,10 +761,13 @@ class SchemaForm(QWidget):
         # wrapped into a FormContext (the same instance is threaded into every
         # nested form, so live updates propagate). skip_fields: field
         # names/aliases to omit (e.g. a union's 'type', shown by the selector).
-        self._context = (context if isinstance(context, FormContext)
-                         else FormContext(context or {}))
+        self._context = (
+            context
+            if isinstance(context, FormContext)
+            else FormContext(context or {})
+        )
         self._skip = set(skip_fields or ())
-        self._editors = {}   # alias -> editor
+        self._editors = {}  # alias -> editor
         data = data or {}
         form = QFormLayout(self)
         form.setContentsMargins(0, 0, 0, 0)
@@ -724,17 +790,18 @@ class SchemaForm(QWidget):
             else:
                 value = None
             editor = _make_editor(
-                ann, optional, value, alias, meta, self._context)
+                ann, optional, value, alias, meta, self._context
+            )
             self._editors[alias] = editor
             # Show the field's physical unit (if declared) after the input.
-            unit = meta.get('unit')
-            if unit and hasattr(editor, 'add_suffix'):
+            unit = meta.get("unit")
+            if unit and hasattr(editor, "add_suffix"):
                 hint = QLabel(unit)
                 hint.setStyleSheet("color: gray;")
                 editor.add_suffix(hint)
-            if meta.get('tooltip'):
-                editor.setToolTip(meta['tooltip'])
-            if getattr(editor, 'is_block', False):
+            if meta.get("tooltip"):
+                editor.setToolTip(meta["tooltip"])
+            if getattr(editor, "is_block", False):
                 form.addRow(editor)
             else:
                 form.addRow(alias, editor)

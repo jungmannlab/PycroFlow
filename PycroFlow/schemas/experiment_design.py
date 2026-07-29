@@ -18,6 +18,7 @@ not-yet-modeled fields still load, and hyphenated keys (``target-rounds``,
 The schema is the single source of truth both for builder/GUI validation and
 for the schema-driven structured editor (which renders from ``model_fields``).
 """
+
 from __future__ import annotations
 
 import sys
@@ -38,7 +39,7 @@ from pydantic import (
 
 # populate_by_name: accept both python name and JSON alias.
 # extra='allow': keep fields we have not modeled yet (forward-compat).
-_CFG = ConfigDict(populate_by_name=True, extra='allow')
+_CFG = ConfigDict(populate_by_name=True, extra="allow")
 
 
 def _field(default=..., *, alias=None, default_factory=None, **extra):
@@ -57,7 +58,7 @@ def _field(default=..., *, alias=None, default_factory=None, **extra):
     (delays), ``min`` (incubations), ``ms`` (exposure), ``mW`` (laser power).
     """
     extra = {k: v for k, v in extra.items() if v is not None}
-    kw = {'alias': alias, 'json_schema_extra': (extra or None)}
+    kw = {"alias": alias, "json_schema_extra": (extra or None)}
     if default_factory is not None:
         return Field(default_factory=default_factory, **kw)
     return Field(default, **kw)
@@ -76,13 +77,13 @@ def field_meta(field_info) -> dict:
     field_info : pydantic.fields.FieldInfo
         An entry of ``model.model_fields``.
     """
-    extra = getattr(field_info, 'json_schema_extra', None)
+    extra = getattr(field_info, "json_schema_extra", None)
     return dict(extra) if isinstance(extra, dict) else {}
 
 
 def field_unit(field_info) -> Optional[str]:
     """Return a model field's declared unit, or ``None``."""
-    return field_meta(field_info).get('unit')
+    return field_meta(field_info).get("unit")
 
 
 class ExperimentDesignValidationError(ValueError):
@@ -96,92 +97,111 @@ class ExperimentDesignValidationError(ValueError):
 
 # --- SPH-RESI nested blocks ----------------------------------------------
 
+
 class ResiRound(BaseModel):
     """One RESI round: which adapter, and how long to incubate it."""
+
     model_config = _CFG
-    adapter: str = _field(choices_from='reservoir_names', allow_none=True)
-    adapter_incubation: float = _unit(unit='min')
+    adapter: str = _field(choices_from="reservoir_names", allow_none=True)
+    adapter_incubation: float = _unit(unit="min")
 
 
 class TargetRound(BaseModel):
     """Per-target parameters for an SPH-RESI run."""
+
     model_config = _CFG
     bc_imager_pre: str = _field(
-        alias='BC_imager_pre', choices_from='reservoir_names',
-        allow_none=True)
-    frames_bc_pre: int = Field(alias='frames_BC_pre')
+        alias="BC_imager_pre", choices_from="reservoir_names", allow_none=True
+    )
+    frames_bc_pre: int = Field(alias="frames_BC_pre")
     bc_imager_post: str = _field(
-        alias='BC_imager_post', choices_from='reservoir_names',
-        allow_none=True)
-    frames_bc_post: int = Field(alias='frames_BC_post')
+        alias="BC_imager_post", choices_from="reservoir_names", allow_none=True
+    )
+    frames_bc_post: int = Field(alias="frames_BC_post")
     resi_imager: str = _field(
-        alias='RESI-imager', choices_from='reservoir_names', allow_none=True)
-    resi_frames: int = Field(alias='RESI-frames')
-    resi_rounds: List[ResiRound] = Field(alias='RESI-rounds')
+        alias="RESI-imager", choices_from="reservoir_names", allow_none=True
+    )
+    resi_frames: int = Field(alias="RESI-frames")
+    resi_rounds: List[ResiRound] = Field(alias="RESI-rounds")
 
 
 class Round0(BaseModel):
     """Optional pre-target imaging round (e.g. alignment structures)."""
+
     model_config = _CFG
-    round0_imager: str = _field(choices_from='reservoir_names',
-                                allow_none=True)
+    round0_imager: str = _field(
+        choices_from="reservoir_names", allow_none=True
+    )
     frames_round0: int
 
 
 # --- experiment-type design blocks (discriminated on ``type``) -----------
 
+
 class ExchangeExperiment(BaseModel):
     """Exchange-PAINT experiment design."""
+
     model_config = _CFG
-    type: Literal['Exchange']
-    wash_buffer: str = _field(choices_from='reservoir_names', allow_none=True)
+    type: Literal["Exchange"]
+    wash_buffer: str = _field(choices_from="reservoir_names", allow_none=True)
     initial_imager: Optional[str] = _field(
-        None, choices_from='reservoir_names', allow_none=True)
+        None, choices_from="reservoir_names", allow_none=True
+    )
     # One dropdown row per exchange round (add/remove), chosen from the
     # design's reservoir names; shown as a 'rounds' box with per-row labels.
     imagers: List[str] = _field(
-        default_factory=list, choices_from='reservoir_names', allow_none=True,
-        title='rounds', row_label='imager round {}')
+        default_factory=list,
+        choices_from="reservoir_names",
+        allow_none=True,
+        title="rounds",
+        row_label="imager round {}",
+    )
 
 
 class SphResiExperiment(BaseModel):
     """SPH-RESI experiment design."""
+
     model_config = _CFG
-    type: Literal['SPH-RESI']
-    wash_buffer_1: str = _field(choices_from='reservoir_names',
-                                allow_none=True)
+    type: Literal["SPH-RESI"]
+    wash_buffer_1: str = _field(
+        choices_from="reservoir_names", allow_none=True
+    )
     wash_buffer_2: Optional[str] = _field(
-        None, choices_from='reservoir_names', allow_none=True)
-    blocker: str = _field(choices_from='reservoir_names', allow_none=True)
-    blocker_incubation: float = _unit(unit='min')
+        None, choices_from="reservoir_names", allow_none=True
+    )
+    blocker: str = _field(choices_from="reservoir_names", allow_none=True)
+    blocker_incubation: float = _unit(unit="min")
     initial_imager_present: bool = False
     round0: Optional[Round0]
-    target_rounds: Dict[str, TargetRound] = Field(alias='target-rounds')
+    target_rounds: Dict[str, TargetRound] = Field(alias="target-rounds")
 
 
 ExperimentBlock = Annotated[
     Union[ExchangeExperiment, SphResiExperiment],
-    Field(discriminator='type'),
+    Field(discriminator="type"),
 ]
 
 
 # --- fluid / img / illu sections -----------------------------------------
 
+
 class FluidParameters(BaseModel):
     """Per-run fluid driver parameters (passed through to the Run Sequence)."""
+
     model_config = _CFG
-    start_velocity: float = _unit(500, 'µl/min')
-    max_velocity: float = _unit(10000, 'µl/min')
-    stop_velocity: float = _unit(500, 'µl/min')
-    pumpout_dispense_velocity: float = _unit(290000, 'µl/min')
-    clean_velocity: float = _unit(10000, 'µl/min')
-    clean_delay: float = _unit(0, 's')
-    mode: str = _field('tubing_ignore',
-                       choices=['tubing_ignore', 'tubing_stack'])
+    start_velocity: float = _unit(500, "µl/min")
+    max_velocity: float = _unit(10000, "µl/min")
+    stop_velocity: float = _unit(500, "µl/min")
+    pumpout_dispense_velocity: float = _unit(290000, "µl/min")
+    clean_velocity: float = _unit(10000, "µl/min")
+    clean_delay: float = _unit(0, "s")
+    mode: str = _field(
+        "tubing_ignore", choices=["tubing_ignore", "tubing_stack"]
+    )
     extractionfactor: float = 1
-    inject_pickup_extravol: float = _unit(0, 'µl')
-    inject_in_to_out_delay: float = _unit(0, 's')
-    inject_out_to_in_delay: float = _unit(0, 's')
+    inject_pickup_extravol: float = _unit(0, "µl")
+    inject_in_to_out_delay: float = _unit(0, "s")
+    inject_out_to_in_delay: float = _unit(0, "s")
     inject_precreate_underpressure: bool = False
 
 
@@ -192,37 +212,44 @@ class FluidSettings(BaseModel):
     design refers to). Wash buffers are not repeated here — they live in the
     ``experiment`` block.
     """
+
     model_config = _CFG
     reservoir_names: Dict[int, str] = _field(
-        key_choices_from='reservoir_ids',
-        columns=['Reservoir ID', 'Name'],
+        key_choices_from="reservoir_ids",
+        columns=["Reservoir ID", "Name"],
         # The names defined here populate the imager/buffer dropdowns; publish
         # them live so those dropdowns update as the table is edited.
-        provides='reservoir_names')
+        provides="reservoir_names",
+    )
     # Stored name -> id, but displayed (ID, name) for consistency with
     # reservoir_names (display_value_first swaps the columns; the id column
     # offers the setup's reservoir ids).
     special_names: Dict[str, int] = _field(
-        default_factory=dict, display_value_first=True,
-        value_choices_from='reservoir_ids',
-        columns=['Reservoir ID', 'Special name'])
-    vol_wash: float = _unit(unit='µl')
-    vol_reagent: Optional[float] = _unit(None, 'µl')
-    vol_imager_post: Optional[float] = _unit(None, 'µl')
-    vol_remove_before_flush: float = _unit(0, 'µl')
-    wait_after_pickup: float = _unit(0, 's')
+        default_factory=dict,
+        display_value_first=True,
+        value_choices_from="reservoir_ids",
+        columns=["Reservoir ID", "Special name"],
+    )
+    vol_wash: float = _unit(unit="µl")
+    vol_reagent: Optional[float] = _unit(None, "µl")
+    vol_imager_post: Optional[float] = _unit(None, "µl")
+    vol_remove_before_flush: float = _unit(0, "µl")
+    wait_after_pickup: float = _unit(0, "s")
     cleaning_reservoirs: List[Union[int, str]] = _field(
         default_factory=list,
-        tooltip='Comma-separated reservoir ids or special names used for '
-                'cleaning, e.g. "h2o, ipa".')
+        tooltip="Comma-separated reservoir ids or special names used for "
+        'cleaning, e.g. "h2o, ipa".',
+    )
     experiment: ExperimentBlock
 
 
 class FluidSection(BaseModel):
     model_config = _CFG
     enabled: bool = _field(
-        True, tooltip='Include this subsystem when translating to the Run '
-                      'Sequence. Deselect to leave it out of the run.')
+        True,
+        tooltip="Include this subsystem when translating to the Run "
+        "Sequence. Deselect to leave it out of the run.",
+    )
     parameters: FluidParameters = Field(default_factory=FluidParameters)
     settings: FluidSettings
 
@@ -236,7 +263,7 @@ class ImgParameters(BaseModel):
 
 class ImgSettings(BaseModel):
     model_config = _CFG
-    t_exp: float = _unit(unit='ms')
+    t_exp: float = _unit(unit="ms")
     # frames may be a single count or a per-imager mapping (Exchange).
     frames: Optional[Union[int, Dict[str, int]]] = None
     darkframes: Optional[int] = None
@@ -245,22 +272,24 @@ class ImgSettings(BaseModel):
 class ImgSection(BaseModel):
     model_config = _CFG
     enabled: bool = _field(
-        True, tooltip='Include this subsystem when translating to the Run '
-                      'Sequence. Deselect to leave it out of the run.')
+        True,
+        tooltip="Include this subsystem when translating to the Run "
+        "Sequence. Deselect to leave it out of the run.",
+    )
     parameters: ImgParameters = Field(default_factory=ImgParameters)
     settings: ImgSettings
 
 
 class IlluSettings(BaseModel):
     model_config = _CFG
-    laser: int = _field(choices_from='lasers')
-    power_acq: float = _unit(unit='mW')
-    power_nonacq: Optional[float] = _unit(None, 'mW')
-    warmup_delay: float = _unit(0, 's')
+    laser: int = _field(choices_from="lasers")
+    power_acq: float = _unit(unit="mW")
+    power_nonacq: Optional[float] = _unit(None, "mW")
+    warmup_delay: float = _unit(0, "s")
     shutter_off_nonacq: bool = False
     lasers_off_finally: bool = False
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def _default_nonacq_power(self):
         # The builder emits a non-acquisition 'set power' step; default it to
         # the acquisition power when not given so it is never None.
@@ -274,16 +303,19 @@ class IlluSection(BaseModel):
     # setup (not the design), and the old channel_group/filter/ROI were unused.
     model_config = _CFG
     enabled: bool = _field(
-        True, tooltip='Include this subsystem when translating to the Run '
-                      'Sequence. Deselect to leave it out of the run.')
+        True,
+        tooltip="Include this subsystem when translating to the Run "
+        "Sequence. Deselect to leave it out of the run.",
+    )
     settings: IlluSettings
 
 
 class ExperimentDesign(BaseModel):
     """Top-level experiment design (compiles to a Run Sequence)."""
+
     model_config = _CFG
     base_name: str
-    save_dir: str = '.'
+    save_dir: str = "."
     fluid: FluidSection
     img: ImgSection
     illu: Optional[IlluSection] = None

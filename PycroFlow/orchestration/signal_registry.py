@@ -22,6 +22,7 @@ already atomic in CPython for our access patterns; the explicit internal
 lock guards the dict membership check + insertion that ``register`` and
 ``fire`` perform when a signal is fired before anyone has registered it.
 """
+
 from __future__ import annotations
 
 import threading
@@ -64,7 +65,9 @@ class SignalRegistry:
         no-op once the event is set."""
         self._get_or_create(target, value).set()
 
-    def wait(self, target: str, value: str, timeout: Optional[float] = None) -> bool:
+    def wait(
+        self, target: str, value: str, timeout: Optional[float] = None
+    ) -> bool:
         """Block until ``(target, value)`` fires or ``timeout`` elapses.
 
         Returns True iff the signal fired before the timeout. Caller is

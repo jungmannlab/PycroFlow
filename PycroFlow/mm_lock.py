@@ -12,6 +12,7 @@ inside the lockfile; on contention we check whether that PID is still
 alive and auto-reclaim a stale lock left by a crashed process, only
 refusing when a live process genuinely holds it.
 """
+
 import atexit
 import os
 import platform
@@ -43,14 +44,15 @@ def _pid_alive(pid):
     """
     if not pid or pid <= 0:
         return False
-    if platform.system() == 'Windows':
+    if platform.system() == "Windows":
         import ctypes
 
         process_query_limited_information = 0x1000
         still_active = 259
         kernel32 = ctypes.windll.kernel32
         handle = kernel32.OpenProcess(
-            process_query_limited_information, False, pid)
+            process_query_limited_information, False, pid
+        )
         if not handle:
             # No handle: most likely the process does not exist. (A rare
             # access-denied would also land here; treating that as "dead"
@@ -80,13 +82,13 @@ def default_lock_path():
     Windows: ``%LOCALAPPDATA%\\PycroFlow\\mm.lock``
     POSIX:   ``~/.cache/PycroFlow/mm.lock``
     """
-    if platform.system() == 'Windows':
-        base = os.environ.get('LOCALAPPDATA')
+    if platform.system() == "Windows":
+        base = os.environ.get("LOCALAPPDATA")
         if not base:
-            base = str(Path.home() / 'AppData' / 'Local')
+            base = str(Path.home() / "AppData" / "Local")
     else:
-        base = os.environ.get('XDG_CACHE_HOME') or str(Path.home() / '.cache')
-    return Path(base) / 'PycroFlow' / 'mm.lock'
+        base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "PycroFlow" / "mm.lock"
 
 
 class MmCoreLock:
@@ -159,9 +161,10 @@ class MmCoreLock:
             If the lockfile already exists (``O_EXCL``).
         """
         fd = os.open(
-            str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644
+        )
         try:
-            os.write(fd, str(os.getpid()).encode('utf-8'))
+            os.write(fd, str(os.getpid()).encode("utf-8"))
         finally:
             os.close(fd)
 

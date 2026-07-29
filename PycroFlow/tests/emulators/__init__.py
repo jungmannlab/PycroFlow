@@ -22,6 +22,7 @@ Unlike the ``sys.modules`` ``MagicMock`` shims in :mod:`tests._mock_hardware`
 (which only let imports succeed), these emulators model device *behavior* and so
 support real behavioral assertions.
 """
+
 from PycroFlow.tests.emulators.hal_devices import (
     EmulatedPump,
     EmulatedValve,
@@ -44,16 +45,16 @@ from PycroFlow.tests.emulators.subsystems import (
 )
 
 __all__ = [
-    'EmulatedPump',
-    'EmulatedValve',
-    'EmulatedSpillSensor',
-    'FakeHamiltonSerial',
-    'EmulatedHamiltonDevice',
-    'patch_serial',
-    'make_fake_bus',
-    'FakeArduinoSerial',
-    'connect_interface',
-    'EmulatedFluidSystem',
-    'EmulatedImagingSystem',
-    'EmulatedIlluminationSystem',
+    "EmulatedPump",
+    "EmulatedValve",
+    "EmulatedSpillSensor",
+    "FakeHamiltonSerial",
+    "EmulatedHamiltonDevice",
+    "patch_serial",
+    "make_fake_bus",
+    "FakeArduinoSerial",
+    "connect_interface",
+    "EmulatedFluidSystem",
+    "EmulatedImagingSystem",
+    "EmulatedIlluminationSystem",
 ]

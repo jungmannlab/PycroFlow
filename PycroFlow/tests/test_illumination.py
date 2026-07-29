@@ -5,6 +5,7 @@ monet itself is mocked at import (tests/_mock_hardware), so we don't exercise
 the attribute surface IlluminationSystem touches and verify the control logic
 (laser selection, power, attenuation, beam path, protocol dispatch, pause/abort).
 """
+
 import unittest
 from unittest.mock import MagicMock
 
@@ -25,7 +26,7 @@ class FakeAttenuator:
 
     def home(self):
         self.homed = True
-        self.pos = 'home'
+        self.pos = "home"
 
     def curr_pos(self):
         return self.pos
@@ -39,7 +40,7 @@ class FakeLaser:
 class FakeBeampath:
     def __init__(self):
         self.positions = None
-        self.objects = {'shutter': MagicMock(autoshutter=True)}
+        self.objects = {"shutter": MagicMock(autoshutter=True)}
 
 
 class FakeInstrument:
@@ -72,7 +73,7 @@ def _make_system():
     isy.instrument = FakeInstrument()
     isy.power_setvalues = {488: 10, 561: 20}
     isy.mprotocol = {
-        'beampath': {488: ['open488'], 561: ['open561'], 'end': ['closed']},
+        "beampath": {488: ["open488"], 561: ["open561"], "end": ["closed"]},
     }
     return isy
 
@@ -122,12 +123,12 @@ class LaserControlTest(unittest.TestCase):
 class AttenuationTest(unittest.TestCase):
     def test_set_attenuation_numeric(self):
         isy = _make_system()
-        isy.set_attenuation('0.5')
+        isy.set_attenuation("0.5")
         self.assertEqual(isy.instrument.attenuator.pos, 0.5)
 
     def test_set_attenuation_home(self):
         isy = _make_system()
-        isy.set_attenuation('HOME')
+        isy.set_attenuation("HOME")
         self.assertTrue(isy.instrument.attenuator.homed)
 
 
@@ -135,12 +136,12 @@ class BeampathTest(unittest.TestCase):
     def test_beampath_open_sets_positions_for_current_laser(self):
         isy = _make_system()
         isy.beampath_open()
-        self.assertEqual(isy.instrument.beampath.positions, ['open488'])
+        self.assertEqual(isy.instrument.beampath.positions, ["open488"])
 
     def test_beampath_close_sets_end_positions(self):
         isy = _make_system()
         isy.beampath_close()
-        self.assertEqual(isy.instrument.beampath.positions, ['closed'])
+        self.assertEqual(isy.instrument.beampath.positions, ["closed"])
 
     def test_beampath_open_guards_missing_protocol(self):
         isy = _make_system()
@@ -152,40 +153,51 @@ class BeampathTest(unittest.TestCase):
 class ProtocolDispatchTest(unittest.TestCase):
     def _run(self, entries):
         isy = _make_system()
-        isy.protocol = {'protocol_entries': entries}
+        isy.protocol = {"protocol_entries": entries}
         for i in range(len(entries)):
             isy.execute_protocol_entry(i)
         return isy
 
     def test_set_power_entry(self):
-        isy = self._run([
-            {'$type': 'set power', 'laser': 561, 'power': 55},
-        ])
+        isy = self._run(
+            [
+                {"$type": "set power", "laser": 561, "power": 55},
+            ]
+        )
         self.assertEqual(isy.instrument.laser, 561)
         self.assertEqual(isy.instrument.power, 55)
-        self.assertEqual(isy.instrument.beampath.positions, ['open561'])
+        self.assertEqual(isy.instrument.beampath.positions, ["open561"])
 
     def test_set_shutter_entry_open_and_close(self):
-        isy = self._run([
-            {'$type': 'set shutter', 'state': True},
-        ])
-        self.assertEqual(isy.instrument.beampath.positions, ['open488'])
-        isy.protocol = {'protocol_entries': [
-            {'$type': 'set shutter', 'state': False}]}
+        isy = self._run(
+            [
+                {"$type": "set shutter", "state": True},
+            ]
+        )
+        self.assertEqual(isy.instrument.beampath.positions, ["open488"])
+        isy.protocol = {
+            "protocol_entries": [{"$type": "set shutter", "state": False}]
+        }
         isy.execute_protocol_entry(0)
-        self.assertEqual(isy.instrument.beampath.positions, ['closed'])
+        self.assertEqual(isy.instrument.beampath.positions, ["closed"])
 
     def test_laser_enable_entry_single(self):
-        isy = self._run([
-            {'$type': 'laser enable', 'laser': 561, 'state': True},
-        ])
+        isy = self._run(
+            [
+                {"$type": "laser enable", "laser": 561, "state": True},
+            ]
+        )
         self.assertTrue(isy.instrument.lasers[561].enabled)
 
     def test_laser_enable_entry_all(self):
-        isy = self._run([
-            {'$type': 'laser enable', 'laser': 'all', 'state': True},
-        ])
-        self.assertTrue(all(l.enabled for l in isy.instrument.lasers.values()))
+        isy = self._run(
+            [
+                {"$type": "laser enable", "laser": "all", "state": True},
+            ]
+        )
+        self.assertTrue(
+            all(laser.enabled for laser in isy.instrument.lasers.values())
+        )
 
 
 class LazyMonetTest(unittest.TestCase):
@@ -194,13 +206,15 @@ class LazyMonetTest(unittest.TestCase):
         # (which builds the orchestrator) never touches hardware.
         isy = IlluminationSystem()
         isy._assign_protocol(
-            {'protocol_entries': [], 'parameters': {'setup': 'X'}})
-        self.assertIsNone(getattr(isy, 'instrument', None))
+            {"protocol_entries": [], "parameters": {"setup": "X"}}
+        )
+        self.assertIsNone(getattr(isy, "instrument", None))
 
     def test_ensure_monet_loads_once(self):
         isy = IlluminationSystem()
         isy._assign_protocol(
-            {'protocol_entries': [], 'parameters': {'setup': 'X'}})
+            {"protocol_entries": [], "parameters": {"setup": "X"}}
+        )
         calls = []
 
         def fake_load(name):
@@ -209,9 +223,9 @@ class LazyMonetTest(unittest.TestCase):
 
         isy._load_monet_control = fake_load
         isy._ensure_monet()
-        self.assertEqual(calls, ['X'])
-        isy._ensure_monet()          # idempotent — already loaded
-        self.assertEqual(calls, ['X'])
+        self.assertEqual(calls, ["X"])
+        isy._ensure_monet()  # idempotent — already loaded
+        self.assertEqual(calls, ["X"])
 
 
 class PauseAbortTest(unittest.TestCase):
@@ -226,5 +240,5 @@ class PauseAbortTest(unittest.TestCase):
         self.assertFalse(isy._paused)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
