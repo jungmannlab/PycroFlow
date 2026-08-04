@@ -24,6 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   block merges. Branch protection should list only the hosted checks as
   required.
 
+### Fixed
+
+- `numpy`, `pandas`, and `openpyxl` moved from the `[hardware]` extra into the
+  base `dependencies` — they are imported at module load by the core,
+  hardware-free `fluid/legacy.py` (numpy) and `imaging.py` (pandas DataFrame +
+  `to_excel`, which needs openpyxl), so a plain `pip install -e .` previously
+  produced a package whose fluid/imaging modules (and their unit tests) could
+  not import. This unblocks the hosted `Unit Tests (hosted)` job, which
+  installs only `.[dev,gui]` (no `[hardware]` SDKs). All three are wheel-only,
+  so the base install stays wheel-only.
+
 ### Added
 
 - Per-subsystem selection: an `enabled` flag on the fluid / img / illu
