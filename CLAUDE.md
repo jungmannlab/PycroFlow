@@ -87,7 +87,7 @@ PYCROFLOW_UPDATE_SNAPSHOTS=1 python -m unittest PycroFlow.tests.test_regression_
 ```
 Commit the updated JSON in `PycroFlow/tests/fixtures/snapshots/`.
 
-CI runs `python -m unittest discover -v` on Windows / Python 3.10 (`.github/workflows/tests.yml`). There are no configured linters/formatters yet (`ruff`/`mypy` are in the `[dev]` extra).
+CI runs on GitHub-hosted `ubuntu-latest` runners as the required merge gate: a `Lint` job (`black --check` + `flake8`, `.github/workflows/lint.yml`) and a `Unit Tests (hosted)` job (`python -m unittest discover -v` with the Qt runtime libs + `QT_QPA_PLATFORM=offscreen` so the GUI tests run headlessly, `.github/workflows/unit-tests-hosted.yml`), both on push/PR to `master`/`develop`. The Windows unit tier (`.github/workflows/run-unittests-windows.yml`, mirroring the lab target platform) is demoted to `workflow_dispatch` only so a scarce/forks-unavailable runner can't block merges — run it manually from the Actions tab. `ruff`/`mypy` are in the `[dev]` extra but not yet wired into CI.
 
 ### Hardware emulators (`tests/emulators/`)
 Behavioral hardware fakes for tests, in three fidelity layers (vs. the import-only `MagicMock` shims in `tests/_mock_hardware.py`):

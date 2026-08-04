@@ -1,0 +1,66 @@
+name: Python Unit Tests (Windows)
+
+# NOTE: auto-run DEACTIVATED (2026-08-04). This Windows unit-test job mirrors the
+# lab target platform (PycroFlow targets Windows 10), but the required merge gate
+# is now the GitHub-hosted "Unit Tests (hosted)" job (unit-tests-hosted.yml,
+# ubuntu-latest) + "Lint" (lint.yml). Windows runners are slower/scarcer and this
+# tier is unavailable on forks, so it must NOT be a required check that can block
+# merges. Manual-trigger only for now (Actions tab -> this workflow -> "Run
+# workflow"). To reactivate the automatic run, uncomment the push / pull_request
+# triggers below (and keep it OUT of the required-checks list in branch
+# protection).
+on:
+  workflow_dispatch:
+  # push:
+  #   branches:
+  #     - master
+  #     - develop
+  # pull_request:
+  #   branches:
+  #     - master
+  #     - develop
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unittest:
+    name: unittest on Windows (Python ${{ matrix.python-version }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10"]
+    env:
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package with dev + gui extras
+        # Intentionally NOT installing [hardware] — the conftest.py mocks
+        # pycromanager / monet / pycobolt / nidaqmx so CI can run without
+        # any vendor SDKs or USB drivers. [gui] adds PyQt6 so `unittest
+        # discover` actually exercises the Stage 5 GUI tests (headless via
+        # QT_QPA_PLATFORM=offscreen) instead of skipping them — matching the
+        # hosted "Unit Tests (hosted)" job.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,gui]"
+
+      - name: Run unit tests
+        run: python -m unittest discover -v
+
+      - name: Run pyHamilton unit tests
+        run: python -m unittest discover -s PycroFlow/pyHamilton -v
+        # Soft failure: pyHamilton tests may not exist yet.
+        continue-on-error: true

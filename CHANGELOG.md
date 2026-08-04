@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (line-length 79, `target-version = ["py310"]`) and `[tool.flake8]`
   (`extend-ignore = E203,E501,W503` — Black owns line length), replacing the
   standalone `.flake8`.
+- CI runner strategy (S0A-3): required checks now run on GitHub-hosted runners.
+  Split the old combined `tests.yml` into hosted `lint.yml` + hosted
+  `unit-tests-hosted.yml` (both trigger on push/PR to `master`/`develop`), and
+  demoted the Windows unit tier to `run-unittests-windows.yml` triggered by
+  `workflow_dispatch` only so a runner-less self-hosted/Windows check can't
+  block merges. Branch protection should list only the hosted checks as
+  required.
 
 ### Added
 
@@ -28,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shared `.pre-commit-config.yaml` (pre-commit-hooks + Black + flake8 via
   Flake8-pyproject), matching the rest of the DNA-PAINT stack.
 - `black --check` and `flake8` lint job in CI.
+- Hosted (`ubuntu-latest`) `Unit Tests (hosted)` CI job
+  (`unit-tests-hosted.yml`) intended as the required merge gate alongside the
+  hosted `Lint` job: installs Qt runtime libs, `pip install -e ".[dev,gui]"`
+  (base install stays wheel-only; the hardware stack is mocked), and runs the
+  unit suite with `QT_QPA_PLATFORM=offscreen` so the GUI tests run headlessly.
 - This changelog.
 
 ### Removed
