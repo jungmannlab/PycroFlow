@@ -127,7 +127,12 @@ Commit the new JSON files in `PycroFlow/tests/fixtures/snapshots/`.
 
 ## 7. Linting / CI
 
-GitHub Actions runs `python -m unittest discover -v` on Windows / Python
-3.10 for every push and PR. See `.github/workflows/tests.yml`. The
-workflow installs only `.[dev]`; vendor SDKs are mocked at test-discovery
-time by `PycroFlow/tests/_mock_hardware.py`.
+GitHub Actions gates every push and PR to `master`/`develop` with two
+GitHub-hosted (`ubuntu-latest`) jobs: `Lint` (`black --check` + `flake8`,
+`.github/workflows/lint.yml`) and `Unit Tests (hosted)`
+(`python -m unittest discover -v`, `.github/workflows/unit-tests-hosted.yml`).
+The hosted test job installs `.[dev,gui]` plus the Qt runtime libs and runs
+with `QT_QPA_PLATFORM=offscreen`; vendor SDKs are mocked at test-discovery
+time by `PycroFlow/tests/_mock_hardware.py`. The Windows tier
+(`.github/workflows/run-unittests-windows.yml`) is `workflow_dispatch` only —
+trigger it manually from the Actions tab.
