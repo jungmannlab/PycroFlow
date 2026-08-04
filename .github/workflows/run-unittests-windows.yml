@@ -1,40 +1,30 @@
-name: Tests
+name: Python Unit Tests (Windows)
 
+# NOTE: auto-run DEACTIVATED (2026-08-04). This Windows unit-test job mirrors the
+# lab target platform (PycroFlow targets Windows 10), but the required merge gate
+# is now the GitHub-hosted "Unit Tests (hosted)" job (unit-tests-hosted.yml,
+# ubuntu-latest) + "Lint" (lint.yml). Windows runners are slower/scarcer and this
+# tier is unavailable on forks, so it must NOT be a required check that can block
+# merges. Manual-trigger only for now (Actions tab -> this workflow -> "Run
+# workflow"). To reactivate the automatic run, uncomment the push / pull_request
+# triggers below (and keep it OUT of the required-checks list in branch
+# protection).
 on:
-  push:
-    branches: [master, main]
-  pull_request:
+  workflow_dispatch:
+  # push:
+  #   branches:
+  #     - master
+  #     - develop
+  # pull_request:
+  #   branches:
+  #     - master
+  #     - develop
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  lint:
-    name: lint (black + flake8)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-
-      - name: Install lint tools
-        # Pin Black to the version the pre-commit hook / local devs run so CI
-        # and pre-commit agree. flake8 reads [tool.flake8] via Flake8-pyproject.
-        run: |
-          python -m pip install --upgrade pip
-          pip install "black==25.9.0" flake8 Flake8-pyproject
-
-      - name: black --check
-        run: black --check .
-
-      - name: flake8
-        run: flake8 .
-
   unittest:
     name: unittest on Windows (Python ${{ matrix.python-version }})
     runs-on: windows-latest
