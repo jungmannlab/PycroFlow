@@ -1514,6 +1514,22 @@ class TestFluidTab(unittest.TestCase):
         tab._on_set_valves()
         svc.set_valves.assert_called_once_with(8)
 
+    def test_close_all_valves_calls_service(self):
+        tab, svc = self._tab()
+        tab._on_close_valves()
+        svc.close_all_valves.assert_called_once()
+
+    def test_close_all_valves_button_only_for_multiplexer(self):
+        # The ibidi-only control is shown for multiplexer setups and hidden
+        # for Hamilton-rotary-valve ones.
+        tab, svc = self._tab()
+        svc.has_multiplexer.return_value = True
+        tab._refresh_reservoirs()
+        self.assertFalse(tab.close_valves_btn.isHidden())
+        svc.has_multiplexer.return_value = False
+        tab._refresh_reservoirs()
+        self.assertTrue(tab.close_valves_btn.isHidden())
+
     def test_set_valves_without_wired_reservoirs_warns(self):
         from unittest.mock import patch
         from PycroFlow.gui.tabs import fluid_tab as ft

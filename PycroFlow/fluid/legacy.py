@@ -2141,6 +2141,18 @@ class LegacyArchitecture(AbstractSystem):
                 delay=delay,
             )
 
+        if post_fill_flushbuffer and "flushbuffer_a" not in self.special_names:
+            # No flush buffer defined: skip the final central-tubing flush
+            # rather than dead-ending in the tubing lookup for an unrouted
+            # 'flushbuffer_a'. The per-reservoir fills above already ran.
+            logger.warning(
+                "post_fill_flushbuffer requested but no 'flushbuffer_a' is "
+                "defined in special_names; skipping the final flushbuffer "
+                "fill. Add a flush buffer reservoir to the experiment "
+                "design's special_names to enable it."
+            )
+            post_fill_flushbuffer = False
+
         if post_fill_flushbuffer:
             # now, flush everything with the flushbuffer
             vol = self.tubing_config.get_reservoir_to_pump(
