@@ -27,7 +27,7 @@ import csv
 import json
 import os
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 RUN_META_FILE = "run_meta.json"
 METRICS_FILE = "metrics.csv"
@@ -42,7 +42,9 @@ METRICS_COLUMNS = [
     "batch_size",
     "n_frames",
     "frame_rate_hz",
-    "buffer_size",
+    "buffer_mb",
+    "buffer_frames",
+    "frame_bytes",
     "frames_produced",
     "frames_written",
     "dropped_count",
@@ -75,7 +77,7 @@ RUN_META_REQUIRED_KEYS = [
     "pycroflow_version",
     "frame_rate_hz",
     "n_frames",
-    "buffer_size",
+    "buffer_mb",
     "batch_sizes",
     "git_commit",
     "utc_start",
@@ -213,7 +215,8 @@ def _coerce_metrics_row(row: dict) -> dict:
     for key in (
         "batch_size",
         "n_frames",
-        "buffer_size",
+        "buffer_frames",
+        "frame_bytes",
         "frames_produced",
         "frames_written",
         "dropped_count",
@@ -221,6 +224,7 @@ def _coerce_metrics_row(row: dict) -> dict:
         out[key] = int(float(row[key])) if row.get(key) != "" else 0
     for key in (
         "frame_rate_hz",
+        "buffer_mb",
         "dropped_fraction",
         "occupancy_peak",
         "occupancy_mean",

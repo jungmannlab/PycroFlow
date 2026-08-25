@@ -57,8 +57,8 @@ def evaluate_mode(rows: list[dict], thresholds: dict) -> dict:
     for row in rows:
         if not row["reader"]:
             continue
-        buffer_size = row["buffer_size"] or 1
-        occ_frac = row["occupancy_peak"] / buffer_size
+        buffer_frames = row["buffer_frames"] or 1
+        occ_frac = row["occupancy_peak"] / buffer_frames
         retention = row["throughput_fps"] / base_thr if base_thr > 0 else 0.0
         dropped_ok = (
             row["dropped_fraction"] <= thresholds["max_dropped_fraction"]

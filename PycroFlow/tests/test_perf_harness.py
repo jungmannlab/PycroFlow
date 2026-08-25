@@ -24,7 +24,7 @@ class TestEmulatorRunDir(unittest.TestCase):
                 mode="emulator",
                 frame_rate_hz=400.0,
                 n_frames=200,
-                buffer_size=80,
+                buffer_mb=160.0,
                 batch_sizes=[8, 64],
                 monitor_interval_s=0.005,
                 output_dir=tmp,
@@ -61,7 +61,7 @@ class TestEmulatorRunDir(unittest.TestCase):
             mode="emulator",
             frame_rate_hz=400.0,
             n_frames=200,
-            buffer_size=80,
+            buffer_mb=160.0,
             batch_sizes=[8, 64],
             monitor_interval_s=0.005,
         )
@@ -81,7 +81,7 @@ class TestBackpressureDetection(unittest.TestCase):
             mode="emulator",
             frame_rate_hz=200.0,
             n_frames=300,
-            buffer_size=80,
+            buffer_mb=160.0,
             batch_sizes=[64],
             monitor_interval_s=0.005,
             include_baseline=True,
@@ -132,6 +132,35 @@ class TestCli(unittest.TestCase):
             ]
             self.assertEqual(len(dirs), 1)
             schema.validate_run_dir(os.path.join(tmp, dirs[0]))
+
+
+class TestBufferSizing(unittest.TestCase):
+    def test_buffer_mb_to_frames(self):
+        # 1024x1024x2 = 2 MiB/frame -> 160 MB buffer = 80 frames.
+        cfg = PerfConfig(mode="emulator", buffer_mb=160.0)
+        self.assertEqual(cfg.frame_bytes(), 1024 * 1024 * 2)
+        self.assertEqual(cfg.buffer_capacity_frames(), 80)
+
+    def test_roi_sets_frame_size(self):
+        # Centre 512x512 quadrant -> 0.5 MiB/frame -> 160 MB = 320 frames.
+        cfg = PerfConfig(
+            mode="emulator", buffer_mb=160.0, roi=[256, 256, 512, 512]
+        )
+        self.assertEqual(cfg.frame_bytes(), 512 * 512 * 2)
+        self.assertEqual(cfg.buffer_capacity_frames(), 320)
+
+
+class TestInstrumentGuards(unittest.TestCase):
+    def test_instrument_requires_data_dir(self):
+        # pycromanager is mocked in the test env; start() must refuse to run
+        # without a data_dir rather than risk writing the raw movie into the
+        # repo.
+        from PycroFlow.perf.backends import InstrumentBackend
+
+        cfg = PerfConfig(mode="instrument", data_dir=None)
+        backend = InstrumentBackend(cfg)
+        with self.assertRaises(ValueError):
+            backend.start()
 
 
 class TestSchemaValidation(unittest.TestCase):

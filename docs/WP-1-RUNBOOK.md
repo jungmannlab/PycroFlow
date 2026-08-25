@@ -34,20 +34,42 @@ pycromanager ZMQ server is enabled (Tools ▸ Options ▸ *Run server on port
 4827*), exactly as for a normal PycroFlow acquisition. Close any standalone
 monet GUI so the MM Core lock is free.
 
-> Set the circular-buffer size in Micro-Manager (Edit ▸ Hardware
-> Configuration ▸ *Sequence buffer size*) if you want it larger than the
-> harness default; the harness records whatever capacity MM reports.
+> The harness sets Micro-Manager's circular-buffer footprint from `buffer_mb`
+> in the config (the same value as Edit ▸ Hardware Configuration ▸ *Sequence
+> buffer size*) and records the capacity MM actually reports.
+
+### Disk & data location — important
+
+The raw NDTiff movie is large: at the typical **100 ms / 10 Hz / 40000 frames /
+1024×1024 / 16-bit** it is ≈ **80 GB per acquisition** (≈ 20 GB for the 512×512
+centre quadrant). So:
+
+- Point **`data_dir`** at a folder on a **large data drive, NOT the repo
+  drive** (e.g. `D:\pycroflow_wp1_rawdata`). Instrument mode refuses to run
+  without it, so the movie never lands next to the repo.
+- The harness **deletes each acquisition after measuring it** (WP-1 needs only
+  the metrics), so peak disk use is ~one acquisition, not the whole sweep. Pass
+  `--keep-raw-data` (or `keep_raw_data: true`) only if you want to keep the
+  movies.
+- Only the small **run dir** (`run_meta.json` + two CSVs, kilobytes) is written
+  under `output_dir` and git-committed. **The raw movie is never committed.**
 
 ---
 
 ## 1. Run the sweep — the one command
 
 Edit `PycroFlow/perf/configs/wp1_default.yaml` so `frame_rate_hz`,
-`exposure_ms`, and `buffer_size` match your target acquisition, then run:
+`exposure_ms`, `n_frames`, `buffer_mb`, and the image size / `roi` match your
+target acquisition, then run (set `--data-dir` to your data drive):
 
 ```bat
-python -m PycroFlow.perf --instrument --config PycroFlow\perf\configs\wp1_default.yaml
+python -m PycroFlow.perf --instrument ^
+  --config PycroFlow\perf\configs\wp1_default.yaml ^
+  --data-dir D:\pycroflow_wp1_rawdata
 ```
+
+For the centre 512×512 quadrant, add `--roi 256,256,512,512` (or set `roi` in
+the config).
 
 That runs, in one process, at the target frame rate:
 
@@ -62,9 +84,12 @@ Wrote run dir: results\wp1_instrument_20260826T141230Z
 ```
 
 **Expected duration:** roughly `(1 + number_of_batch_sizes) × n_frames /
-frame_rate_hz`, plus a few seconds of per-acquisition setup. With the default
-`n_frames: 5000`, `frame_rate_hz: 100`, and five batch sizes that is
-≈ `6 × 50 s` ≈ **5–6 minutes**. Scale `n_frames` up for a more stressful test.
+frame_rate_hz`, plus a few seconds of per-acquisition setup. With the defaults
+(`n_frames: 2000`, `frame_rate_hz: 10`, four batch sizes) that is
+≈ `5 × 200 s` ≈ **17 minutes**. A full-length `n_frames: 40000` run is
+≈ `5 × 67 min` ≈ **5.5 hours** — use the default first, then scale up if you
+want a full-length stress test. Reduce the batch-size list to shorten the
+sweep.
 
 Everything lands under `results/wp1_instrument_<UTC-timestamp>/`:
 

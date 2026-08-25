@@ -43,6 +43,16 @@ def _parse_roi(value: str | None) -> list[int] | None:
     return [int(v) for v in value.split(",") if v.strip()]
 
 
+def _parse_image_size(value: str | None) -> tuple[int, int] | None:
+    if value is None:
+        return None
+    parts = value.lower().replace("x", ",").split(",")
+    nums = [int(p) for p in parts if p.strip()]
+    if len(nums) != 2:
+        raise ValueError("--image-size must be 'WxH', e.g. '1024x1024'")
+    return nums[0], nums[1]
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser (every knob is documented here)."""
     parser = argparse.ArgumentParser(
@@ -83,7 +93,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--out",
         dest="output_dir",
         default=None,
-        help="Base output directory for the run dir.",
+        help="Base output directory for the small, git-committed run dir.",
+    )
+    parser.add_argument(
+        "--data-dir",
+        dest="data_dir",
+        default=None,
+        help="Where the raw NDTiff acquisition is written (instrument "
+        "mode). Point at a large data drive, NOT the repo. Required in "
+        "instrument mode; the raw movie is deleted after measurement "
+        "unless --keep-raw-data.",
+    )
+    parser.add_argument(
+        "--keep-raw-data",
+        dest="keep_raw_data",
+        action="store_true",
+        default=None,
+        help="Keep the raw acquisition instead of deleting it after "
+        "measurement (instrument mode; movies are large).",
     )
     parser.add_argument(
         "--label",
@@ -105,11 +132,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Target frame rate (Hz).",
     )
     parser.add_argument(
-        "--buffer-size",
-        dest="buffer_size",
-        type=int,
+        "--buffer-mb",
+        dest="buffer_mb",
+        type=float,
         default=None,
-        help="Micro-Manager circular-buffer capacity (frames).",
+        help="Micro-Manager circular-buffer footprint in MB (mebibytes).",
+    )
+    parser.add_argument(
+        "--image-size",
+        default=None,
+        help="Full-frame size as 'WxH' (e.g. '1024x1024'); sets the frame "
+        "size used to convert the buffer MB to frames.",
     )
     parser.add_argument(
         "--batch-sizes",
@@ -182,14 +215,19 @@ def main(argv: list[str] | None = None) -> int:
         "contention": args.emu_contention,
         "read_cost_per_frame_s": args.emu_read_cost_per_frame_s,
     }
+    image_size = _parse_image_size(args.image_size)
     cfg = apply_overrides(
         cfg,
         mode=args.mode,
         output_dir=args.output_dir,
+        data_dir=args.data_dir,
+        keep_raw_data=args.keep_raw_data,
         label=args.label,
         n_frames=args.n_frames,
         frame_rate_hz=args.frame_rate_hz,
-        buffer_size=args.buffer_size,
+        buffer_mb=args.buffer_mb,
+        image_width=image_size[0] if image_size else None,
+        image_height=image_size[1] if image_size else None,
         batch_sizes=_parse_batch_sizes(args.batch_sizes),
         exposure_ms=args.exposure_ms,
         roi=_parse_roi(args.roi),
@@ -200,11 +238,12 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         "Running WP-1 perf sweep: mode={} frames={} rate={}Hz "
-        "buffer={} batches={}".format(
+        "buffer={}MB ({} frames) batches={}".format(
             cfg.mode,
             cfg.n_frames,
             cfg.frame_rate_hz,
-            cfg.buffer_size,
+            cfg.buffer_mb,
+            cfg.buffer_capacity_frames(),
             cfg.batch_sizes,
         )
     )

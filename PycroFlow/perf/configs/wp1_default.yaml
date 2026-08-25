@@ -11,35 +11,55 @@
 # emulator | instrument. Command-line --emulator/--instrument overrides this.
 mode: emulator
 
-# Target acquisition frame rate (Hz). Set to the real target rate on the PC.
-frame_rate_hz: 100.0
+# --- Acquisition parameters (match your real experiment) ---------------
+# Typical DNA-PAINT acquisition: 100 ms exposure, 10 Hz, 40000 frames.
+frame_rate_hz: 10.0
+exposure_ms: 100.0
 
 # Frames per configuration. The full sweep runs this many frames once per
-# batch size plus once for the no-reader baseline.
-n_frames: 5000
+# batch size plus once for the no-reader baseline. NOTE: at 10 Hz the wall
+# time per config is n_frames / 10 s, multiplied by (1 + number of batch
+# sizes). 2000 frames ≈ 3.3 min/config; set 40000 for a full-length run
+# (≈ 67 min/config — expect a multi-hour sweep).
+n_frames: 2000
 
-# Micro-Manager circular-buffer capacity, in frames.
-buffer_size: 500
+# Full-frame dimensions + bytes per pixel (16-bit camera => 2). Used to turn
+# the buffer MB into a frame capacity and to record the frame size. For the
+# centre quadrant, set roi below (e.g. [256, 256, 512, 512]).
+image_width: 1024
+image_height: 1024
+bytes_per_pixel: 2
+
+# Micro-Manager circular-buffer footprint, in MB (mebibytes) — matches MM's
+# "sequence buffer size". At 1024x1024x2 = 2 MiB/frame, 4096 MB ≈ 2048 frames.
+buffer_mb: 4096.0
+
+# Camera ROI [x, y, w, h] (instrument mode). null = full frame. For the
+# centre 512x512 quadrant of a 1024x1024 sensor use [256, 256, 512, 512].
+roi: null
 
 # Live-evaluation batch sizes to sweep (contiguous frames per read; never
 # subsampled). The baseline (no reader) is run in addition to these.
-batch_sizes: [1, 8, 32, 128, 512]
-
-# Camera exposure (ms) — used in instrument mode, recorded as provenance.
-exposure_ms: 100.0
-
-# Optional camera ROI [x, y, w, h] (instrument mode). null = full frame.
-roi: null
+batch_sizes: [1, 10, 100, 1000]
 
 # How often the occupancy monitor samples the circular buffer (s).
-monitor_interval_s: 0.01
+monitor_interval_s: 0.05
 
 # Also run a no-reader baseline (the control for the go/no-go comparison).
 include_baseline: true
 
-# Base directory for the timestamped run dir. Commit the produced dir under
-# results/ on the branch (see the RUNBOOK).
+# --- Output locations --------------------------------------------------
+# Small, git-committed run dir (run_meta.json + metrics.csv +
+# buffer_timeseries.csv) lands under output_dir; commit it under results/.
 output_dir: results
+
+# Where the raw NDTiff acquisition is written (instrument mode). Point this at
+# a LARGE DATA DRIVE, NOT the repo — a 40000-frame full-frame movie is tens of
+# GB. Required in instrument mode. The raw movie is deleted after each config
+# is measured (WP-1 only needs the metrics); set keep_raw_data: true to keep.
+# Example (Windows): D:\pycroflow_wp1_rawdata
+data_dir: null
+keep_raw_data: false
 
 # Prefix for the run-dir name.
 label: wp1

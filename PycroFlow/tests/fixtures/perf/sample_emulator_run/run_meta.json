@@ -8,19 +8,20 @@
   },
   "batch_sizes": [
     1,
-    8,
-    32,
-    128
+    10,
+    100
   ],
-  "buffer_size": 100,
+  "buffer_frames": 100,
+  "buffer_mb": 200.0,
   "config": {
     "batch_sizes": [
       1,
-      8,
-      32,
-      128
+      10,
+      100
     ],
-    "buffer_size": 100,
+    "buffer_mb": 200.0,
+    "bytes_per_pixel": 2,
+    "data_dir": null,
     "emulator": {
       "contention": 0.1,
       "read_cost_per_frame_s": 0.0002,
@@ -29,7 +30,10 @@
     },
     "exposure_ms": 100.0,
     "frame_rate_hz": 400.0,
+    "image_height": 1024,
+    "image_width": 1024,
     "include_baseline": true,
+    "keep_raw_data": false,
     "label": "sample",
     "mode": "emulator",
     "monitor_interval_s": 0.01,
@@ -37,9 +41,11 @@
     "output_dir": "PycroFlow/tests/fixtures/perf",
     "roi": null
   },
+  "data_dir": null,
   "exposure_ms": 100.0,
+  "frame_bytes": 2097152,
   "frame_rate_hz": 400.0,
-  "git_commit": "7174c1836ee60dcb278531eff3c7364e111aec10",
+  "git_commit": "e1c1385a4ab593cae8922c85c3797f14a9433882",
   "host": "89dc73b8dadc",
   "mode": "emulator",
   "monitor_interval_s": 0.01,
@@ -49,12 +55,12 @@
   "pycromanager_version": "not-installed",
   "python_version": "3.10.20",
   "roi": null,
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "thresholds": {
     "max_dropped_fraction": 0.001,
     "max_occupancy_fraction": 0.5,
     "min_throughput_retention": 0.95
   },
-  "utc_end": "2026-08-25T10:08:42.252197+00:00",
-  "utc_start": "2026-08-25T10:08:38.338717+00:00"
+  "utc_end": "2026-08-25T14:17:58.397176+00:00",
+  "utc_start": "2026-08-25T14:17:55.254691+00:00"
 }

@@ -22,6 +22,7 @@ occupancy, drives the batch reader, and computes metrics with one code path.
 from __future__ import annotations
 
 import abc
+import os
 import threading
 import time
 
@@ -102,7 +103,7 @@ class EmulatedBackend(FrameSourceBackend):
     def __init__(self, cfg: PerfConfig):
         self.cfg = cfg
         self.ep = cfg.emulator
-        self._cap = cfg.buffer_size
+        self._cap = cfg.buffer_capacity_frames()
         self._n = cfg.n_frames
         self._lock = threading.Lock()
         self._occ = 0
@@ -243,14 +244,16 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
     ``docs/WP-1-RUNBOOK.md``.
     """
 
-    def __init__(self, cfg: PerfConfig):
+    def __init__(self, cfg: PerfConfig, tag: str = "run"):
         self.cfg = cfg
+        self._tag = tag
         self._n = cfg.n_frames
         self._lock = threading.Lock()
         self._core = None
         self._acq = None
         self._dataset = None
         self._acq_thread: threading.Thread | None = None
+        self._acq_dir: str | None = None
         self._written = 0
         self._read = 0
         self._capacity = 0
@@ -258,15 +261,37 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
         self._camera = ""
         self._mm_version = ""
 
+    def _resolve_data_dir(self) -> str:
+        # Raw NDTiff is large; it must NOT land in the repo. Require an
+        # explicit data_dir (a large data drive) rather than silently writing
+        # tens of GB next to the committed results.
+        if not self.cfg.data_dir:
+            raise ValueError(
+                "instrument mode needs 'data_dir' set to a path on a large "
+                "data drive (NOT the repo) for the raw acquisition; got None"
+            )
+        return self.cfg.data_dir
+
     def start(self) -> None:
-        from pycromanager import (
-            Acquisition,
-            multi_d_acquisition_events,
-        )
+        from pycromanager import Acquisition, multi_d_acquisition_events
 
         from PycroFlow.services import mm_core
 
         self._core = mm_core.get_core()
+        # Size the circular buffer to the configured MB footprint (matches
+        # Micro-Manager's "sequence buffer size") and apply the ROI.
+        try:
+            self._core.set_circular_buffer_memory_footprint(
+                int(self.cfg.buffer_mb)
+            )
+        except Exception:
+            pass
+        if self.cfg.roi is not None:
+            try:
+                x, y, w, h = self.cfg.roi
+                self._core.set_roi(x, y, w, h)
+            except Exception:
+                pass
         try:
             self._camera = self._core.get_camera_device()
             self._mm_version = self._core.get_version_info()
@@ -275,7 +300,16 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
         try:
             self._capacity = int(self._core.get_buffer_total_capacity())
         except Exception:
-            self._capacity = self.cfg.buffer_size
+            self._capacity = self.cfg.buffer_capacity_frames()
+
+        # Unique raw-acquisition dir on the data drive, deleted after
+        # measurement unless keep_raw_data.
+        stamp = time.strftime("%Y%m%dT%H%M%S")
+        self._acq_dir = os.path.join(
+            self._resolve_data_dir(),
+            "wp1_raw_{}_{}".format(self._tag, stamp),
+        )
+        os.makedirs(self._acq_dir, exist_ok=True)
 
         events = multi_d_acquisition_events(
             num_time_points=self._n,
@@ -286,8 +320,8 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
 
         def _run() -> None:
             with Acquisition(
-                directory=self.cfg.output_dir,
-                name="wp1_instrument_acq",
+                directory=self._acq_dir,
+                name="acq",
                 show_display=False,
                 image_process_fn=self._count_frame,
             ) as acq:
@@ -313,7 +347,7 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
             return 0
 
     def capacity(self) -> int:
-        return self._capacity or self.cfg.buffer_size
+        return self._capacity or self.cfg.buffer_capacity_frames()
 
     def produced(self) -> int:
         return self.written() + self.occupancy()
@@ -364,17 +398,39 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
             "mm_version": self._mm_version,
             "exposure_ms": self.cfg.exposure_ms,
             "roi": self.cfg.roi,
+            "raw_data_dir": self._acq_dir,
+            "raw_data_kept": self.cfg.keep_raw_data,
         }
 
     def close(self) -> None:
         if self._acq_thread is not None:
             self._acq_thread.join(timeout=30.0)
+        # Free the (large) raw acquisition unless explicitly kept: WP-1 only
+        # needs the metrics, and a full sweep would otherwise accumulate one
+        # movie per configuration.
+        if (
+            not self.cfg.keep_raw_data
+            and self._acq_dir is not None
+            and os.path.isdir(self._acq_dir)
+        ):
+            import shutil
+
+            shutil.rmtree(self._acq_dir, ignore_errors=True)
 
 
-def make_backend(cfg: PerfConfig) -> FrameSourceBackend:
-    """Construct the backend for ``cfg.mode``."""
+def make_backend(cfg: PerfConfig, tag: str = "run") -> FrameSourceBackend:
+    """Construct the backend for ``cfg.mode``.
+
+    Parameters
+    ----------
+    cfg : PerfConfig
+        The mode-resolved configuration.
+    tag : str
+        Short label for this configuration, used to name the instrument
+        backend's raw-acquisition directory uniquely.
+    """
     if cfg.mode == MODE_EMULATOR:
         return EmulatedBackend(cfg)
     if cfg.mode == MODE_INSTRUMENT:
-        return InstrumentBackend(cfg)
+        return InstrumentBackend(cfg, tag=tag)
     raise ValueError("unknown mode {!r}".format(cfg.mode))

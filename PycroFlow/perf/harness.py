@@ -52,7 +52,8 @@ def run_config(
     tuple
         ``(metrics_row, timeseries_rows, backend_describe)``.
     """
-    backend = make_backend(cfg)
+    label = "reader_b{}".format(batch_size) if reader_on else "baseline"
+    backend = make_backend(cfg, tag=label)
     tag = {
         "mode": cfg.mode,
         "reader": reader_on,
@@ -132,7 +133,9 @@ def run_config(
         {
             "n_frames": cfg.n_frames,
             "frame_rate_hz": cfg.frame_rate_hz,
-            "buffer_size": backend.capacity(),
+            "buffer_mb": cfg.buffer_mb,
+            "buffer_frames": backend.capacity(),
+            "frame_bytes": cfg.frame_bytes(),
             "frames_produced": produced,
             "frames_written": written,
             "dropped_count": dropped,
@@ -214,10 +217,13 @@ def build_run_meta(
         "pycromanager_version": _pycromanager_version(),
         "frame_rate_hz": cfg.frame_rate_hz,
         "n_frames": cfg.n_frames,
-        "buffer_size": cfg.buffer_size,
+        "buffer_mb": cfg.buffer_mb,
+        "buffer_frames": cfg.buffer_capacity_frames(),
+        "frame_bytes": cfg.frame_bytes(),
         "batch_sizes": list(cfg.batch_sizes),
         "exposure_ms": cfg.exposure_ms,
         "roi": cfg.roi,
+        "data_dir": cfg.data_dir,
         "monitor_interval_s": cfg.monitor_interval_s,
         "git_commit": _git_commit(),
         "utc_start": utc_start,

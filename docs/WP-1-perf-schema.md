@@ -2,9 +2,15 @@
 
 This is the stable contract between the **run** leg (on the acquisition PC) and
 the **analyze** leg (here). It is versioned by `SCHEMA_VERSION` in
-`PycroFlow/perf/schema.py` (currently **1.0**); the analysis refuses run dirs
+`PycroFlow/perf/schema.py` (currently **1.1**); the analysis refuses run dirs
 whose `schema_version` does not match. Bump the version and this doc together
 on any incompatible change.
+
+Note on sizes: the run directory holds only these three small files. The raw
+NDTiff acquisition (tens of GB for a full-length full-frame run) is written to a
+separate `data_dir` on a data drive and deleted after each configuration is
+measured (WP-1 needs only the metrics) — it is **never** part of the run dir and
+must **not** be committed. Only the run dir is git-transferred.
 
 Each harness invocation writes **one timestamped run directory**
 (`<label>_<mode>_<UTC-timestamp>/`) containing exactly three files.
@@ -25,15 +31,15 @@ present. Required top-level keys (pinned by `RUN_META_REQUIRED_KEYS`):
 | `python_version` | interpreter version |
 | `pycroflow_version` | installed PycroFlow version |
 | `pycromanager_version` | pycromanager version, or `not-installed` |
-| `frame_rate_hz`, `n_frames`, `buffer_size` | acquisition parameters |
+| `frame_rate_hz`, `n_frames`, `buffer_mb` | acquisition parameters |
 | `batch_sizes` | the swept batch-size list |
 | `git_commit` | HEAD commit of the branch that produced the run |
 | `utc_start`, `utc_end` | ISO-8601 UTC timestamps |
 | `config` | the fully-resolved config (`PerfConfig.to_dict()`) |
-| `backend` | backend provenance (emulator params, or camera + MM version) |
+| `backend` | backend provenance (emulator params, or camera + MM version + raw-data dir) |
 
-Also present (informational): `exposure_ms`, `roi`, `monitor_interval_s`,
-`thresholds`.
+Also present (informational): `buffer_frames`, `frame_bytes`, `exposure_ms`,
+`roi`, `data_dir`, `monitor_interval_s`, `thresholds`.
 
 ---
 
@@ -49,7 +55,9 @@ One row per configuration. The baseline row has `reader=False`,
 | `batch_size` | frames per contiguous read (0 for the baseline) |
 | `n_frames` | frames in this run |
 | `frame_rate_hz` | target frame rate |
-| `buffer_size` | circular-buffer capacity (frames) as reported by the source |
+| `buffer_mb` | circular-buffer footprint (MB) — matches MM's sequence buffer |
+| `buffer_frames` | circular-buffer capacity in frames (from `buffer_mb` / frame size) |
+| `frame_bytes` | bytes per frame (ROI / full-frame size x bytes per pixel) |
 | `frames_produced` | frames placed in the buffer |
 | `frames_written` | frames drained to disk (the write path) |
 | `dropped_count` | frames lost to buffer overflow |

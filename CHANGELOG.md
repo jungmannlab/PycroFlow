@@ -29,7 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   acquisition + NDTiff `Dataset` read) — with identical measurement code. Run
   it via `python -m PycroFlow.perf` / `pycroflow-perf`; each invocation writes
   a timestamped run dir (`run_meta.json` + `metrics.csv` +
-  `buffer_timeseries.csv`, schema pinned by `PycroFlow/perf/schema.py`).
+  `buffer_timeseries.csv`, schema pinned by `PycroFlow/perf/schema.py`). The
+  circular buffer is configured in **MB** (matching Micro-Manager's sequence
+  buffer). The large raw NDTiff acquisition is written to a separate
+  `data_dir` on a data drive (required in instrument mode, never the repo) and
+  deleted after each configuration is measured; only the small run dir is
+  git-committed.
 - **WP-1 analysis** (`PycroFlow/perf/analyze_perf.py` / `pycroflow-perf-analyze`):
   ingests one or more run dirs and drafts the live-vs-batch go/no-go against
   documented thresholds, emitting `report.md` + `report.json` (+ optional

@@ -1,11 +1,30 @@
 """Configuration for the WP-1 performance harness.
 
 The whole harness is config-driven: frame rate, number of frames, circular
-buffer size, the batch-size sweep list, and the output directory all come from
-here (with sensible defaults). A config can be loaded from YAML
+buffer size, the batch-size sweep list, and the output directories all come
+from here (with sensible defaults). A config can be loaded from YAML
 (:func:`load_config`) and individual knobs overridden from the command line
 (:func:`apply_overrides`); the fully-resolved config is serialised into every
 run's ``run_meta.json`` (:meth:`PerfConfig.to_dict`) so a run is reproducible.
+
+Two directories are kept deliberately separate because the raw acquisition is
+huge (a 40000-frame full-frame movie is tens of GB) while the analysis logs are
+tiny:
+
+``output_dir``
+    Where the small, git-committed run directory lands (``run_meta.json`` +
+    ``metrics.csv`` + ``buffer_timeseries.csv``). Defaults to ``results`` in
+    the repo.
+``data_dir``
+    Where the raw NDTiff acquisition is written in ``instrument`` mode — point
+    this at a **large data drive, not the repo**. WP-1 only needs the metrics,
+    so the raw movie is deleted after each configuration is measured (set
+    ``keep_raw_data`` to keep it). Unused in ``emulator`` mode (no frames are
+    written to disk).
+
+The circular-buffer size is expressed in **MB**, matching Micro-Manager's
+"sequence buffer" setting; the equivalent capacity in frames is derived from
+the frame size (ROI / full-frame dimensions x bytes per pixel).
 
 Only the *frame source* differs between ``emulator`` and ``instrument`` mode —
 see :mod:`PycroFlow.perf.backends`. The ``emulator`` sub-parameters
@@ -22,6 +41,11 @@ import yaml
 MODE_EMULATOR = "emulator"
 MODE_INSTRUMENT = "instrument"
 VALID_MODES = (MODE_EMULATOR, MODE_INSTRUMENT)
+
+# Micro-Manager reports its circular-buffer footprint in MB counted as
+# mebibytes (1024 * 1024 bytes); use the same convention so the emulator's
+# derived frame capacity matches what MM would report.
+BYTES_PER_MB = 1024 * 1024
 
 
 @dataclass
@@ -76,21 +100,35 @@ class PerfConfig:
         Target acquisition frame rate.
     n_frames : int
         Number of frames per configuration.
-    buffer_size : int
-        Micro-Manager circular-buffer capacity, in frames.
-    batch_sizes : list[int]
-        Live-evaluation batch sizes to sweep (the reader reads this many
-        contiguous frames at a time — never subsampled).
+    buffer_mb : float
+        Micro-Manager circular-buffer footprint, in MB (mebibytes). The
+        equivalent capacity in frames is derived from the frame size.
     exposure_ms : float
         Camera exposure (instrument mode); recorded as provenance otherwise.
     roi : list[int] | None
-        Optional camera ROI ``[x, y, w, h]`` (instrument mode).
+        Camera ROI ``[x, y, w, h]``; ``None`` = full frame
+        (``image_width`` x ``image_height``). The width/height also set the
+        frame size used to convert ``buffer_mb`` to a frame capacity.
+    image_width, image_height : int
+        Full-frame dimensions, used for the frame size when ``roi`` is None.
+    bytes_per_pixel : int
+        Bytes per pixel (2 for 16-bit cameras) — for the frame-size / buffer
+        capacity calculation.
+    batch_sizes : list[int]
+        Live-evaluation batch sizes to sweep (the reader reads this many
+        contiguous frames at a time — never subsampled).
     monitor_interval_s : float
         How often the occupancy monitor samples the buffer.
     include_baseline : bool
         Whether to run a no-reader baseline in addition to the sweep.
     output_dir : str
-        Base directory under which the timestamped run dir is created.
+        Base directory for the small, git-committed run dir.
+    data_dir : str | None
+        Where the raw NDTiff acquisition is written (instrument mode). Point
+        at a large data drive, NOT the repo. Required in instrument mode.
+    keep_raw_data : bool
+        Keep the raw acquisition after measuring (default: delete it — WP-1
+        only needs the metrics, and the movies are large).
     label : str
         Prefix for the run-dir name.
     emulator : EmulatorParams
@@ -98,15 +136,20 @@ class PerfConfig:
     """
 
     mode: str = MODE_EMULATOR
-    frame_rate_hz: float = 100.0
+    frame_rate_hz: float = 10.0
     n_frames: int = 2000
-    buffer_size: int = 200
-    batch_sizes: list[int] = field(default_factory=lambda: [1, 8, 32, 128])
+    buffer_mb: float = 4096.0
     exposure_ms: float = 100.0
     roi: list[int] | None = None
-    monitor_interval_s: float = 0.01
+    image_width: int = 1024
+    image_height: int = 1024
+    bytes_per_pixel: int = 2
+    batch_sizes: list[int] = field(default_factory=lambda: [1, 10, 100, 1000])
+    monitor_interval_s: float = 0.05
     include_baseline: bool = True
     output_dir: str = "results"
+    data_dir: str | None = None
+    keep_raw_data: bool = False
     label: str = "wp1"
     emulator: EmulatorParams = field(default_factory=EmulatorParams)
 
@@ -121,8 +164,12 @@ class PerfConfig:
             raise ValueError("frame_rate_hz must be > 0")
         if self.n_frames <= 0:
             raise ValueError("n_frames must be > 0")
-        if self.buffer_size <= 0:
-            raise ValueError("buffer_size must be > 0")
+        if self.buffer_mb <= 0:
+            raise ValueError("buffer_mb must be > 0")
+        if self.image_width <= 0 or self.image_height <= 0:
+            raise ValueError("image_width / image_height must be > 0")
+        if self.bytes_per_pixel <= 0:
+            raise ValueError("bytes_per_pixel must be > 0")
         if not self.batch_sizes:
             raise ValueError("batch_sizes must be a non-empty list")
         if any(b <= 0 for b in self.batch_sizes):
@@ -133,6 +180,20 @@ class PerfConfig:
         self.batch_sizes = [int(b) for b in self.batch_sizes]
         if self.roi is not None:
             self.roi = [int(v) for v in self.roi]
+            if len(self.roi) != 4:
+                raise ValueError("roi must be [x, y, w, h]")
+
+    def frame_bytes(self) -> int:
+        """Bytes per frame, from the ROI / full-frame size x bit depth."""
+        if self.roi is not None:
+            width, height = self.roi[2], self.roi[3]
+        else:
+            width, height = self.image_width, self.image_height
+        return width * height * self.bytes_per_pixel
+
+    def buffer_capacity_frames(self) -> int:
+        """Circular-buffer capacity in frames derived from ``buffer_mb``."""
+        return max(1, int(self.buffer_mb * BYTES_PER_MB // self.frame_bytes()))
 
     def to_dict(self) -> dict:
         """Return a plain-dict, JSON-serialisable copy for ``run_meta``."""
