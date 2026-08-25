@@ -1,0 +1,62 @@
+# WP-1 live-reader performance harness — default configuration.
+#
+# Every knob here is also overridable on the command line (see
+# `python -m PycroFlow.perf --help`). The mode (--emulator / --instrument) is
+# normally set on the command line, not here, so one config file drives both
+# the dry run and the on-instrument run — ONLY the frame source differs.
+#
+# See docs/WP-1-RUNBOOK.md for how to run this on the acquisition PC and
+# docs/WP-1-perf-schema.md for the output schema + go/no-go thresholds.
+
+# emulator | instrument. Command-line --emulator/--instrument overrides this.
+mode: emulator
+
+# Target acquisition frame rate (Hz). Set to the real target rate on the PC.
+frame_rate_hz: 100.0
+
+# Frames per configuration. The full sweep runs this many frames once per
+# batch size plus once for the no-reader baseline.
+n_frames: 5000
+
+# Micro-Manager circular-buffer capacity, in frames.
+buffer_size: 500
+
+# Live-evaluation batch sizes to sweep (contiguous frames per read; never
+# subsampled). The baseline (no reader) is run in addition to these.
+batch_sizes: [1, 8, 32, 128, 512]
+
+# Camera exposure (ms) — used in instrument mode, recorded as provenance.
+exposure_ms: 100.0
+
+# Optional camera ROI [x, y, w, h] (instrument mode). null = full frame.
+roi: null
+
+# How often the occupancy monitor samples the circular buffer (s).
+monitor_interval_s: 0.01
+
+# Also run a no-reader baseline (the control for the go/no-go comparison).
+include_baseline: true
+
+# Base directory for the timestamped run dir. Commit the produced dir under
+# results/ on the branch (see the RUNBOOK).
+output_dir: results
+
+# Prefix for the run-dir name.
+label: wp1
+
+# --- Emulator model (ignored in instrument mode) -----------------------
+# Defaults model the EXPECTED real outcome: the page cache serves the
+# just-written frames, so the reader barely contends with the writer and no
+# frames are dropped across the sweep. The backpressure regression test
+# overrides these to induce and detect contention.
+emulator:
+  # Writer drain rate as a multiple of the frame rate (>1 => baseline keeps
+  # up and the buffer stays near-empty).
+  write_speed_factor: 3.0
+  # Fractional writer slow-down while a batch is being read (0 => the reader
+  # is effectively free).
+  contention: 0.1
+  # Wall-clock cost the emulated reader spends per frame in a batch (s).
+  read_cost_per_frame_s: 0.0002
+  # Engine integration tick (s); sets sampling granularity, not correctness.
+  tick_s: 0.001

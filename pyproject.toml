@@ -82,6 +82,8 @@ dev = [
 [project.scripts]
 pycroflow = "PycroFlow.frontend_cli:main"
 pycroflow-gui = "PycroFlow.gui.app:main"
+pycroflow-perf = "PycroFlow.perf.cli:main"
+pycroflow-perf-analyze = "PycroFlow.perf.analyze_perf:main"
 
 [tool.setuptools_scm]
 # Version is derived from the latest reachable git tag (single source of
@@ -101,6 +103,7 @@ PycroFlow = [
     "TestData/*.yaml",
     "configs/*.yaml",
     "configs/setups/*.yaml",
+    "perf/configs/*.yaml",
     "examples/*.yaml",
     "tests/fixtures/configs/*.py",
     "tests/fixtures/snapshots/*.json",
