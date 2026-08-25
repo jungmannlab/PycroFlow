@@ -579,6 +579,38 @@ class SystemService:
             "(which wires {})".format(
                 reservoir_id, self._setup_name, self.reservoir_ids()))
 
+    def has_multiplexer(self) -> bool:
+        """True when the loaded setup multiplexes reservoirs with an ibidi unit.
+
+        Determined from the setup config, so it is answerable before the
+        fluid system is connected (the GUI uses it to show the ibidi-only
+        "close all valves" control).
+        """
+        fluid = (self._setup or {}).get('fluid') or {}
+        mux = fluid.get('multiplexer') or {}
+        return mux.get('driver') == IBIDI_MULTIFLOW
+
+    def close_all_valves(self) -> None:
+        """Close every ibidi multiplexer channel — route to nothing (manual).
+
+        Leaves all channels closed so no reservoir feeds the pump. Only
+        meaningful for setups using the ibidi multiplexer; the Hamilton MVP
+        rotary valves are always at exactly one position and have nothing to
+        close.
+
+        Raises
+        ------
+        RuntimeError
+            The connected fluid system has no ibidi multiplexer.
+        """
+        self._require('fluid_system')
+        mux = getattr(self.fluid_system, 'multiplexer', None)
+        if mux is None:
+            raise RuntimeError(
+                "the connected fluid system has no ibidi multiplexer to "
+                "close")
+        mux.close_all()
+
     def stop_all_moves(self) -> None:
         """Emergency stop on the fluid system. Safe to call from anywhere."""
         if self.fluid_system is None:

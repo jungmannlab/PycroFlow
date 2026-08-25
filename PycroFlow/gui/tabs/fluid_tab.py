@@ -42,11 +42,8 @@ class FluidTab(QWidget):
         # Buttons disabled while a fluid op runs in the background (the serial
         # bus serves one operation at a time). STOP stays enabled.
         self._busy_buttons = [
-            self.fill_btn,
-            self.clean_btn,
-            self.stroke_btn,
-            self.move_btn,
-            self.valve_btn,
+            self.fill_btn, self.clean_btn, self.stroke_btn,
+            self.move_btn, self.valve_btn, self.close_valves_btn,
         ]
 
     def _build_ui(self):
@@ -215,6 +212,16 @@ class FluidTab(QWidget):
         vform.addRow(self._hint(
             "Routing only — no liquid is moved. This is the route the pump "
             "controls above will then use."))
+        # Close every ibidi multiplexer channel (ibidi setups only). Unlike a
+        # Hamilton rotary valve, the multiplexer's 24 valves are independent
+        # and can all be closed, connecting no reservoir to the pump.
+        self.close_valves_btn = QPushButton("Close all valves")
+        self.close_valves_btn.setToolTip(
+            "Close every ibidi multiplexer channel, so no reservoir is "
+            "connected to the pump. Only available on setups that use the "
+            "ibidi multiplexer.")
+        vform.addRow(self.close_valves_btn)
+        self.close_valves_btn.clicked.connect(self._on_close_valves)
         self.valve_btn.clicked.connect(self._on_set_valves)
         self.valve_res.currentIndexChanged.connect(self._update_route_hint)
         outer.addWidget(valve)
@@ -333,6 +340,8 @@ class FluidTab(QWidget):
             if index >= 0:
                 self.valve_res.setCurrentIndex(index)
         self.valve_btn.setEnabled(self.valve_res.count() > 0)
+        # "Close all valves" is only meaningful for the ibidi multiplexer.
+        self.close_valves_btn.setVisible(self._svc.has_multiplexer())
         self._update_route_hint()
 
     def _update_route_hint(self):
@@ -357,6 +366,9 @@ class FluidTab(QWidget):
                 "The selected setup wires no reservoirs to route to.")
             return
         self._run(lambda: self._svc.set_valves(rid), "Set valves")
+
+    def _on_close_valves(self):
+        self._run(self._svc.close_all_valves, "Close all valves")
 
     def _on_stop(self):
         # Always safe; SystemService.stop_all_moves swallows errors.

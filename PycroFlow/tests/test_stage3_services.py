@@ -382,6 +382,53 @@ class TestSystemService(unittest.TestCase):
         self.assertTrue(svc.is_emulated())
         self.assertEqual(svc.get_monet_setup(), "Emulator")
 
+    def test_has_multiplexer(self):
+        svc = SystemService()
+        self.assertFalse(svc.has_multiplexer())   # no setup loaded
+        svc.load_setup('IbidiEmulator')
+        self.assertTrue(svc.has_multiplexer())
+        svc.load_setup('Emulator')
+        self.assertFalse(svc.has_multiplexer())
+
+    def test_close_all_valves_closes_every_channel(self):
+        svc = SystemService()
+        svc.load_setup('IbidiEmulator')
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200},
+            'settings': {'reservoir_names': {1: 'R1', 2: 'R2'},
+                         'special_names': {'flushbuffer_a': 7}},
+        })
+        mux = svc.fluid_system.multiplexer
+        mux.select([1, 2, 3])
+        self.assertTrue(any(mux.channel_states))
+        svc.close_all_valves()
+        self.assertFalse(any(mux.channel_states))
+
+    def test_close_all_valves_without_multiplexer_raises(self):
+        svc = SystemService()
+        svc.load_setup('Emulator')
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200},
+            'settings': {'reservoir_names': {1: 'R1'},
+                         'special_names': {'flushbuffer_a': 1}},
+        })
+        with self.assertRaises(RuntimeError):
+            svc.close_all_valves()
+
+    def test_fill_tubings_without_flushbuffer_skips_final_flush(self):
+        # A design that defines no 'flushbuffer_a' must not crash fill: the
+        # post-fill flushbuffer step is skipped rather than dead-ending in
+        # the tubing lookup for an unrouted 'flushbuffer_a'.
+        svc = SystemService()
+        svc.load_setup('IbidiEmulator')
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200, 'clean_velocity': 200,
+                           'clean_delay': 0},
+            'settings': {'reservoir_names': {1: 'R1', 2: 'R2'},
+                         'special_names': {}},
+        })
+        svc.fill_tubings()   # must not raise
+
 
 if __name__ == "__main__":
     unittest.main()
