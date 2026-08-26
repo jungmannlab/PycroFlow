@@ -21,22 +21,22 @@ exposure_ms: 100.0
 # time per config is n_frames / 10 s, multiplied by (1 + number of batch
 # sizes). 2000 frames ≈ 3.3 min/config; set 40000 for a full-length run
 # (≈ 67 min/config — expect a multi-hour sweep).
-n_frames: 2000
+n_frames: 10000
 
 # Full-frame dimensions + bytes per pixel (16-bit camera => 2). Used to turn
 # the buffer MB into a frame capacity and to record the frame size. For the
 # centre quadrant, set roi below (e.g. [256, 256, 512, 512]).
-image_width: 1024
-image_height: 1024
+image_width: 576
+image_height: 576
 bytes_per_pixel: 2
 
 # Micro-Manager circular-buffer footprint, in MB (mebibytes) — matches MM's
 # "sequence buffer size". At 1024x1024x2 = 2 MiB/frame, 4096 MB ≈ 2048 frames.
-buffer_mb: 4096.0
+buffer_mb: 10000.0
 
 # Camera ROI [x, y, w, h] (instrument mode). null = full frame. For the
 # centre 512x512 quadrant of a 1024x1024 sensor use [256, 256, 512, 512].
-roi: null
+roi: [256, 256, 576, 576]
 
 # Live-evaluation batch sizes to sweep (contiguous frames per read; never
 # subsampled). The baseline (no reader) is run in addition to these.
@@ -58,7 +58,7 @@ output_dir: results
 # GB. Required in instrument mode. The raw movie is deleted after each config
 # is measured (WP-1 only needs the metrics); set keep_raw_data: true to keep.
 # Example (Windows): D:\pycroflow_wp1_rawdata
-data_dir: null
+data_dir: U:\users\hgrabmayr\microscopy\250826_livereadperftest
 keep_raw_data: false
 
 # Prefix for the run-dir name.

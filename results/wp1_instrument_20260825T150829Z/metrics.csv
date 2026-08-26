@@ -1,0 +1,6 @@
+mode,reader,batch_size,n_frames,frame_rate_hz,buffer_mb,buffer_frames,frame_bytes,frames_produced,frames_written,dropped_count,dropped_fraction,occupancy_peak,occupancy_mean,throughput_fps,duration_s
+instrument,False,0,2000,10.0,10000.0,3950,2654208,2000,2000,0,0.0,3,0.0075,5.3231,375.717767
+instrument,True,1,2000,10.0,10000.0,3950,2654208,2000,2000,0,0.0,9,0.0307,5.339,374.60129
+instrument,True,10,2000,10.0,10000.0,3950,2654208,2000,2000,0,0.0,7,0.0502,5.2927,377.877008
+instrument,True,100,2000,10.0,10000.0,3950,2654208,2000,2000,0,0.0,6,0.0659,5.2374,381.868186
+instrument,True,1000,2000,10.0,10000.0,3950,2654208,2000,2000,0,0.0,7,0.0689,5.1951,384.974768
