@@ -1281,6 +1281,107 @@ class TestSchemaForm(unittest.TestCase):
             [ed._combo.itemText(i) for i in range(ed._combo.count())],
             ['488', '561', '640', '642'])
 
+    def test_laser_stays_typeable_without_monet_lasers(self):
+        # A monet config that declares no lasers (or no setup loaded) must
+        # not lock the field: the dropdown is editable, so any wavelength
+        # can still be entered.
+        from PycroFlow.gui.widgets.schema_form import SchemaForm
+        from PycroFlow.schemas.experiment_design import IlluSettings
+        form = SchemaForm(IlluSettings, {'laser': 642, 'power_acq': 70},
+                          context={'lasers': []})
+        ed = form.field_editor('laser')
+        self.assertTrue(ed._combo.isEditable())
+        ed._combo.setCurrentText('750')
+        self.assertEqual(form.to_dict()['laser'], 750)
+
+    def test_reservoir_ids_become_dropdown_when_setup_arrives(self):
+        # The form is built before a setup is loaded (empty startup form), so
+        # the id column must follow the context rather than snapshot it.
+        from PycroFlow.gui.widgets.schema_form import SchemaForm, FormContext
+        from PycroFlow.schemas.experiment_design import FluidSettings
+        from PyQt6.QtWidgets import QComboBox, QLineEdit
+        ctx = FormContext({'reservoir_ids': []})
+        form = SchemaForm(FluidSettings, {
+            'vol_wash': 10, 'reservoir_names': {1: 'imager1', 2: 'imager2'},
+            'experiment': {'type': 'Exchange', 'wash_buffer': 'imager1'}},
+            context=ctx)
+        ed = form.field_editor('reservoir_names')
+        self.assertIsInstance(ed._rows[0][0], QLineEdit)
+        ctx.set_options('reservoir_ids', [1, 2, 3])
+        id_cell = ed._rows[0][0]
+        self.assertIsInstance(id_cell, QComboBox)
+        self.assertEqual(
+            [id_cell.itemText(i) for i in range(id_cell.count())],
+            ['1', '2', '3'])
+        # Switching the column to dropdowns must not lose the entered data.
+        self.assertEqual(ed.get_value(), {1: 'imager1', 2: 'imager2'})
+
+    @staticmethod
+    def _next_tab_stop(w):
+        """The widget Tab would move focus to (Qt skips non-tabbable ones)."""
+        from PyQt6.QtCore import Qt
+        cur = w.nextInFocusChain()
+        while cur is not w:
+            if cur.focusPolicy() & Qt.FocusPolicy.TabFocus:
+                return cur
+            cur = cur.nextInFocusChain()
+        return None
+
+    def test_tab_runs_down_the_name_column(self):
+        # Tabbing out of a name field reached the row's ✕ button; it should
+        # go to the next row's name, so names are filled straight down. The
+        # id dropdowns are picked from their list, not tabbed through.
+        from PyQt6.QtCore import Qt
+        from PycroFlow.gui.widgets.schema_form import SchemaForm, FormContext
+        from PycroFlow.schemas.experiment_design import FluidSettings
+        form = SchemaForm(FluidSettings, {
+            'vol_wash': 10, 'reservoir_names': {1: 'a', 2: 'b', 3: 'c'},
+            'experiment': {'type': 'Exchange', 'wash_buffer': 'a'}},
+            context=FormContext({'reservoir_ids': [1, 2, 3]}))
+        ed = form.field_editor('reservoir_names')
+        (r0_id, r0_name, r0_rm), (_, r1_name, _), (_, r2_name, _) = ed._rows
+        self.assertEqual(r0_rm.focusPolicy(), Qt.FocusPolicy.NoFocus)
+        self.assertEqual(r0_id.focusPolicy(), Qt.FocusPolicy.ClickFocus)
+        self.assertIs(self._next_tab_stop(r0_name), r1_name)
+        self.assertIs(self._next_tab_stop(r1_name), r2_name)
+
+    def test_free_text_id_column_stays_tabbable(self):
+        # Without a setup the id column is a text field, not a dropdown — it
+        # must stay in the tab chain or it could not be filled in at all.
+        from PyQt6.QtCore import Qt
+        from PycroFlow.gui.widgets.schema_form import SchemaForm
+        from PycroFlow.schemas.experiment_design import FluidSettings
+        form = SchemaForm(FluidSettings, {
+            'vol_wash': 10, 'reservoir_names': {1: 'a', 2: 'b'},
+            'experiment': {'type': 'Exchange', 'wash_buffer': 'a'}})
+        ed = form.field_editor('reservoir_names')
+        (r0_id, r0_name, _), (r1_id, _, _) = ed._rows
+        self.assertNotEqual(r0_id.focusPolicy(), Qt.FocusPolicy.ClickFocus)
+        self.assertIs(self._next_tab_stop(r0_id), r0_name)
+        self.assertIs(self._next_tab_stop(r0_name), r1_id)
+
+    def test_setup_options_refresh_into_live_form(self):
+        # Picking/switching a setup after a design is loaded must refresh the
+        # setup-derived dropdowns in place, not leave them stale.
+        from PycroFlow.services import ExperimentService
+        from PycroFlow.gui.tabs.experiment_design_tab import (
+            ExperimentDesignTab)
+        lasers = []
+        tab = ExperimentDesignTab(
+            ExperimentService(), laser_options_provider=lambda: list(lasers),
+            reservoir_ids_provider=lambda: [1, 2])
+        tab._set_form({'base_name': 'x',
+                       'illu': {'settings': {'laser': 642, 'power_acq': 70}}})
+        illu = tab._form.field_editor('illu')
+        ed = illu._form.field_editor('settings')._form.field_editor('laser')
+        self.assertEqual(
+            [ed._combo.itemText(i) for i in range(ed._combo.count())], ['642'])
+        lasers[:] = [488, 561, 640]
+        tab.refresh_setup_options()
+        self.assertEqual(
+            [ed._combo.itemText(i) for i in range(ed._combo.count())],
+            ['488', '561', '640', '642'])
+
     def test_imager_dropdowns_update_live_on_reservoir_edit(self):
         from PycroFlow.gui.widgets.schema_form import SchemaForm
         from PycroFlow.schemas.experiment_design import FluidSettings
@@ -1793,6 +1894,14 @@ class TestFluidTab(unittest.TestCase):
             pickup_res=5,
             dispense_res=7,
         )
+
+    def test_valve_dropdown_offers_the_setups_manifold(self):
+        # Sparse manifolds (ibidi) are common: the ids offered are exactly
+        # those the setup wires, not a 1..N range nor the design's subset.
+        tab, _ = self._tab(reservoir_ids=(2, 3, 8, 20))
+        self.assertEqual(
+            [tab.valve_res.itemData(i) for i in range(tab.valve_res.count())],
+            [2, 3, 8, 20])
 
     def test_valve_dropdown_offers_the_setups_manifold(self):
         # Sparse manifolds (ibidi) are common: the ids offered are exactly

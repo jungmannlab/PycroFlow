@@ -52,6 +52,21 @@ def chdir_to_test_output():
     os.chdir(TEST_OUTPUT_DIR)
 
 
+def chdir_to_test_output():
+    """Point the cwd at the per-session output tempdir.
+
+    For tearDown in tests that load an experiment design from the source
+    tree: loading chdirs to the design's folder (intended product
+    behaviour), which would otherwise leave later tests writing into the
+    checkout.
+
+    NOTE this must never run at import time — ``SystemService.load_setup``
+    imports this package for emulated setups, so an import-time chdir would
+    move the *application's* working directory out from under it.
+    """
+    os.chdir(TEST_OUTPUT_DIR)
+
+
 @atexit.register
 def _cleanup_test_output_dir():
     shutil.rmtree(TEST_OUTPUT_DIR, ignore_errors=True)

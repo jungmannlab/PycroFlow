@@ -269,14 +269,9 @@ class TestSystemService(unittest.TestCase):
         IS.assert_called_once_with(setup='Mercury')
 
     def test_laser_options_from_monet_config(self):
-        import sys
-        import types
-
         svc = SystemService()
-        svc.load_setup("Mercury")
-        fake = types.ModuleType("monet")
-        fake.CONFIGS = {"Mercury": {"lasers": {640: {}, 488: {}, 561: {}}}}
-        with patch.dict(sys.modules, {"monet": fake}):
+        svc.load_setup('Mercury')
+        with _fake_monet({'Mercury': {'lasers': {640: {}, 488: {}, 561: {}}}}):
             self.assertEqual(svc.laser_options(), [488, 561, 640])
 
     def test_laser_options_string_keys_become_ints(self):
@@ -430,5 +425,5 @@ class TestSystemService(unittest.TestCase):
         svc.fill_tubings()   # must not raise
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

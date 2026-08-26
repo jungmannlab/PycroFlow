@@ -248,6 +248,66 @@ class TestSetupConfigs(unittest.TestCase):
             configs.assemble_hamilton_config(
                 setup, {'reservoir_names': {1: 'R1'}})
 
+    def test_multiplexer_drivers_flatten_to_legacy_config(self):
+        # LegacyArchitecture still consumes the flat vendor-shaped dict:
+        # hamilton-mvp fills valve_a, ibidi-multiflow fills 'ibidi' instead.
+        settings = {'reservoir_names': {1: 'R1'}}
+        mvp, _ = configs.assemble_hamilton_config(
+            configs.load_setup('Mercury'), settings)
+        self.assertEqual([v['address'] for v in mvp['valve_a']], [3, 5])
+        self.assertNotIn('ibidi', mvp)
+
+        ibidi, _ = configs.assemble_hamilton_config(
+            configs.load_setup('IbidiEmulator'), settings)
+        self.assertEqual(ibidi['valve_a'], [])
+        self.assertEqual(ibidi['ibidi']['channels'], 24)
+        self.assertNotIn('driver', ibidi['ibidi'])
+
+    def test_special_name_reservoir_is_wired_in(self):
+        # A reservoir named only via special_names (not in reservoir_names)
+        # is still routed to — _flush() sets the valves to flushbuffer_a —
+        # so it must end up in reservoir_a.
+        setup = configs.load_setup('Emulator')
+        ham, _ = configs.assemble_hamilton_config(setup, {
+            'reservoir_names': {1: 'A1'},
+            'special_names': {'flushbuffer_a': 20},
+        })
+        self.assertEqual(sorted(r['id'] for r in ham['reservoir_a']), [1, 20])
+
+    def test_sparse_manifold_with_multi_channel_routing(self):
+        # ibidi manifolds are sparse (ids need not start at 1 or be
+        # contiguous) and route through several channels at once.
+        setup = configs.load_setup('IbidiEmulator')
+        setup['fluid']['reservoirs'] = [
+            {'id': 2, 'valve_pos': {'ibidi': [1, 2], 1: 'in'}},
+            {'id': 8, 'valve_pos': {'ibidi': [1, 6, 7, 8], 1: 'in'}},
+            {'id': 20, 'valve_pos': {'ibidi': [1, 6, 7, 19, 20], 1: 'in'}},
+        ]
+        ham, _ = configs.assemble_hamilton_config(setup, {
+            'reservoir_names': {2: 'imager1', 8: 'imager2'},
+            'special_names': {'flushbuffer_a': 20},
+        })
+        self.assertEqual(
+            sorted(r['id'] for r in ham['reservoir_a']), [2, 8, 20])
+        by_id = {r['id']: r for r in ham['reservoir_a']}
+        self.assertEqual(by_id[20]['valve_pos']['ibidi'], [1, 6, 7, 19, 20])
+
+    def test_reservoir_missing_from_manifold_lists_available(self):
+        setup = configs.load_setup('IbidiEmulator')
+        setup['fluid']['reservoirs'] = [
+            {'id': 2, 'valve_pos': {'ibidi': [1, 2], 1: 'in'}}]
+        with self.assertRaises(KeyError) as ctx:
+            configs.assemble_hamilton_config(
+                setup, {'reservoir_names': {7: 'nope'}})
+        self.assertIn('[2]', str(ctx.exception))
+
+    def test_unknown_multiplexer_driver_raises(self):
+        setup = configs.load_setup('Emulator')
+        setup['fluid']['multiplexer']['driver'] = 'nonexistent-mux'
+        with self.assertRaises(ValueError):
+            configs.assemble_hamilton_config(
+                setup, {'reservoir_names': {1: 'R1'}})
+
     def test_legacy_vendor_layout_normalizes(self):
         # The old vendor-grouped layout ('hamilton:' + top-level 'tubing:',
         # with the ibidi block nested inside) still loads, and assembles to

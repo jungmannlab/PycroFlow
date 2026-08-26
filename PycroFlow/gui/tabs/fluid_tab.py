@@ -358,6 +358,35 @@ class FluidTab(QWidget):
         except Exception as exc:
             self.valve_route.setText("Route unavailable: {!r}".format(exc))
 
+    def _refresh_reservoirs(self):
+        """Re-fill the reservoir dropdown from the loaded setup's manifold."""
+        current = self.valve_res.currentData()
+        self.valve_res.clear()
+        for rid in self._svc.reservoir_ids():
+            self.valve_res.addItem(str(rid), rid)
+        if current is not None:
+            index = self.valve_res.findData(current)
+            if index >= 0:
+                self.valve_res.setCurrentIndex(index)
+        self.valve_btn.setEnabled(self.valve_res.count() > 0)
+        # "Close all valves" is only meaningful for the ibidi multiplexer.
+        self.close_valves_btn.setVisible(self._svc.has_multiplexer())
+        self._update_route_hint()
+
+    def _update_route_hint(self):
+        """Describe the selected reservoir's route below the dropdown."""
+        if getattr(self, 'valve_route', None) is None:
+            return   # called from _refresh_reservoirs during construction
+        rid = self.valve_res.currentData()
+        if rid is None:
+            self.valve_route.setText(
+                "No reservoirs wired — select a setup first.")
+            return
+        try:
+            self.valve_route.setText(self._svc.describe_reservoir_route(rid))
+        except Exception as exc:
+            self.valve_route.setText("Route unavailable: {!r}".format(exc))
+
     def _on_set_valves(self):
         rid = self.valve_res.currentData()
         if rid is None:
