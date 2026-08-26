@@ -113,6 +113,22 @@ def build_parser() -> argparse.ArgumentParser:
         "measurement (instrument mode; movies are large).",
     )
     parser.add_argument(
+        "--reader-mode",
+        dest="reader_mode",
+        choices=["process", "thread"],
+        default=None,
+        help="How the concurrent reader runs (instrument mode): 'process' "
+        "(a separate OS process reading the NDTiff off disk — the design-"
+        "intended isolation) or 'thread' (in the acquisition process).",
+    )
+    parser.add_argument(
+        "--reader-poll",
+        dest="reader_poll_s",
+        type=float,
+        default=None,
+        help="Poll interval (s) of the separate-process reader.",
+    )
+    parser.add_argument(
         "--label",
         default=None,
         help="Prefix for the run-dir name.",
@@ -222,6 +238,8 @@ def main(argv: list[str] | None = None) -> int:
         output_dir=args.output_dir,
         data_dir=args.data_dir,
         keep_raw_data=args.keep_raw_data,
+        reader_mode=args.reader_mode,
+        reader_poll_s=args.reader_poll_s,
         label=args.label,
         n_frames=args.n_frames,
         frame_rate_hz=args.frame_rate_hz,
@@ -238,12 +256,13 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         "Running WP-1 perf sweep: mode={} frames={} rate={}Hz "
-        "buffer={}MB ({} frames) batches={}".format(
+        "buffer={}MB ({} frames) reader={} batches={}".format(
             cfg.mode,
             cfg.n_frames,
             cfg.frame_rate_hz,
             cfg.buffer_mb,
             cfg.buffer_capacity_frames(),
+            cfg.reader_mode,
             cfg.batch_sizes,
         )
     )

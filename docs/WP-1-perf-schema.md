@@ -39,7 +39,13 @@ present. Required top-level keys (pinned by `RUN_META_REQUIRED_KEYS`):
 | `backend` | backend provenance (emulator params, or camera + MM version + raw-data dir) |
 
 Also present (informational): `buffer_frames`, `frame_bytes`, `exposure_ms`,
-`roi`, `data_dir`, `monitor_interval_s`, `thresholds`.
+`roi`, `data_dir`, `reader_mode`, `monitor_interval_s`, `thresholds`,
+`status` (`running` / `complete` / `error`), `completed_configs`, and
+`errors`. `status` / `completed_configs` / `errors` support the incremental
+writer: results are flushed after **every** configuration, so a run dir stays
+valid and self-describing even if a later acquisition fails (`status: error`).
+The `backend` block for an instrument run also carries `reader_mode` and
+`reader_frames_read` (frames the separate-process reader actually read).
 
 ---
 

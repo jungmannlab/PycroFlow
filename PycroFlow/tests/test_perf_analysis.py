@@ -127,6 +127,69 @@ class TestCommittedSampleRun(unittest.TestCase):
             self.assertEqual(report["overall_verdict"], PENDING)
 
 
+class TestMultipleRunsPerMode(unittest.TestCase):
+    """Two instrument runs at different configs must each be judged against
+    their OWN baseline, not a single merged baseline."""
+
+    def test_own_baseline_per_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # Run 1: fast baseline, clean reader -> GO.
+            run1 = _write_synthetic(
+                tmp,
+                "instrument",
+                [
+                    _metrics_row("instrument", False, 0, throughput_fps=100.0),
+                    _metrics_row("instrument", True, 8, throughput_fps=99.0),
+                ],
+                label="run1",
+            )
+            # Run 2: slow baseline (10 fps); reader halves it -> NO-GO.
+            run2 = _write_synthetic(
+                tmp,
+                "instrument",
+                [
+                    _metrics_row("instrument", False, 0, throughput_fps=10.0),
+                    _metrics_row(
+                        "instrument",
+                        True,
+                        8,
+                        throughput_fps=4.0,
+                        occupancy_peak=50,
+                    ),
+                ],
+                label="run2",
+            )
+            report = analyze([run1, run2], os.path.join(tmp, "rep"))
+
+            self.assertEqual(len(report["runs"]), 2)
+            verdicts = {
+                os.path.basename(r["run_dir"].rstrip("/")): r["verdict"]
+                for r in report["runs"]
+            }
+            # Each run judged on its own baseline.
+            self.assertEqual(
+                [v for k, v in verdicts.items() if "run1" in k][0], GO
+            )
+            self.assertEqual(
+                [v for k, v in verdicts.items() if "run2" in k][0], NO_GO
+            )
+            self.assertEqual(report["overall_verdict"], NO_GO)
+
+            # Run 2's reader retention is 4/10 = 0.4 (its own baseline), NOT
+            # 4/100 = 0.04 (run 1's baseline) — the bug this guards against.
+            run2_eval = next(
+                r for r in report["runs"] if "run2" in r["run_dir"]
+            )
+            self.assertEqual(run2_eval["mode"], "instrument")
+            mode_configs = report["modes"]["instrument"]["configs"]
+            r2cfg = [
+                c
+                for c in mode_configs
+                if abs(c["throughput_retention"] - 0.4) < 1e-6
+            ]
+            self.assertTrue(r2cfg)
+
+
 class TestVerdictLogic(unittest.TestCase):
     def test_clean_instrument_is_go(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,5 +1,5 @@
 mode,reader,batch_size,n_frames,frame_rate_hz,buffer_mb,buffer_frames,frame_bytes,frames_produced,frames_written,dropped_count,dropped_fraction,occupancy_peak,occupancy_mean,throughput_fps,duration_s
-emulator,False,0,300,400.0,200.0,100,2097152,300,300,0,0.0,0,0.0,399.1668,0.751566
-emulator,True,1,300,400.0,200.0,100,2097152,300,300,0,0.0,0,0.0,394.1229,0.761184
-emulator,True,10,300,400.0,200.0,100,2097152,300,300,0,0.0,0,0.0,398.5702,0.752691
-emulator,True,100,300,400.0,200.0,100,2097152,300,300,0,0.0,0,0.0,394.2931,0.760855
+emulator,False,0,300,400.0,200.0,100,2097152,300,300,0,0.0,0,0.0,395.2982,0.758921
+emulator,True,1,300,400.0,200.0,100,2097152,300,300,0,0.0,0,0.0,393.653,0.762092
+emulator,True,10,300,400.0,200.0,100,2097152,300,300,0,0.0,0,0.0,397.3332,0.755034
+emulator,True,100,300,400.0,200.0,100,2097152,300,300,0,0.0,0,0.0,398.3358,0.753133

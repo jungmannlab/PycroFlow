@@ -13,6 +13,24 @@
   ],
   "buffer_frames": 100,
   "buffer_mb": 200.0,
+  "completed_configs": [
+    {
+      "batch_size": 0,
+      "reader": false
+    },
+    {
+      "batch_size": 1,
+      "reader": true
+    },
+    {
+      "batch_size": 10,
+      "reader": true
+    },
+    {
+      "batch_size": 100,
+      "reader": true
+    }
+  ],
   "config": {
     "batch_sizes": [
       1,
@@ -39,13 +57,16 @@
     "monitor_interval_s": 0.01,
     "n_frames": 300,
     "output_dir": "PycroFlow/tests/fixtures/perf",
+    "reader_mode": "process",
+    "reader_poll_s": 0.05,
     "roi": null
   },
   "data_dir": null,
+  "errors": [],
   "exposure_ms": 100.0,
   "frame_bytes": 2097152,
   "frame_rate_hz": 400.0,
-  "git_commit": "e1c1385a4ab593cae8922c85c3797f14a9433882",
+  "git_commit": "e6f13619c01b2f42cf608ab0b8e26f5508d7be6a",
   "host": "89dc73b8dadc",
   "mode": "emulator",
   "monitor_interval_s": 0.01,
@@ -54,13 +75,15 @@
   "pycroflow_version": "0.1.1.dev204+gd6c1e13f2.d20260804",
   "pycromanager_version": "not-installed",
   "python_version": "3.10.20",
+  "reader_mode": "process",
   "roi": null,
   "schema_version": "1.1",
+  "status": "complete",
   "thresholds": {
     "max_dropped_fraction": 0.001,
     "max_occupancy_fraction": 0.5,
     "min_throughput_retention": 0.95
   },
-  "utc_end": "2026-08-25T14:17:58.397176+00:00",
-  "utc_start": "2026-08-25T14:17:55.254691+00:00"
+  "utc_end": "2026-08-26T14:47:45.519392+00:00",
+  "utc_start": "2026-08-26T14:47:42.310568+00:00"
 }

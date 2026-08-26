@@ -61,6 +61,17 @@ output_dir: results
 data_dir: U:\users\hgrabmayr\microscopy\250826_livereadperftest
 keep_raw_data: false
 
+# How the concurrent reader runs (instrument mode):
+#   process — a SEPARATE OS PROCESS reads the NDTiff off disk (the design-
+#             intended isolation: no shared GIL / pycromanager ZMQ bridge with
+#             the acquisition). This is the decisive test for option (b).
+#   thread  — a thread inside the acquisition process (the more pessimistic
+#             coupling; use to reproduce the earlier same-process result).
+# Emulator mode always uses the built-in simulated reader regardless.
+reader_mode: process
+# Poll interval (s) of the separate-process reader while waiting for frames.
+reader_poll_s: 0.05
+
 # Prefix for the run-dir name.
 label: wp1
 

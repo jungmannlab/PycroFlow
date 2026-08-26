@@ -84,6 +84,7 @@ pycroflow = "PycroFlow.frontend_cli:main"
 pycroflow-gui = "PycroFlow.gui.app:main"
 pycroflow-perf = "PycroFlow.perf.cli:main"
 pycroflow-perf-analyze = "PycroFlow.perf.analyze_perf:main"
+pycroflow-perf-reader = "PycroFlow.perf.reader_process:main"
 
 [tool.setuptools_scm]
 # Version is derived from the latest reachable git tag (single source of

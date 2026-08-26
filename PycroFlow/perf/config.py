@@ -42,6 +42,16 @@ MODE_EMULATOR = "emulator"
 MODE_INSTRUMENT = "instrument"
 VALID_MODES = (MODE_EMULATOR, MODE_INSTRUMENT)
 
+# How the concurrent incremental reader runs (instrument mode):
+#   "process" — a separate OS process reads the NDTiff off disk (the design-
+#               intended isolation; no GIL / ZMQ-bridge sharing with acquisition)
+#   "thread"  — a thread in the acquisition process (the more pessimistic
+#               coupling; useful as a contrast).
+# Emulator mode always uses the built-in simulated reader regardless.
+READER_THREAD = "thread"
+READER_PROCESS = "process"
+VALID_READER_MODES = (READER_THREAD, READER_PROCESS)
+
 # Micro-Manager reports its circular-buffer footprint in MB counted as
 # mebibytes (1024 * 1024 bytes); use the same convention so the emulator's
 # derived frame capacity matches what MM would report.
@@ -129,6 +139,14 @@ class PerfConfig:
     keep_raw_data : bool
         Keep the raw acquisition after measuring (default: delete it — WP-1
         only needs the metrics, and the movies are large).
+    reader_mode : str
+        How the concurrent reader runs in instrument mode: ``"process"`` (a
+        separate OS process reading the NDTiff off disk — the design-intended
+        isolation) or ``"thread"`` (in the acquisition process). Ignored in
+        emulator mode (always simulated).
+    reader_poll_s : float
+        Poll interval of the separate-process reader while waiting for new
+        frames / the dataset to appear.
     label : str
         Prefix for the run-dir name.
     emulator : EmulatorParams
@@ -150,6 +168,8 @@ class PerfConfig:
     output_dir: str = "results"
     data_dir: str | None = None
     keep_raw_data: bool = False
+    reader_mode: str = READER_PROCESS
+    reader_poll_s: float = 0.05
     label: str = "wp1"
     emulator: EmulatorParams = field(default_factory=EmulatorParams)
 
@@ -176,6 +196,14 @@ class PerfConfig:
             raise ValueError("every batch size must be > 0")
         if self.monitor_interval_s <= 0:
             raise ValueError("monitor_interval_s must be > 0")
+        if self.reader_mode not in VALID_READER_MODES:
+            raise ValueError(
+                "reader_mode must be one of {}; got {!r}".format(
+                    VALID_READER_MODES, self.reader_mode
+                )
+            )
+        if self.reader_poll_s <= 0:
+            raise ValueError("reader_poll_s must be > 0")
         # Normalise container types (YAML may hand back tuples / ints).
         self.batch_sizes = [int(b) for b in self.batch_sizes]
         if self.roi is not None:

@@ -35,6 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `data_dir` on a data drive (required in instrument mode, never the repo) and
   deleted after each configuration is measured; only the small run dir is
   git-committed.
+- **WP-1 separate-process reader** (`PycroFlow/perf/reader_process.py` /
+  `pycroflow-perf-reader`): the design-intended live reader runs as a separate
+  OS process reading the NDTiff off disk, selectable with `reader_mode:
+  process` (default) vs `thread` (`--reader-mode`). Isolates cross-process disk
+  I/O contention from the acquisition's GIL / ZMQ bridge — the decisive
+  go/no-go test for option (b). The harness now writes results **incrementally
+  after every configuration** (append `metrics.csv` / `buffer_timeseries.csv`,
+  refresh `run_meta.json` with `status` / `completed_configs` / `errors`), so a
+  later acquisition failure never discards earlier results.
 - **WP-1 analysis** (`PycroFlow/perf/analyze_perf.py` / `pycroflow-perf-analyze`):
   ingests one or more run dirs and drafts the live-vs-batch go/no-go against
   documented thresholds, emitting `report.md` + `report.json` (+ optional

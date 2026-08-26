@@ -94,12 +94,20 @@ def run_config(
         target=_monitor, name="perf-monitor", daemon=True
     )
     monitor.start()
+
+    # The reader is either driven in-process by us (emulator / instrument
+    # thread mode) or self-managed by the backend as a separate process
+    # (instrument process mode) — the latter isolates cross-process disk I/O
+    # contention from the acquisition.
+    external = reader_on and backend.external_reader()
     reader = None
-    if reader_on:
+    if reader_on and not external:
         reader = threading.Thread(
             target=_reader, name="perf-reader", daemon=True
         )
         reader.start()
+    elif external:
+        backend.start_external_reader(batch_size)
 
     while not backend.all_written():
         time.sleep(cfg.monitor_interval_s)
@@ -120,6 +128,8 @@ def run_config(
     monitor.join(timeout=5.0)
     if reader is not None:
         reader.join(timeout=60.0)
+    if external:
+        backend.stop_external_reader()
 
     describe = backend.describe()
     written = backend.written()
@@ -205,11 +215,21 @@ def build_run_meta(
     describe: dict,
     utc_start: str,
     utc_end: str,
+    status: str = "complete",
+    errors: list[dict] | None = None,
+    completed: list[dict] | None = None,
 ) -> dict:
-    """Assemble the ``run_meta.json`` provenance record."""
+    """Assemble the ``run_meta.json`` provenance record.
+
+    ``status`` is ``"running"`` while a sweep is in progress, ``"complete"``
+    when it finished, or ``"error"`` if a configuration failed; ``errors`` and
+    ``completed`` record which configurations failed / succeeded so a partial
+    run dir is self-describing.
+    """
     return {
         "schema_version": schema.SCHEMA_VERSION,
         "mode": cfg.mode,
+        "status": status,
         "host": socket.gethostname(),
         "os": platform.platform(),
         "python_version": platform.python_version(),
@@ -224,6 +244,7 @@ def build_run_meta(
         "exposure_ms": cfg.exposure_ms,
         "roi": cfg.roi,
         "data_dir": cfg.data_dir,
+        "reader_mode": cfg.reader_mode,
         "monitor_interval_s": cfg.monitor_interval_s,
         "git_commit": _git_commit(),
         "utc_start": utc_start,
@@ -231,6 +252,8 @@ def build_run_meta(
         "config": cfg.to_dict(),
         "backend": describe,
         "thresholds": schema.DEFAULT_THRESHOLDS,
+        "completed_configs": completed or [],
+        "errors": errors or [],
     }
 
 
@@ -242,14 +265,76 @@ def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _iter_configs(cfg: PerfConfig):
+    """Yield ``(reader_on, batch_size)`` for the baseline + each batch size."""
+    if cfg.include_baseline:
+        yield (False, 0)
+    for batch in cfg.batch_sizes:
+        yield (True, batch)
+
+
 def run_and_write(cfg: PerfConfig) -> str:
-    """Run the full sweep and write a timestamped run dir; return its path."""
+    """Run the sweep, writing results after EACH configuration.
+
+    Results are flushed to disk incrementally (metrics + timeseries appended,
+    ``run_meta.json`` refreshed) after every configuration, so a failure in a
+    later acquisition never discards the configurations already measured. A
+    per-configuration exception is recorded and stops the sweep; the run dir is
+    finalised with ``status: "error"`` and everything gathered so far intact.
+
+    Returns
+    -------
+    str
+        The created run-directory path.
+    """
     utc_start = _utc_iso()
-    metrics, timeseries, describe = run_sweep(cfg)
-    utc_end = _utc_iso()
-    return write_run_dir(
-        cfg, metrics, timeseries, describe, utc_start, utc_end
-    )
+    dirname = "{}_{}_{}".format(cfg.label, cfg.mode, _timestamp_for_dirname())
+    run_dir = os.path.join(cfg.output_dir, dirname)
+    os.makedirs(run_dir, exist_ok=True)
+    schema.init_run_csvs(run_dir)
+
+    describe: dict = {}
+    errors: list[dict] = []
+    completed: list[dict] = []
+
+    def _flush_meta(status: str) -> None:
+        schema.write_run_meta(
+            run_dir,
+            build_run_meta(
+                cfg,
+                describe,
+                utc_start,
+                _utc_iso(),
+                status=status,
+                errors=errors,
+                completed=completed,
+            ),
+        )
+
+    _flush_meta("running")
+    for reader_on, batch in _iter_configs(cfg):
+        try:
+            row, ts, desc = run_config(cfg, reader_on, batch)
+        except Exception as exc:  # noqa: BLE001 - record and stop the sweep
+            errors.append(
+                {
+                    "reader": reader_on,
+                    "batch_size": batch if reader_on else 0,
+                    "error": repr(exc),
+                }
+            )
+            _flush_meta("error")
+            break
+        describe = desc or describe
+        schema.append_metrics(run_dir, [row])
+        schema.append_timeseries(run_dir, ts)
+        completed.append(
+            {"reader": reader_on, "batch_size": batch if reader_on else 0}
+        )
+        _flush_meta("running")
+
+    _flush_meta("error" if errors else "complete")
+    return run_dir
 
 
 def write_run_dir(

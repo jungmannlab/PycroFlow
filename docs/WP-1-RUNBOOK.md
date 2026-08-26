@@ -71,6 +71,40 @@ python -m PycroFlow.perf --instrument ^
 For the centre 512×512 quadrant, add `--roi 256,256,512,512` (or set `roi` in
 the config).
 
+### Reader mode — `process` (default) vs `thread`
+
+`reader_mode` selects how the concurrent incremental reader runs:
+
+- **`process` (default, the design-intended path)** — a **separate OS process**
+  (`PycroFlow.perf.reader_process`) opens the NDTiff dataset while it is still
+  being written and reads the already-written frames in contiguous batches,
+  trailing behind acquisition. Because it is a distinct process reading files
+  off disk (not a thread sharing the acquisition's GIL / pycromanager ZMQ
+  bridge), it isolates whether concurrent reading *fundamentally* contends with
+  the write path. **This is the decisive go/no-go test for live streaming
+  (option b).**
+- **`thread`** — the reader runs in the acquisition process. This reproduces
+  the earlier, more pessimistic same-process result; use it only for contrast
+  (`--reader-mode thread`).
+
+The reader trails acquisition by up to one batch (latency ≈
+`batch_size / frame_rate`, e.g. batch 100 at 10 Hz ≈ 10 s behind). That lag is
+on the analysis side only — reading off disk never sits in the acquisition's
+save path, so it does not delay the camera/writing itself. On exit the reader
+reports how many frames it read (recorded in `run_meta.json` under
+`backend.reader_frames_read`) so you can confirm it kept up and read every
+frame.
+
+### Robustness — results are written after every configuration
+
+The harness flushes results **after each acquisition**, not only at the end:
+`metrics.csv` / `buffer_timeseries.csv` are appended and `run_meta.json` is
+refreshed (with a `status` of `running` / `complete` / `error` and the list of
+completed configurations) after every configuration. So if a *later*
+acquisition fails, the configurations already measured are safely on disk — the
+run dir is finalised with `status: "error"` and the error recorded, and you can
+still commit and analyse the partial result.
+
 That runs, in one process, at the target frame rate:
 
 - a **baseline** acquisition with **no** concurrent reader, then

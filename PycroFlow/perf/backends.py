@@ -23,10 +23,16 @@ from __future__ import annotations
 
 import abc
 import os
+import sys
 import threading
 import time
 
-from PycroFlow.perf.config import MODE_EMULATOR, MODE_INSTRUMENT, PerfConfig
+from PycroFlow.perf.config import (
+    MODE_EMULATOR,
+    MODE_INSTRUMENT,
+    READER_PROCESS,
+    PerfConfig,
+)
 
 
 class FrameSourceBackend(abc.ABC):
@@ -86,6 +92,26 @@ class FrameSourceBackend(abc.ABC):
     @abc.abstractmethod
     def close(self) -> None:
         """Release resources / stop threads."""
+
+    # --- Optional external (out-of-process) reader ---------------------
+    # By default the harness drives the reader itself via :meth:`read_batch`
+    # (used by the emulator and the in-process/thread instrument reader). A
+    # backend that manages its own separate-process reader overrides these and
+    # returns True from :meth:`external_reader`, and the harness then starts /
+    # stops that reader instead of calling :meth:`read_batch`.
+    def external_reader(self) -> bool:
+        """True if this backend manages its own out-of-process reader."""
+        return False
+
+    def start_external_reader(self, batch_size: int) -> None:
+        """Start the self-managed external reader (no-op by default)."""
+
+    def stop_external_reader(self) -> None:
+        """Stop the self-managed external reader (no-op by default)."""
+
+    def reader_frames_read(self) -> int | None:
+        """Frames the external reader read, or None if not applicable."""
+        return None
 
 
 class EmulatedBackend(FrameSourceBackend):
@@ -260,6 +286,11 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
         self._done = threading.Event()
         self._camera = ""
         self._mm_version = ""
+        # Separate-process reader (reader_mode == "process").
+        self._reader_proc = None
+        self._reader_stop_file: str | None = None
+        self._reader_count_file: str | None = None
+        self._reader_read: int | None = None
 
     def _resolve_data_dir(self) -> str:
         # Raw NDTiff is large; it must NOT land in the repo. Require an
@@ -391,9 +422,69 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
     def all_written(self) -> bool:
         return self._done.is_set()
 
+    def external_reader(self) -> bool:
+        return self.cfg.reader_mode == READER_PROCESS
+
+    def start_external_reader(
+        self, batch_size: int
+    ) -> None:  # pragma: no cover - launches a real reader subprocess
+        import subprocess
+        import tempfile
+
+        base = tempfile.mkdtemp(prefix="wp1_reader_")
+        self._reader_stop_file = os.path.join(base, "stop")
+        self._reader_count_file = os.path.join(base, "count")
+        self._reader_proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "PycroFlow.perf.reader_process",
+                "--acq-dir",
+                str(self._acq_dir),
+                "--batch",
+                str(batch_size),
+                "--stop-file",
+                self._reader_stop_file,
+                "--count-file",
+                self._reader_count_file,
+                "--poll",
+                str(self.cfg.reader_poll_s),
+            ]
+        )
+
+    def stop_external_reader(
+        self,
+    ) -> None:  # pragma: no cover - tears down the reader subprocess
+        if self._reader_proc is None:
+            return
+        # Signal stop by creating the stop-file, then wait for a clean exit.
+        try:
+            if self._reader_stop_file:
+                open(self._reader_stop_file, "w").close()
+            self._reader_proc.wait(timeout=60.0)
+        except Exception:
+            self._reader_proc.terminate()
+        finally:
+            self._reader_read = self._read_reader_count()
+            self._reader_proc = None
+
+    def _read_reader_count(self) -> int | None:  # pragma: no cover
+        if not self._reader_count_file:
+            return None
+        try:
+            with open(self._reader_count_file, encoding="utf-8") as fh:
+                return int(fh.read().strip() or 0)
+        except (OSError, ValueError):
+            return None
+
+    def reader_frames_read(self) -> int | None:
+        return self._reader_read
+
     def describe(self) -> dict:
         return {
             "backend": "instrument",
+            "reader_mode": self.cfg.reader_mode,
+            "reader_frames_read": self._reader_read,
             "camera": self._camera,
             "mm_version": self._mm_version,
             "exposure_ms": self.cfg.exposure_ms,
@@ -403,6 +494,8 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
         }
 
     def close(self) -> None:
+        if self._reader_proc is not None:  # pragma: no cover
+            self.stop_external_reader()
         if self._acq_thread is not None:
             self._acq_thread.join(timeout=30.0)
         # Free the (large) raw acquisition unless explicitly kept: WP-1 only

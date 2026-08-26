@@ -121,10 +121,47 @@ def write_timeseries(path: str, rows: list[dict]) -> None:
     _write_csv(path, TIMESERIES_COLUMNS, rows)
 
 
+def init_run_csvs(run_dir: str) -> None:
+    """Create ``metrics.csv`` / ``buffer_timeseries.csv`` with headers only.
+
+    Used by the incremental writer so a partially-completed sweep still leaves
+    valid, header-bearing files on disk if a later acquisition fails.
+    """
+    _write_csv(os.path.join(run_dir, METRICS_FILE), METRICS_COLUMNS, [])
+    _write_csv(os.path.join(run_dir, TIMESERIES_FILE), TIMESERIES_COLUMNS, [])
+
+
+def append_metrics(run_dir: str, rows: list[dict]) -> None:
+    """Append rows to an existing ``metrics.csv`` (no header)."""
+    _append_csv(os.path.join(run_dir, METRICS_FILE), METRICS_COLUMNS, rows)
+
+
+def append_timeseries(run_dir: str, rows: list[dict]) -> None:
+    """Append rows to an existing ``buffer_timeseries.csv`` (no header)."""
+    _append_csv(
+        os.path.join(run_dir, TIMESERIES_FILE), TIMESERIES_COLUMNS, rows
+    )
+
+
+def write_run_meta(run_dir: str, meta: dict) -> None:
+    """Write ``run_meta.json`` (overwrites; safe to call repeatedly)."""
+    with open(
+        os.path.join(run_dir, RUN_META_FILE), "w", encoding="utf-8"
+    ) as fh:
+        json.dump(meta, fh, indent=2, sort_keys=True)
+
+
 def _write_csv(path: str, columns: list[str], rows: list[dict]) -> None:
     with open(path, "w", encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=columns)
         writer.writeheader()
+        for row in rows:
+            writer.writerow({c: row.get(c, "") for c in columns})
+
+
+def _append_csv(path: str, columns: list[str], rows: list[dict]) -> None:
+    with open(path, "a", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=columns)
         for row in rows:
             writer.writerow({c: row.get(c, "") for c in columns})
 

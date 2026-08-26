@@ -97,41 +97,95 @@ def evaluate_mode(rows: list[dict], thresholds: dict) -> dict:
     }
 
 
+def _run_label(meta: dict) -> str:
+    """Short human label for a run dir from its metadata."""
+    cfg = meta.get("config", {}) or {}
+    roi = cfg.get("roi")
+    if roi:
+        size = "{}x{}".format(roi[2], roi[3])
+    else:
+        size = "{}x{}".format(cfg.get("image_width"), cfg.get("image_height"))
+    return "{} frames, {} px, buffer {:.0f} MB".format(
+        meta.get("n_frames"), size, float(meta.get("buffer_mb", 0) or 0)
+    )
+
+
+def _aggregate_verdict(verdicts: list[str]) -> str:
+    """Combine per-run verdicts: any NO-GO dominates, then PENDING."""
+    if not verdicts:
+        return PENDING
+    if NO_GO in verdicts:
+        return NO_GO
+    if PENDING in verdicts:
+        return PENDING
+    return GO
+
+
 def analyze(
     run_dirs: list[str],
     out_dir: str,
     thresholds: dict | None = None,
 ) -> dict:
-    """Analyse run dirs, write report artifacts, return the report dict."""
+    """Analyse run dirs, write report artifacts, return the report dict.
+
+    Each run directory is evaluated **independently against its own no-reader
+    baseline** (so runs at different configs / frame counts don't cross-
+    contaminate), then aggregated per mode for the overall verdict.
+    """
     thresholds = thresholds or dict(schema.DEFAULT_THRESHOLDS)
     os.makedirs(out_dir, exist_ok=True)
 
     loaded = [schema.load_run_dir(d) for d in run_dirs]
 
-    # Group metrics rows by mode across all supplied run dirs.
-    by_mode: dict[str, list[dict]] = {}
-    ts_by_mode: dict[str, list[dict]] = {}
-    for run in loaded:
+    # Evaluate each run dir on its own (a run dir usually holds one mode's
+    # baseline + sweep).
+    runs: list[dict] = []
+    for run_dir, run in zip(run_dirs, loaded):
+        by_mode: dict[str, list[dict]] = {}
         for row in run["metrics"]:
             by_mode.setdefault(row["mode"], []).append(row)
-        for row in run["timeseries"]:
-            ts_by_mode.setdefault(row["mode"], []).append(row)
+        for mode, rows in by_mode.items():
+            ev = evaluate_mode(rows, thresholds)
+            runs.append(
+                {
+                    "run_dir": os.path.abspath(run_dir),
+                    "mode": mode,
+                    "label": _run_label(run["meta"]),
+                    "baseline": ev["baseline"],
+                    "configs": ev["configs"],
+                    "verdict": ev["verdict"],
+                    "meta": run["meta"],
+                    "timeseries": run["timeseries"],
+                }
+            )
 
-    modes = {}
-    for mode, rows in by_mode.items():
-        modes[mode] = evaluate_mode(rows, thresholds)
+    # Aggregate per mode (baseline / configs kept for backward-compatible
+    # single-run reporting).
+    modes: dict[str, dict] = {}
+    for mode in sorted({r["mode"] for r in runs}):
+        mruns = [r for r in runs if r["mode"] == mode]
+        modes[mode] = {
+            "verdict": _aggregate_verdict([r["verdict"] for r in mruns]),
+            "baseline": mruns[0]["baseline"],
+            "configs": [c for r in mruns for c in r["configs"]],
+            "run_dirs": [r["run_dir"] for r in mruns],
+        }
 
     overall = _overall_verdict(modes)
     report = {
         "schema_version": schema.SCHEMA_VERSION,
         "run_dirs": [os.path.abspath(d) for d in run_dirs],
         "thresholds": thresholds,
+        "runs": [
+            {k: r[k] for k in ("run_dir", "mode", "label", "verdict")}
+            for r in runs
+        ],
         "modes": modes,
         "overall_verdict": overall,
         "recommendation": _recommendation(overall),
     }
 
-    plots = _write_plots(by_mode, ts_by_mode, out_dir)
+    plots = _write_plots(runs, out_dir)
     report["plots"] = plots
 
     with open(
@@ -139,7 +193,7 @@ def analyze(
     ) as fh:
         json.dump(report, fh, indent=2, sort_keys=True)
     with open(os.path.join(out_dir, "report.md"), "w", encoding="utf-8") as fh:
-        fh.write(_render_markdown(report, [run["meta"] for run in loaded]))
+        fh.write(_render_markdown(report, runs))
     return report
 
 
@@ -180,12 +234,20 @@ def _fmt(value) -> str:
     return str(value)
 
 
-def _render_markdown(report: dict, metas: list[dict]) -> str:
+def _render_markdown(report: dict, runs: list[dict]) -> str:
     thr = report["thresholds"]
     lines = ["# WP-1 live-reader performance — go/no-go report", ""]
     lines.append("**Overall verdict: {}**".format(report["overall_verdict"]))
     lines.append("")
     lines.append(report["recommendation"])
+    lines.append("")
+
+    lines.append("## Verdict by mode")
+    lines.append("")
+    lines.append("| mode | verdict |")
+    lines.append("|---|---|")
+    for mode, result in sorted(report["modes"].items()):
+        lines.append("| {} | {} |".format(mode, result["verdict"]))
     lines.append("")
 
     lines.append("## Thresholds")
@@ -207,10 +269,19 @@ def _render_markdown(report: dict, metas: list[dict]) -> str:
     )
     lines.append("")
 
-    for mode, result in sorted(report["modes"].items()):
-        lines.append("## Mode: {} — {}".format(mode, result["verdict"]))
+    # One table per run dir, each against its own baseline.
+    for run in runs:
+        lines.append(
+            "## {} — {} ({})".format(
+                os.path.basename(run["run_dir"]),
+                run["verdict"],
+                run["mode"],
+            )
+        )
         lines.append("")
-        base = result["baseline"]
+        lines.append("_{}_".format(run["label"]))
+        lines.append("")
+        base = run["baseline"]
         if base is not None:
             lines.append(
                 "Baseline (no reader): throughput {} fps, peak occupancy "
@@ -226,7 +297,7 @@ def _render_markdown(report: dict, metas: list[dict]) -> str:
             "fps | retention | pass |"
         )
         lines.append("|---|---|---|---|---|---|---|")
-        for cfg in result["configs"]:
+        for cfg in run["configs"]:
             lines.append(
                 "| {} | {} | {} | {} | {} | {} | {} |".format(
                     cfg["batch_size"],
@@ -255,9 +326,12 @@ def _render_markdown(report: dict, metas: list[dict]) -> str:
 
     lines.append("## Provenance")
     lines.append("")
-    for meta in metas:
+    for run in runs:
+        meta = run["meta"]
         lines.append(
-            "- mode `{}` on `{}` ({}), pycroflow {}, git {}, {} → {}".format(
+            "- `{}`: mode `{}` on `{}` ({}), pycroflow {}, git {}, "
+            "{} → {}".format(
+                os.path.basename(run["run_dir"]),
                 meta.get("mode"),
                 meta.get("host"),
                 meta.get("os"),
@@ -271,8 +345,12 @@ def _render_markdown(report: dict, metas: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _write_plots(by_mode: dict, ts_by_mode: dict, out_dir: str) -> list[str]:
-    """Write PNG plots if matplotlib is available; else return an empty list."""
+def _slug(run_dir: str) -> str:
+    return os.path.basename(run_dir.rstrip("/\\")) or "run"
+
+
+def _write_plots(runs: list[dict], out_dir: str) -> list[str]:
+    """Write per-run PNG plots if matplotlib is available; else empty list."""
     try:
         import matplotlib
 
@@ -282,20 +360,21 @@ def _write_plots(by_mode: dict, ts_by_mode: dict, out_dir: str) -> list[str]:
         return []
 
     written: list[str] = []
-    for mode, rows in sorted(by_mode.items()):
+    for run in runs:
         reader_rows = sorted(
-            (r for r in rows if r["reader"]),
-            key=lambda r: r["batch_size"],
+            (c for c in run["configs"]),
+            key=lambda c: c["batch_size"],
         )
         if not reader_rows:
             continue
-        batches = [r["batch_size"] for r in reader_rows]
-        base = _baseline_for(rows)
+        slug = _slug(run["run_dir"])
+        batches = [c["batch_size"] for c in reader_rows]
+        base = run["baseline"]
 
         fig, axes = plt.subplots(1, 3, figsize=(13, 4))
         axes[0].plot(
             batches,
-            [r["occupancy_peak"] for r in reader_rows],
+            [c["occupancy_peak"] for c in reader_rows],
             "o-",
             label="with reader",
         )
@@ -309,19 +388,21 @@ def _write_plots(by_mode: dict, ts_by_mode: dict, out_dir: str) -> list[str]:
         axes[0].set_title("peak buffer occupancy")
         axes[0].set_xlabel("batch size")
         axes[0].set_ylabel("frames")
+        axes[0].set_xscale("log")
         axes[0].legend()
 
         axes[1].plot(
             batches,
-            [r["dropped_fraction"] for r in reader_rows],
+            [c["dropped_fraction"] for c in reader_rows],
             "o-",
         )
         axes[1].set_title("dropped fraction")
         axes[1].set_xlabel("batch size")
+        axes[1].set_xscale("log")
 
         axes[2].plot(
             batches,
-            [r["throughput_fps"] for r in reader_rows],
+            [c["throughput_fps"] for c in reader_rows],
             "o-",
             label="with reader",
         )
@@ -334,17 +415,18 @@ def _write_plots(by_mode: dict, ts_by_mode: dict, out_dir: str) -> list[str]:
             )
         axes[2].set_title("write throughput (fps)")
         axes[2].set_xlabel("batch size")
+        axes[2].set_xscale("log")
         axes[2].legend()
 
-        fig.suptitle("WP-1 sweep — mode: {}".format(mode))
+        fig.suptitle("WP-1 sweep — {} ({})".format(slug, run["label"]))
         fig.tight_layout()
-        name = "sweep_{}.png".format(mode)
+        name = "sweep_{}.png".format(slug)
         fig.savefig(os.path.join(out_dir, name), dpi=110)
         plt.close(fig)
         written.append(name)
 
-        # Occupancy time series per configuration.
-        ts_rows = ts_by_mode.get(mode, [])
+        # Occupancy time series per configuration (this run's own series).
+        ts_rows = run.get("timeseries", [])
         if ts_rows:
             fig2, ax = plt.subplots(figsize=(8, 4))
             groups: dict[tuple, list[dict]] = {}
@@ -362,12 +444,12 @@ def _write_plots(by_mode: dict, ts_by_mode: dict, out_dir: str) -> list[str]:
                     label=label,
                     lw=1,
                 )
-            ax.set_title("buffer occupancy vs frame index — {}".format(mode))
+            ax.set_title("buffer occupancy vs frame index — {}".format(slug))
             ax.set_xlabel("frame index")
             ax.set_ylabel("occupancy (frames)")
             ax.legend(fontsize=8)
             fig2.tight_layout()
-            name2 = "timeseries_{}.png".format(mode)
+            name2 = "timeseries_{}.png".format(slug)
             fig2.savefig(os.path.join(out_dir, name2), dpi=110)
             plt.close(fig2)
             written.append(name2)
