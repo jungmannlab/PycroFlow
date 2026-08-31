@@ -418,6 +418,46 @@ class TestReaderProcessFastPath(unittest.TestCase):
                 self.assertEqual(fh.read().strip(), "0")
 
 
+class _FakeDataset:
+    def __init__(self, axes):
+        self.axes = axes
+
+
+class TestReaderAxisLayout(unittest.TestCase):
+    def test_time_axis_preferred_by_name(self):
+        from PycroFlow.perf.reader_process import _axis_layout
+
+        # pycromanager names the frame axis "time"; channel is a singleton.
+        axis, fixed = _axis_layout(
+            _FakeDataset({"time": {0, 1, 2, 3}, "channel": {0}})
+        )
+        self.assertEqual(axis, "time")
+        self.assertEqual(fixed, {"channel": 0})
+
+    def test_short_t_name_also_matched(self):
+        from PycroFlow.perf.reader_process import _axis_layout
+
+        axis, fixed = _axis_layout(_FakeDataset({"t": {0, 1, 2}}))
+        self.assertEqual(axis, "t")
+        self.assertEqual(fixed, {})
+
+    def test_falls_back_to_axis_with_most_positions(self):
+        from PycroFlow.perf.reader_process import _axis_layout
+
+        axis, fixed = _axis_layout(
+            _FakeDataset({"foo": {0}, "bar": {0, 1, 2, 3}})
+        )
+        self.assertEqual(axis, "bar")
+        self.assertEqual(fixed, {"foo": 0})
+
+    def test_no_axes(self):
+        from PycroFlow.perf.reader_process import _axis_layout
+
+        axis, fixed = _axis_layout(_FakeDataset({}))
+        self.assertIsNone(axis)
+        self.assertEqual(fixed, {})
+
+
 class TestSchemaValidation(unittest.TestCase):
     def test_missing_file_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

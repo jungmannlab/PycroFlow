@@ -90,6 +90,44 @@ def _write_count(count_file: str | None, count: int) -> None:
         pass
 
 
+def _axis_layout(dataset) -> tuple[str | None, dict]:
+    """Pick the frame (time) axis and hold the other axes at their first value.
+
+    pycromanager's ``multi_d_acquisition_events(num_time_points=N)`` names the
+    frame axis ``"time"``, not ``"t"``, and newer ndtiff raises ``KeyError`` if
+    you query an axis name it doesn't know. So rather than hardcode ``t=``, read
+    the dataset's own axis names: use the one that looks like the time axis (by
+    name, else the one with the most positions) as the frame axis, and pin every
+    other axis (channel / z / position, typically singletons here) to its
+    minimum so a coordinate fully specifies one frame.
+
+    Returns
+    -------
+    tuple
+        ``(frame_axis_name_or_None, fixed_coords)``.
+    """
+    axes = dict(getattr(dataset, "axes", {}) or {})
+    frame_axis = None
+    for cand in ("time", "t", "frame", "timepoint"):
+        for name in axes:
+            if name.lower() == cand:
+                frame_axis = name
+                break
+        if frame_axis is not None:
+            break
+    if frame_axis is None and axes:
+        frame_axis = max(axes, key=lambda a: len(axes[a]))
+    fixed: dict = {}
+    for name, positions in axes.items():
+        if name == frame_axis:
+            continue
+        try:
+            fixed[name] = min(positions)
+        except (TypeError, ValueError):
+            pass
+    return frame_axis, fixed
+
+
 def _read_loop(
     acq_dir: str,
     batch_size: int,
@@ -131,20 +169,29 @@ def _read_loop(
             time.sleep(poll_s)
             continue
 
+        frame_axis, fixed = _axis_layout(dataset)
+
+        def _coords(i: int) -> dict:
+            coords = dict(fixed)
+            coords[frame_axis if frame_axis is not None else "t"] = i
+            return coords
+
         progressed = False
         while True:
             # Normally wait for a full contiguous batch to be available; when
             # stopping, flush whatever remains (still contiguous, never
             # subsampled).
-            if not dataset.has_image(t=read):
+            if not dataset.has_image(**_coords(read)):
                 break
-            if not stopping and not dataset.has_image(t=read + batch_size - 1):
+            if not stopping and not dataset.has_image(
+                **_coords(read + batch_size - 1)
+            ):
                 break
             end = read + batch_size
             idx = read
-            while idx < end and dataset.has_image(t=idx):
+            while idx < end and dataset.has_image(**_coords(idx)):
                 try:
-                    dataset.read_image(t=idx)
+                    dataset.read_image(**_coords(idx))
                 except Exception:
                     break
                 idx += 1
