@@ -52,6 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   acquisition can no longer leak tens of GB and break the next config on a
   small local data drive — and `data_dir` defaults to a local path (local disk
   avoids the over-the-network write penalty; peak use stays one acquisition).
+  Deletion now closes the NDTiff `Dataset` handle first and verifies the files
+  are actually gone (retrying briefly), instead of `rmtree(ignore_errors=True)`
+  which silently left memory-mapped NDTiff files on Windows while reporting
+  success; a leftover is now reported as a `[wp1] WARNING`. A frame source that
+  dies mid-acquisition (e.g. the disk fills) is surfaced as an error that stops
+  the sweep and frees its partial data, rather than hanging.
 - **WP-1 analysis** (`PycroFlow/perf/analyze_perf.py` / `pycroflow-perf-analyze`):
   ingests one or more run dirs and drafts the live-vs-batch go/no-go against
   documented thresholds, emitting `report.md` + `report.json` (+ optional

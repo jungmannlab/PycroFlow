@@ -120,6 +120,15 @@ def run_config(
 
         while not backend.all_written():
             time.sleep(cfg.monitor_interval_s)
+        # A frame source that died (e.g. the disk filled mid-acquisition) also
+        # trips all_written; treat it as a hard failure so the sweep stops and
+        # the finally below frees the partial acquisition, rather than recording
+        # bogus metrics or hanging.
+        acq_err = backend.acquisition_error()
+        if acq_err is not None:
+            raise RuntimeError(
+                "frame source failed during acquisition"
+            ) from acq_err
         # Acquisition wall time: everything is produced and written. This is
         # what write throughput is measured against — a reader still draining
         # its backlog afterwards does not slow acquisition and must not count.

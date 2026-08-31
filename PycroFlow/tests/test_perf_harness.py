@@ -285,6 +285,31 @@ class TestCleanupOnFailure(unittest.TestCase):
         self.assertIn(("close",), fake.events)
 
 
+class _AcqErrorBackend(_FakeExternalBackend):
+    """Backend that reports a frame-source failure (e.g. disk full)."""
+
+    def acquisition_error(self):
+        return ValueError("simulated disk-full during acquisition")
+
+
+class TestAcquisitionErrorPath(unittest.TestCase):
+    def test_frame_source_failure_raises_and_closes(self):
+        """A dead frame source must raise (not hang) and still free data."""
+        cfg = PerfConfig(
+            mode="emulator",
+            n_frames=10,
+            monitor_interval_s=0.005,
+        )
+        fake = _AcqErrorBackend(cfg)
+        with mock.patch(
+            "PycroFlow.perf.harness.make_backend", return_value=fake
+        ):
+            with self.assertRaises(RuntimeError):
+                run_config(cfg, reader_on=False, batch_size=0)
+        # Cleanup (raw-data deletion) still ran despite the failure.
+        self.assertIn(("close",), fake.events)
+
+
 class TestIncrementalWriting(unittest.TestCase):
     def test_meta_marks_complete_and_lists_configs(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -113,6 +113,15 @@ class FrameSourceBackend(abc.ABC):
         """Frames the external reader read, or None if not applicable."""
         return None
 
+    def acquisition_error(self) -> BaseException | None:
+        """Return an exception the frame source raised, if any.
+
+        Lets the harness distinguish a genuine end-of-acquisition from a frame
+        source that died (e.g. the disk filled mid-acquisition) so it can stop
+        the sweep and free the partial data instead of hanging.
+        """
+        return None
+
 
 class EmulatedBackend(FrameSourceBackend):
     """Rate-integrating producer/consumer/bounded-buffer simulation.
@@ -284,6 +293,7 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
         self._read = 0
         self._capacity = 0
         self._done = threading.Event()
+        self._acq_error: BaseException | None = None
         self._camera = ""
         self._mm_version = ""
         # Separate-process reader (reader_mode == "process").
@@ -350,16 +360,23 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
         )
 
         def _run() -> None:
-            with Acquisition(
-                directory=self._acq_dir,
-                name="acq",
-                show_display=False,
-                image_process_fn=self._count_frame,
-            ) as acq:
-                self._acq = acq
-                acq.acquire(events)
-                self._dataset = acq.get_dataset()
-            self._done.set()
+            # Capture any failure (e.g. the disk filling mid-acquisition) and
+            # ALWAYS signal completion, so the harness never hangs waiting on a
+            # frame source that has already died.
+            try:
+                with Acquisition(
+                    directory=self._acq_dir,
+                    name="acq",
+                    show_display=False,
+                    image_process_fn=self._count_frame,
+                ) as acq:
+                    self._acq = acq
+                    acq.acquire(events)
+                    self._dataset = acq.get_dataset()
+            except BaseException as exc:  # noqa: BLE001 - surfaced to harness
+                self._acq_error = exc
+            finally:
+                self._done.set()
 
         self._acq_thread = threading.Thread(
             target=_run, name="perf-instr-acq", daemon=True
@@ -480,6 +497,9 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
     def reader_frames_read(self) -> int | None:
         return self._reader_read
 
+    def acquisition_error(self) -> BaseException | None:
+        return self._acq_error
+
     def describe(self) -> dict:
         return {
             "backend": "instrument",
@@ -506,14 +526,55 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
             and self._acq_dir is not None
             and os.path.isdir(self._acq_dir)
         ):
-            import shutil
+            self._delete_raw_dir()
 
-            shutil.rmtree(self._acq_dir, ignore_errors=True)
-            # Visible confirmation on the acquisition PC that the (large) raw
-            # movie was freed immediately after this configuration, so a small
-            # local data drive never accumulates more than one acquisition.
+    def _delete_raw_dir(self) -> None:  # pragma: no cover - Windows FS timing
+        """Delete this configuration's raw acquisition, honestly.
+
+        NDTiff files are memory-mapped while a ``Dataset`` is open, and Windows
+        refuses to unlink an open/mapped file. So we must (1) close our reader
+        handle on the dataset first, and (2) NOT swallow deletion failures:
+        ``shutil.rmtree(ignore_errors=True)`` would leave tens of GB on disk
+        while falsely reporting success, which is exactly what fills a small
+        local drive mid-sweep. Retry briefly (handles can take a moment to
+        release), then report the true outcome so a leftover is visible.
+        """
+        import shutil
+
+        # Release any NDTiff reader handle so the OS lets us delete the files.
+        if self._dataset is not None:
+            try:
+                self._dataset.close()
+            except Exception:
+                pass
+            self._dataset = None
+
+        target = self._acq_dir
+        last_err: Exception | None = None
+        for _ in range(10):
+            try:
+                shutil.rmtree(target)
+            except FileNotFoundError:
+                break
+            except OSError as exc:
+                last_err = exc
+                time.sleep(0.5)
+            if not os.path.isdir(target):
+                break
+
+        if os.path.isdir(target):
             print(
-                "[wp1] deleted raw acquisition: {}".format(self._acq_dir),
+                "[wp1] WARNING: could NOT delete raw acquisition {} ({}); "
+                "delete it manually to free disk before the next run".format(
+                    target, last_err
+                ),
+                flush=True,
+            )
+        else:
+            # Visible confirmation the (large) raw movie was really freed, so a
+            # small local drive never accumulates more than one acquisition.
+            print(
+                "[wp1] deleted raw acquisition: {}".format(target),
                 flush=True,
             )
 
