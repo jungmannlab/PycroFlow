@@ -1,0 +1,78 @@
+{
+  "backend": {},
+  "batch_sizes": [
+    1,
+    10,
+    100,
+    1000
+  ],
+  "buffer_frames": 15802,
+  "buffer_mb": 10000.0,
+  "completed_configs": [],
+  "config": {
+    "batch_sizes": [
+      1,
+      10,
+      100,
+      1000
+    ],
+    "buffer_mb": 10000.0,
+    "bytes_per_pixel": 2,
+    "data_dir": "U:\\users\\hgrabmayr\\microscopy\\250826_livereadperftest",
+    "emulator": {
+      "contention": 0.1,
+      "read_cost_per_frame_s": 0.0002,
+      "tick_s": 0.001,
+      "write_speed_factor": 3.0
+    },
+    "exposure_ms": 100.0,
+    "frame_rate_hz": 10.0,
+    "image_height": 576,
+    "image_width": 576,
+    "include_baseline": true,
+    "keep_raw_data": false,
+    "label": "wp1",
+    "mode": "instrument",
+    "monitor_interval_s": 0.05,
+    "n_frames": 10000,
+    "output_dir": "results",
+    "reader_mode": "process",
+    "reader_poll_s": 0.05,
+    "roi": [
+      256,
+      256,
+      576,
+      576
+    ]
+  },
+  "data_dir": "U:\\users\\hgrabmayr\\microscopy\\250826_livereadperftest",
+  "errors": [],
+  "exposure_ms": 100.0,
+  "frame_bytes": 663552,
+  "frame_rate_hz": 10.0,
+  "git_commit": "6eb2a43f04e40d4b876a70ed6ef1f939c9fece4a",
+  "host": "wsju06",
+  "mode": "instrument",
+  "monitor_interval_s": 0.05,
+  "n_frames": 10000,
+  "os": "Windows-10-10.0.19045-SP0",
+  "pycroflow_version": "0.0.1",
+  "pycromanager_version": "0.29.5",
+  "python_version": "3.8.13",
+  "reader_mode": "process",
+  "roi": [
+    256,
+    256,
+    576,
+    576
+  ],
+  "schema_version": "1.1",
+  "status": "running",
+  "thresholds": {
+    "max_dropped_fraction": 0.001,
+    "max_occupancy_fraction": 0.5,
+    "min_throughput_retention": 0.95
+  },
+  "utc_end": "2026-08-26T15:03:44.901853+00:00",
+  "utc_start": "2026-08-26T15:03:44.892858+00:00"
+}

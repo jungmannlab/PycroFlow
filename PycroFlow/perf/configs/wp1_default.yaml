@@ -21,7 +21,7 @@ exposure_ms: 100.0
 # time per config is n_frames / 10 s, multiplied by (1 + number of batch
 # sizes). 2000 frames ≈ 3.3 min/config; set 40000 for a full-length run
 # (≈ 67 min/config — expect a multi-hour sweep).
-n_frames: 10000
+n_frames: 40000
 
 # Full-frame dimensions + bytes per pixel (16-bit camera => 2). Used to turn
 # the buffer MB into a frame capacity and to record the frame size. For the
@@ -36,11 +36,11 @@ buffer_mb: 10000.0
 
 # Camera ROI [x, y, w, h] (instrument mode). null = full frame. For the
 # centre 512x512 quadrant of a 1024x1024 sensor use [256, 256, 512, 512].
-roi: [256, 256, 576, 576]
+roi: null
 
 # Live-evaluation batch sizes to sweep (contiguous frames per read; never
 # subsampled). The baseline (no reader) is run in addition to these.
-batch_sizes: [1, 10, 100, 1000]
+batch_sizes: [10, 100, 1000]
 
 # How often the occupancy monitor samples the circular buffer (s).
 monitor_interval_s: 0.05
