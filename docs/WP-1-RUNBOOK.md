@@ -44,13 +44,17 @@ The raw NDTiff movie is large: at the typical **100 ms / 10 Hz / 40000 frames /
 1024×1024 / 16-bit** it is ≈ **80 GB per acquisition** (≈ 20 GB for the 512×512
 centre quadrant). So:
 
-- Point **`data_dir`** at a folder on a **large data drive, NOT the repo
-  drive** (e.g. `D:\pycroflow_wp1_rawdata`). Instrument mode refuses to run
+- Point **`data_dir`** at a folder on a **local drive, NOT the repo drive and
+  NOT a network/mapped drive** (e.g. `D:\pycroflow_wp1_rawdata`) — local disk
+  avoids the over-the-network write penalty. Instrument mode refuses to run
   without it, so the movie never lands next to the repo.
-- The harness **deletes each acquisition after measuring it** (WP-1 needs only
-  the metrics), so peak disk use is ~one acquisition, not the whole sweep. Pass
-  `--keep-raw-data` (or `keep_raw_data: true`) only if you want to keep the
-  movies.
+- The harness **deletes each acquisition immediately after measuring it — even
+  if that acquisition fails** (WP-1 needs only the metrics), printing
+  `[wp1] deleted raw acquisition: …` as it does. So peak disk use is **one
+  acquisition, not the whole sweep**: at 576×576 / 16-bit / 40000 frames that
+  peak is ≈ 25 GB (`frame_bytes × n_frames`) — ensure the local drive has at
+  least that free, or reduce `n_frames`. Pass `--keep-raw-data` (or
+  `keep_raw_data: true`) only if you want to keep the movies.
 - Only the small **run dir** (`run_meta.json` + two CSVs, kilobytes) is written
   under `output_dir` and git-committed. **The raw movie is never committed.**
 

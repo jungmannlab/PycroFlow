@@ -53,12 +53,16 @@ include_baseline: true
 # buffer_timeseries.csv) lands under output_dir; commit it under results/.
 output_dir: results
 
-# Where the raw NDTiff acquisition is written (instrument mode). Point this at
-# a LARGE DATA DRIVE, NOT the repo — a 40000-frame full-frame movie is tens of
-# GB. Required in instrument mode. The raw movie is deleted after each config
-# is measured (WP-1 only needs the metrics); set keep_raw_data: true to keep.
-# Example (Windows): D:\pycroflow_wp1_rawdata
-data_dir: U:\users\hgrabmayr\microscopy\250826_livereadperftest
+# Where the raw NDTiff acquisition is written (instrument mode). Use a LOCAL
+# drive (NOT a network/mapped drive, and NOT the repo) — local disk avoids the
+# over-the-network write penalty. The raw movie for EACH configuration is
+# deleted immediately after that acquisition is measured (even if it fails), so
+# peak disk use is only ONE acquisition, not the whole sweep. At the current
+# 576x576 / 16-bit / 40000 frames that peak is frame_bytes * n_frames
+# ≈ 663552 * 40000 ≈ 25 GB — make sure the local drive has at least that free
+# (reduce n_frames if not). Required in instrument mode; set keep_raw_data:
+# true only if you want to keep the movies. Override per-run with --data-dir.
+data_dir: D:\pycroflow_wp1_rawdata
 keep_raw_data: false
 
 # How the concurrent reader runs (instrument mode):

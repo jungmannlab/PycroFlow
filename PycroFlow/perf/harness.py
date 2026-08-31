@@ -63,7 +63,6 @@ def run_config(
     stop_monitor = threading.Event()
 
     t0 = time.perf_counter()
-    backend.start()
 
     def _monitor() -> None:
         i = 0
@@ -90,75 +89,87 @@ def run_config(
             else:
                 time.sleep(wait)
 
-    monitor = threading.Thread(
-        target=_monitor, name="perf-monitor", daemon=True
-    )
-    monitor.start()
+    # Everything from starting the frame source through building the metrics
+    # row runs under try/finally so the backend is ALWAYS closed — which stops
+    # the separate-process reader and DELETES this configuration's raw
+    # acquisition from disk (unless keep_raw_data), right after acquisition +
+    # reading. The guarantee matters most on a small, local data drive: a
+    # failed acquisition must not leave tens of GB behind to break the next
+    # configuration in the sweep.
+    try:
+        backend.start()
 
-    # The reader is either driven in-process by us (emulator / instrument
-    # thread mode) or self-managed by the backend as a separate process
-    # (instrument process mode) — the latter isolates cross-process disk I/O
-    # contention from the acquisition.
-    external = reader_on and backend.external_reader()
-    reader = None
-    if reader_on and not external:
-        reader = threading.Thread(
-            target=_reader, name="perf-reader", daemon=True
+        monitor = threading.Thread(
+            target=_monitor, name="perf-monitor", daemon=True
         )
-        reader.start()
-    elif external:
-        backend.start_external_reader(batch_size)
+        monitor.start()
 
-    while not backend.all_written():
-        time.sleep(cfg.monitor_interval_s)
-    # Acquisition wall time: everything is produced and written. This is what
-    # write throughput is measured against — a reader still draining its
-    # backlog afterwards does not slow acquisition and must not count here.
-    write_elapsed = time.perf_counter() - t0
+        # The reader is either driven in-process by us (emulator / instrument
+        # thread mode) or self-managed by the backend as a separate process
+        # (instrument process mode) — the latter isolates cross-process disk
+        # I/O contention from the acquisition.
+        external = reader_on and backend.external_reader()
+        reader = None
+        if reader_on and not external:
+            reader = threading.Thread(
+                target=_reader, name="perf-reader", daemon=True
+            )
+            reader.start()
+        elif external:
+            backend.start_external_reader(batch_size)
 
-    # One final sample so the series always brackets the acquisition.
-    final = dict(tag)
-    final["sample_index"] = len(timeseries)
-    final["t_rel_s"] = round(write_elapsed, 6)
-    final["frame_index"] = backend.written()
-    final["occupancy"] = backend.occupancy()
-    timeseries.append(final)
+        while not backend.all_written():
+            time.sleep(cfg.monitor_interval_s)
+        # Acquisition wall time: everything is produced and written. This is
+        # what write throughput is measured against — a reader still draining
+        # its backlog afterwards does not slow acquisition and must not count.
+        write_elapsed = time.perf_counter() - t0
 
-    stop_monitor.set()
-    monitor.join(timeout=5.0)
-    if reader is not None:
-        reader.join(timeout=60.0)
-    if external:
-        backend.stop_external_reader()
+        # One final sample so the series always brackets the acquisition.
+        final = dict(tag)
+        final["sample_index"] = len(timeseries)
+        final["t_rel_s"] = round(write_elapsed, 6)
+        final["frame_index"] = backend.written()
+        final["occupancy"] = backend.occupancy()
+        timeseries.append(final)
 
-    describe = backend.describe()
-    written = backend.written()
-    produced = backend.produced()
-    dropped = backend.dropped()
-    occ = [r["occupancy"] for r in timeseries] or [0]
-    throughput = written / write_elapsed if write_elapsed > 0 else 0.0
+        stop_monitor.set()
+        monitor.join(timeout=5.0)
+        if reader is not None:
+            reader.join(timeout=60.0)
+        if external:
+            backend.stop_external_reader()
 
-    row = dict(tag)
-    row.update(
-        {
-            "n_frames": cfg.n_frames,
-            "frame_rate_hz": cfg.frame_rate_hz,
-            "buffer_mb": cfg.buffer_mb,
-            "buffer_frames": backend.capacity(),
-            "frame_bytes": cfg.frame_bytes(),
-            "frames_produced": produced,
-            "frames_written": written,
-            "dropped_count": dropped,
-            "dropped_fraction": (
-                dropped / cfg.n_frames if cfg.n_frames else 0.0
-            ),
-            "occupancy_peak": max(occ),
-            "occupancy_mean": round(sum(occ) / len(occ), 4),
-            "throughput_fps": round(throughput, 4),
-            "duration_s": round(write_elapsed, 6),
-        }
-    )
-    backend.close()
+        describe = backend.describe()
+        written = backend.written()
+        produced = backend.produced()
+        dropped = backend.dropped()
+        occ = [r["occupancy"] for r in timeseries] or [0]
+        throughput = written / write_elapsed if write_elapsed > 0 else 0.0
+
+        row = dict(tag)
+        row.update(
+            {
+                "n_frames": cfg.n_frames,
+                "frame_rate_hz": cfg.frame_rate_hz,
+                "buffer_mb": cfg.buffer_mb,
+                "buffer_frames": backend.capacity(),
+                "frame_bytes": cfg.frame_bytes(),
+                "frames_produced": produced,
+                "frames_written": written,
+                "dropped_count": dropped,
+                "dropped_fraction": (
+                    dropped / cfg.n_frames if cfg.n_frames else 0.0
+                ),
+                "occupancy_peak": max(occ),
+                "occupancy_mean": round(sum(occ) / len(occ), 4),
+                "throughput_fps": round(throughput, 4),
+                "duration_s": round(write_elapsed, 6),
+            }
+        )
+    finally:
+        stop_monitor.set()
+        backend.close()
     return row, timeseries, describe
 
 

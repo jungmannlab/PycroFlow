@@ -43,7 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   go/no-go test for option (b). The harness now writes results **incrementally
   after every configuration** (append `metrics.csv` / `buffer_timeseries.csv`,
   refresh `run_meta.json` with `status` / `completed_configs` / `errors`), so a
-  later acquisition failure never discards earlier results.
+  later acquisition failure never discards earlier results. The raw NDTiff for
+  each configuration is now freed (and the separate reader torn down)
+  immediately after that acquisition via `try`/`finally` — so a *failed*
+  acquisition can no longer leak tens of GB and break the next config on a
+  small local data drive — and `data_dir` defaults to a local path (local disk
+  avoids the over-the-network write penalty; peak use stays one acquisition).
 - **WP-1 analysis** (`PycroFlow/perf/analyze_perf.py` / `pycroflow-perf-analyze`):
   ingests one or more run dirs and drafts the live-vs-batch go/no-go against
   documented thresholds, emitting `report.md` + `report.json` (+ optional

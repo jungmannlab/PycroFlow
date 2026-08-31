@@ -509,6 +509,13 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
             import shutil
 
             shutil.rmtree(self._acq_dir, ignore_errors=True)
+            # Visible confirmation on the acquisition PC that the (large) raw
+            # movie was freed immediately after this configuration, so a small
+            # local data drive never accumulates more than one acquisition.
+            print(
+                "[wp1] deleted raw acquisition: {}".format(self._acq_dir),
+                flush=True,
+            )
 
 
 def make_backend(cfg: PerfConfig, tag: str = "run") -> FrameSourceBackend:

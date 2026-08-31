@@ -254,6 +254,37 @@ class TestExternalReaderBranch(unittest.TestCase):
         self.assertFalse(any(e[0] == "read_batch" for e in fake.events))
 
 
+class _FailingBackend(_FakeExternalBackend):
+    """External backend whose acquisition raises after start."""
+
+    def start(self):
+        self.events.append(("start",))
+        raise RuntimeError("simulated acquisition failure")
+
+
+class TestCleanupOnFailure(unittest.TestCase):
+    def test_backend_closed_even_when_config_fails(self):
+        """A failed acquisition must still close() the backend.
+
+        close() is what stops the separate-process reader and deletes the raw
+        acquisition from disk, so it must run even on failure — otherwise a
+        small local data drive fills up mid-sweep.
+        """
+        cfg = PerfConfig(
+            mode="emulator",
+            n_frames=10,
+            monitor_interval_s=0.005,
+        )
+        fake = _FailingBackend(cfg)
+        with mock.patch(
+            "PycroFlow.perf.harness.make_backend", return_value=fake
+        ):
+            with self.assertRaises(RuntimeError):
+                run_config(cfg, reader_on=True, batch_size=16)
+        # The backend was torn down despite the failure.
+        self.assertIn(("close",), fake.events)
+
+
 class TestIncrementalWriting(unittest.TestCase):
     def test_meta_marks_complete_and_lists_configs(self):
         with tempfile.TemporaryDirectory() as tmp:
