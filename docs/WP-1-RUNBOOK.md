@@ -80,13 +80,19 @@ the config).
 `reader_mode` selects how the concurrent incremental reader runs:
 
 - **`process` (default, the design-intended path)** — a **separate OS process**
-  (`PycroFlow.perf.reader_process`) opens the NDTiff dataset while it is still
-  being written and reads the already-written frames in contiguous batches,
-  trailing behind acquisition. Because it is a distinct process reading files
-  off disk (not a thread sharing the acquisition's GIL / pycromanager ZMQ
-  bridge), it isolates whether concurrent reading *fundamentally* contends with
-  the write path. **This is the decisive go/no-go test for live streaming
-  (option b).**
+  (`PycroFlow.perf.reader_process`) opens the movie while it is still being
+  written and reads the already-written frames in contiguous batches, trailing
+  behind acquisition. Because it is a distinct process reading files off disk
+  (not a thread sharing the acquisition's GIL / pycromanager ZMQ bridge), it
+  isolates whether concurrent reading *fundamentally* contends with the write
+  path. **This is the decisive go/no-go test for live streaming (option b).**
+  It reads through **picasso** (`picasso.io.TiffMultiMap`) when picasso is
+  installed — the same reader picasso uses for real analysis, so the read-load
+  is representative — and prints `[wp1-reader] using picasso TiffMultiMap
+  reader`. If picasso is absent it falls back to ndtiff and prints
+  `[wp1-reader] using ...Dataset`. Watch for the `opened movie in Xs` lines: on
+  a very large full-frame movie each re-open still scans the growing TIFF IFDs,
+  so raise `reader_reopen_interval_s` if opens are slow.
 - **`thread`** — the reader runs in the acquisition process. This reproduces
   the earlier, more pessimistic same-process result; use it only for contrast
   (`--reader-mode thread`).

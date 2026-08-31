@@ -147,6 +147,12 @@ class PerfConfig:
     reader_poll_s : float
         Poll interval of the separate-process reader while waiting for new
         frames / the dataset to appear.
+    reader_reopen_interval_s : float
+        Minimum seconds between re-opens of the growing NDTiff dataset by the
+        separate-process reader. Re-opening a still-being-written dataset forces
+        ndtiff to rebuild its index by scanning the TIFF IFDs (O(dataset size)),
+        so the reader opens once and only re-opens — at most this often, and
+        only when the on-disk index has actually grown — to pick up new frames.
     label : str
         Prefix for the run-dir name.
     emulator : EmulatorParams
@@ -170,6 +176,7 @@ class PerfConfig:
     keep_raw_data: bool = False
     reader_mode: str = READER_PROCESS
     reader_poll_s: float = 0.05
+    reader_reopen_interval_s: float = 2.0
     label: str = "wp1"
     emulator: EmulatorParams = field(default_factory=EmulatorParams)
 
@@ -204,6 +211,8 @@ class PerfConfig:
             )
         if self.reader_poll_s <= 0:
             raise ValueError("reader_poll_s must be > 0")
+        if self.reader_reopen_interval_s <= 0:
+            raise ValueError("reader_reopen_interval_s must be > 0")
         # Normalise container types (YAML may hand back tuples / ints).
         self.batch_sizes = [int(b) for b in self.batch_sizes]
         if self.roi is not None:

@@ -466,6 +466,8 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
                 self._reader_count_file,
                 "--poll",
                 str(self.cfg.reader_poll_s),
+                "--reopen-interval",
+                str(self.cfg.reader_reopen_interval_s),
             ]
         )
 

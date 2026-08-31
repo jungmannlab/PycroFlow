@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -17,6 +19,20 @@ from PycroFlow.perf.backends import FrameSourceBackend
 from PycroFlow.perf.cli import main as cli_main
 from PycroFlow.perf.config import EmulatorParams, PerfConfig
 from PycroFlow.perf.harness import run_and_write, run_config, run_sweep
+
+
+def _have_picasso() -> bool:
+    """True if picasso + tifffile import (skips CI, where they aren't installed)."""
+    from PycroFlow.perf.reader_process import _import_picasso_movie
+
+    if _import_picasso_movie() is None:
+        return False
+    try:
+        import tifffile  # noqa: F401
+
+        return True
+    except Exception:
+        return False
 
 
 class TestEmulatorRunDir(unittest.TestCase):
@@ -456,6 +472,102 @@ class TestReaderAxisLayout(unittest.TestCase):
         axis, fixed = _axis_layout(_FakeDataset({}))
         self.assertIsNone(axis)
         self.assertEqual(fixed, {})
+
+
+class TestReaderIndexSignature(unittest.TestCase):
+    def test_signature_changes_as_files_grow(self):
+        from PycroFlow.perf.reader_process import _index_signature
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(_index_signature(tmp), ())
+            idx = os.path.join(tmp, "acq_NDTiff.index")
+            with open(idx, "wb") as fh:
+                fh.write(b"\x00" * 10)
+            sig1 = _index_signature(tmp)
+            self.assertEqual(len(sig1), 1)
+            # A growing index yields a different signature (triggers a re-open).
+            with open(idx, "ab") as fh:
+                fh.write(b"\x00" * 90)
+            self.assertNotEqual(_index_signature(tmp), sig1)
+
+
+class TestFindMovieFile(unittest.TestCase):
+    def test_prefers_ndtiff_stack_base(self):
+        from PycroFlow.perf.reader_process import _find_movie_file
+
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in (
+                "m_NDTiffStack.tif",
+                "m_NDTiffStack_1.tif",
+                "m_NDTiffStack_2.tif",
+            ):
+                open(os.path.join(tmp, name), "w").close()
+            self.assertEqual(
+                os.path.basename(_find_movie_file(tmp)), "m_NDTiffStack.tif"
+            )
+
+    def test_ome_tif_base_when_no_ndtiff(self):
+        from PycroFlow.perf.reader_process import _find_movie_file
+
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("s_MMStack.ome.tif", "s_MMStack_1.ome.tif"):
+                open(os.path.join(tmp, name), "w").close()
+            self.assertEqual(
+                os.path.basename(_find_movie_file(tmp)), "s_MMStack.ome.tif"
+            )
+
+    def test_none_when_no_tiffs(self):
+        from PycroFlow.perf.reader_process import _find_movie_file
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(_find_movie_file(tmp))
+
+
+class TestPicassoReaderLoop(unittest.TestCase):
+    @unittest.skipUnless(_have_picasso(), "picasso/tifffile not installed")
+    def test_reads_growing_movie_to_completion(self):
+        import numpy as np
+        import tifffile
+
+        from PycroFlow.perf.reader_process import _read_loop
+
+        with tempfile.TemporaryDirectory() as tmp:
+            sub = os.path.join(tmp, "acq")
+            os.makedirs(sub)
+            base = os.path.join(sub, "m_NDTiffStack.tif")
+            rng = np.arange(64, dtype="<u2").reshape(8, 8)
+
+            def write(start, n, append):
+                with tifffile.TiffWriter(
+                    base, append=append, bigtiff=True
+                ) as tw:
+                    for i in range(start, start + n):
+                        tw.write(
+                            (rng + i).astype("<u2"),
+                            contiguous=False,
+                            photometric="minisblack",
+                        )
+
+            write(0, 6, append=False)  # 6 frames present at start
+            stop = os.path.join(tmp, "stop")
+            cnt = os.path.join(tmp, "count")
+            result = {}
+
+            def run():
+                result["n"] = _read_loop(tmp, 5, stop, cnt, 0.02, 0.1)
+
+            reader = threading.Thread(target=run)
+            reader.start()
+            time.sleep(0.3)
+            write(6, 9, append=True)  # grows to 15 while the reader runs
+            time.sleep(0.3)
+            open(stop, "w").close()  # stop -> final re-open flushes the rest
+            reader.join(timeout=20)
+
+            # Every frame written was read (never subsampled), across growth.
+            self.assertEqual(result.get("n"), 15)
+            with open(cnt, encoding="utf-8") as fh:
+                self.assertEqual(fh.read().strip(), "15")
 
 
 class TestSchemaValidation(unittest.TestCase):

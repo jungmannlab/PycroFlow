@@ -37,16 +37,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   git-committed.
 - **WP-1 separate-process reader** (`PycroFlow/perf/reader_process.py` /
   `pycroflow-perf-reader`): the design-intended live reader runs as a separate
-  OS process reading the NDTiff off disk, selectable with `reader_mode:
+  OS process reading the movie off disk, selectable with `reader_mode:
   process` (default) vs `thread` (`--reader-mode`). Isolates cross-process disk
   I/O contention from the acquisition's GIL / ZMQ bridge — the decisive
-  go/no-go test for option (b). The reader resolves the NDTiff `Dataset` class
-  across SDK versions (`ndstorage` / `ndtiff` / top-level `pycromanager`), so it
-  works regardless of where the installed pycromanager exposes it, and reads by
-  the dataset's own frame-axis name (pycromanager calls it `time`, not `t`;
-  newer ndtiff `KeyError`s on an unknown axis) with the other axes pinned. The
-  harness
-  now writes results **incrementally
+  go/no-go test for option (b). By default it reads through **picasso**
+  (`picasso.io.TiffMultiMap`), the lab's analysis package and its actual reader
+  for Micro-Manager NDTiff / OME-TIFF movies: tifffile builds a per-frame
+  byte-offset table by walking the TIFF IFDs once, each frame is a pure
+  `seek` + `readinto` from its offset, the multi-file `_NDTiffStack_N.tif` split
+  is handled, and a partially-written trailing IFD is dropped — so it reads a
+  still-growing file efficiently and safely, and generates exactly the read-load
+  a real live analysis would. New frames are picked up by re-opening (a fast
+  tifffile IFD scan), throttled to `reader_reopen_interval_s` (default 2 s) and
+  only when the files have grown. If picasso is not installed (or fails), it
+  falls back to reading via ndtiff's `Dataset` — resolving the class across SDK
+  versions (`ndstorage` / `ndtiff` / top-level `pycromanager`) and reading by
+  the dataset's own frame-axis name (pycromanager calls it `time`, not `t`),
+  opening once and re-opening only rarely because re-opening a still-being-
+  written NDTiff makes ndtiff rebuild its index by scanning every TIFF IFD
+  (O(dataset size)). The harness now writes results **incrementally
   after every configuration** (append `metrics.csv` / `buffer_timeseries.csv`,
   refresh `run_meta.json` with `status` / `completed_configs` / `errors`), so a
   later acquisition failure never discards earlier results. The raw NDTiff for

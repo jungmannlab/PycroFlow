@@ -75,6 +75,12 @@ keep_raw_data: false
 reader_mode: process
 # Poll interval (s) of the separate-process reader while waiting for frames.
 reader_poll_s: 0.05
+# Minimum seconds between re-opens of the growing NDTiff by the separate-process
+# reader. Re-opening a still-being-written dataset makes ndtiff rebuild its
+# index by scanning the TIFF IFDs (slow for a multi-GB movie), so the reader
+# opens once and only re-opens this often (and only when the index has grown) to
+# pick up new frames. Raise it for very large datasets where each open is slow.
+reader_reopen_interval_s: 2.0
 
 # Prefix for the run-dir name.
 label: wp1
