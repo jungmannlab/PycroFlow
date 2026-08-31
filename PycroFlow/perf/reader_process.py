@@ -49,6 +49,37 @@ def _find_dataset_dir(acq_dir: str) -> str | None:
     return None
 
 
+def _import_dataset():  # pragma: no cover - depends on the installed SDK
+    """Return the NDTiff ``Dataset`` class across pycromanager versions.
+
+    The reader-facing NDTiff reader has moved as the stack evolved: it used to
+    be re-exported at the top level of ``pycromanager`` (``from pycromanager
+    import Dataset``), then lived in the ``ndtiff`` package, and in current
+    releases in ``ndstorage`` (which pycromanager's own ``get_dataset`` returns).
+    Try them in turn so the separate reader process works regardless of which
+    versions are installed on the acquisition PC, and raise a clear error
+    listing what was tried if none resolve.
+    """
+    candidates = (
+        ("ndstorage", "Dataset"),
+        ("ndstorage", "NDTiffDataset"),
+        ("ndtiff", "Dataset"),
+        ("ndtiff", "NDTiffDataset"),
+        ("pycromanager", "Dataset"),
+    )
+    tried = []
+    for mod_name, attr in candidates:
+        try:
+            mod = __import__(mod_name, fromlist=[attr])
+            return getattr(mod, attr)
+        except (ImportError, AttributeError) as exc:
+            tried.append("{}.{}: {}".format(mod_name, attr, exc))
+    raise ImportError(
+        "could not import an NDTiff Dataset class from any of "
+        "ndstorage / ndtiff / pycromanager; tried:\n  " + "\n  ".join(tried)
+    )
+
+
 def _write_count(count_file: str | None, count: int) -> None:
     if not count_file:
         return
@@ -70,7 +101,13 @@ def _read_loop(
 
     Returns the total number of frames read.
     """
-    from pycromanager import Dataset
+    Dataset = _import_dataset()
+    print(
+        "[wp1-reader] using {}.{}".format(
+            Dataset.__module__, Dataset.__name__
+        ),
+        flush=True,
+    )
 
     # Wait for the dataset to appear (acquisition creates it on the first
     # frame), unless we are asked to stop first.

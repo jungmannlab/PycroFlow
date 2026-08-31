@@ -40,7 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OS process reading the NDTiff off disk, selectable with `reader_mode:
   process` (default) vs `thread` (`--reader-mode`). Isolates cross-process disk
   I/O contention from the acquisition's GIL / ZMQ bridge — the decisive
-  go/no-go test for option (b). The harness now writes results **incrementally
+  go/no-go test for option (b). The reader resolves the NDTiff `Dataset` class
+  across SDK versions (`ndstorage` / `ndtiff` / top-level `pycromanager`), so it
+  works regardless of where the installed pycromanager exposes it. The harness
+  now writes results **incrementally
   after every configuration** (append `metrics.csv` / `buffer_timeseries.csv`,
   refresh `run_meta.json` with `status` / `completed_configs` / `errors`), so a
   later acquisition failure never discards earlier results. The raw NDTiff for
