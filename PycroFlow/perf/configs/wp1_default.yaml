@@ -21,13 +21,13 @@ exposure_ms: 100.0
 # time per config is n_frames / 10 s, multiplied by (1 + number of batch
 # sizes). 2000 frames ≈ 3.3 min/config; set 40000 for a full-length run
 # (≈ 67 min/config — expect a multi-hour sweep).
-n_frames: 40000
+n_frames: 25000
 
 # Full-frame dimensions + bytes per pixel (16-bit camera => 2). Used to turn
 # the buffer MB into a frame capacity and to record the frame size. For the
 # centre quadrant, set roi below (e.g. [256, 256, 512, 512]).
-image_width: 576
-image_height: 576
+image_width: 1152
+image_height: 1152
 bytes_per_pixel: 2
 
 # Micro-Manager circular-buffer footprint, in MB (mebibytes) — matches MM's
@@ -40,7 +40,7 @@ roi: null
 
 # Live-evaluation batch sizes to sweep (contiguous frames per read; never
 # subsampled). The baseline (no reader) is run in addition to these.
-batch_sizes: [10, 100, 1000]
+batch_sizes: [1, 10, 100]
 
 # How often the occupancy monitor samples the circular buffer (s).
 monitor_interval_s: 0.05
@@ -62,7 +62,7 @@ output_dir: results
 # ≈ 663552 * 40000 ≈ 25 GB — make sure the local drive has at least that free
 # (reduce n_frames if not). Required in instrument mode; set keep_raw_data:
 # true only if you want to keep the movies. Override per-run with --data-dir.
-data_dir: D:\pycroflow_wp1_rawdata
+data_dir: U:\users\hgrabmayr\microscopy\260831_tmp
 keep_raw_data: false
 
 # How the concurrent reader runs (instrument mode):
