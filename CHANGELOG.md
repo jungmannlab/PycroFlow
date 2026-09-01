@@ -55,7 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the dataset's own frame-axis name (pycromanager calls it `time`, not `t`),
   opening once and re-opening only rarely because re-opening a still-being-
   written NDTiff makes ndtiff rebuild its index by scanning every TIFF IFD
-  (O(dataset size)). The harness now writes results **incrementally
+  (O(dataset size)). On stop the harness waits up to 300 s (was 60 s) for the
+  reader's final flush, which on slow / network storage re-scans the whole movie
+  and can take a minute or two — so `reader_frames_read` is not cut short. The
+  harness now writes results **incrementally
   after every configuration** (append `metrics.csv` / `buffer_timeseries.csv`,
   refresh `run_meta.json` with `status` / `completed_configs` / `errors`), so a
   later acquisition failure never discards earlier results. The raw NDTiff for

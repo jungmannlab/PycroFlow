@@ -7,34 +7,34 @@
         "buffer_mb": 10000.0,
         "dropped_count": 0,
         "dropped_fraction": 0.0,
-        "duration_s": 7385.492552,
-        "frame_bytes": 663552,
+        "duration_s": 2509.987775,
+        "frame_bytes": 2654208,
         "frame_rate_hz": 10.0,
-        "frames_produced": 40000,
-        "frames_written": 40000,
+        "frames_produced": 25000,
+        "frames_written": 25000,
         "mode": "instrument",
-        "n_frames": 40000,
-        "occupancy_mean": 0.0114,
-        "occupancy_peak": 10.0,
+        "n_frames": 25000,
+        "occupancy_mean": 0.0259,
+        "occupancy_peak": 9.0,
         "reader": false,
-        "throughput_fps": 5.416
+        "throughput_fps": 9.9602
       },
       "configs": [
         {
-          "batch_size": 10,
+          "batch_size": 1,
           "dropped_fraction": 0.0,
           "dropped_ok": true,
           "extra_dropped_fraction": 0.0,
-          "occupancy_fraction": 0.0025,
+          "occupancy_fraction": 0.002,
           "occupancy_ok": true,
-          "occupancy_peak": 10.0,
+          "occupancy_peak": 8.0,
           "passed": true,
-          "throughput_fps": 5.4164,
+          "throughput_fps": 9.966,
           "throughput_ok": true,
-          "throughput_retention": 1.0001
+          "throughput_retention": 1.0006
         },
         {
-          "batch_size": 100,
+          "batch_size": 10,
           "dropped_fraction": 0.0,
           "dropped_ok": true,
           "extra_dropped_fraction": 0.0,
@@ -42,67 +42,93 @@
           "occupancy_ok": true,
           "occupancy_peak": 9.0,
           "passed": true,
-          "throughput_fps": 5.4166,
+          "throughput_fps": 9.967,
           "throughput_ok": true,
-          "throughput_retention": 1.0001
+          "throughput_retention": 1.0007
         },
         {
-          "batch_size": 1000,
+          "batch_size": 100,
           "dropped_fraction": 0.0,
           "dropped_ok": true,
           "extra_dropped_fraction": 0.0,
-          "occupancy_fraction": 0.0018,
+          "occupancy_fraction": 0.002,
           "occupancy_ok": true,
-          "occupancy_peak": 7.0,
+          "occupancy_peak": 8.0,
           "passed": true,
-          "throughput_fps": 5.4169,
+          "throughput_fps": 9.9672,
           "throughput_ok": true,
-          "throughput_retention": 1.0002
+          "throughput_retention": 1.0007
         },
         {
           "batch_size": 1,
           "dropped_fraction": 0.0,
           "dropped_ok": true,
           "extra_dropped_fraction": 0.0,
-          "occupancy_fraction": 0.0018,
+          "occupancy_fraction": 0.0023,
           "occupancy_ok": true,
-          "occupancy_peak": 7.0,
+          "occupancy_peak": 9.0,
           "passed": true,
-          "throughput_fps": 5.4166,
+          "throughput_fps": 9.9664,
           "throughput_ok": true,
-          "throughput_retention": 1.0002
+          "throughput_retention": 1.0004
+        },
+        {
+          "batch_size": 10,
+          "dropped_fraction": 0.0,
+          "dropped_ok": true,
+          "extra_dropped_fraction": 0.0,
+          "occupancy_fraction": 0.0015,
+          "occupancy_ok": true,
+          "occupancy_peak": 6.0,
+          "passed": true,
+          "throughput_fps": 9.9616,
+          "throughput_ok": true,
+          "throughput_retention": 0.9999
+        },
+        {
+          "batch_size": 100,
+          "dropped_fraction": 0.0,
+          "dropped_ok": true,
+          "extra_dropped_fraction": 0.0,
+          "occupancy_fraction": 0.002,
+          "occupancy_ok": true,
+          "occupancy_peak": 8.0,
+          "passed": true,
+          "throughput_fps": 9.965,
+          "throughput_ok": true,
+          "throughput_retention": 1.0003
         }
       ],
       "run_dirs": [
-        "/workspaces/DNA-PAINT-FullAutomation/repositories/PycroFlow/results/wp1_instrument_20260828T193131Z",
-        "/workspaces/DNA-PAINT-FullAutomation/repositories/PycroFlow/results/wp1_instrument_20260828T124316Z"
+        "/workspaces/DNA-PAINT-FullAutomation/repositories/PycroFlow/results/wp1_instrument_20260831T164255Z",
+        "/workspaces/DNA-PAINT-FullAutomation/repositories/PycroFlow/results/wp1_instrument_20260831T210203Z"
       ],
       "verdict": "GO"
     }
   },
   "overall_verdict": "GO",
   "plots": [
-    "sweep_wp1_instrument_20260828T193131Z.png",
-    "timeseries_wp1_instrument_20260828T193131Z.png",
-    "sweep_wp1_instrument_20260828T124316Z.png",
-    "timeseries_wp1_instrument_20260828T124316Z.png"
+    "sweep_wp1_instrument_20260831T164255Z.png",
+    "timeseries_wp1_instrument_20260831T164255Z.png",
+    "sweep_wp1_instrument_20260831T210203Z.png",
+    "timeseries_wp1_instrument_20260831T210203Z.png"
   ],
   "recommendation": "Adopt live incremental NDTiff reading (option b) as the primary path: the concurrent reader did not compromise acquisition.",
   "run_dirs": [
-    "/workspaces/DNA-PAINT-FullAutomation/repositories/PycroFlow/results/wp1_instrument_20260828T193131Z",
-    "/workspaces/DNA-PAINT-FullAutomation/repositories/PycroFlow/results/wp1_instrument_20260828T124316Z"
+    "/workspaces/DNA-PAINT-FullAutomation/repositories/PycroFlow/results/wp1_instrument_20260831T164255Z",
+    "/workspaces/DNA-PAINT-FullAutomation/repositories/PycroFlow/results/wp1_instrument_20260831T210203Z"
   ],
   "runs": [
     {
-      "label": "40000 frames, 576x576 px, buffer 10000 MB",
+      "label": "25000 frames, 1152x1152 px, buffer 10000 MB",
       "mode": "instrument",
-      "run_dir": "/workspaces/DNA-PAINT-FullAutomation/repositories/PycroFlow/results/wp1_instrument_20260828T193131Z",
+      "run_dir": "/workspaces/DNA-PAINT-FullAutomation/repositories/PycroFlow/results/wp1_instrument_20260831T164255Z",
       "verdict": "GO"
     },
     {
-      "label": "40000 frames, 576x576 px, buffer 10000 MB",
+      "label": "25000 frames, 1152x1152 px, buffer 10000 MB",
       "mode": "instrument",
-      "run_dir": "/workspaces/DNA-PAINT-FullAutomation/repositories/PycroFlow/results/wp1_instrument_20260828T124316Z",
+      "run_dir": "/workspaces/DNA-PAINT-FullAutomation/repositories/PycroFlow/results/wp1_instrument_20260831T210203Z",
       "verdict": "GO"
     }
   ],

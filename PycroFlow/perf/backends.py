@@ -477,10 +477,15 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
         if self._reader_proc is None:
             return
         # Signal stop by creating the stop-file, then wait for a clean exit.
+        # On stop the reader does one final re-open to flush the frames written
+        # since its last pass; on slow (e.g. network) storage that re-open scans
+        # the whole movie and can take a minute or two, so the wait is generous
+        # — otherwise the reader is terminated mid-flush and reader_frames_read
+        # reads short of n_frames even though nothing was actually wrong.
         try:
             if self._reader_stop_file:
                 open(self._reader_stop_file, "w").close()
-            self._reader_proc.wait(timeout=60.0)
+            self._reader_proc.wait(timeout=300.0)
         except Exception:
             self._reader_proc.terminate()
         finally:
