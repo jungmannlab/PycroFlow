@@ -401,20 +401,34 @@ class ProtocolBuilder:
             vol = volumes["vol_wash"]
         else:
             vol = volumes["vol_reagent"]
-        self.create_step_pumpout(
-            volume=volumes["vol_remove_before_flush"], extractionfactor=1
-        )
-        self.create_step_inject(
-            volume=vol - volumes["vol_remove_before_flush"],
-            reservoir_id=res_idcs[reagent],
-            delay=wait_after_pickup,
-        )
-        self.create_step_inject(
-            volume=volumes["vol_remove_before_flush"],
-            reservoir_id=res_idcs[reagent],
-            extractionfactor=0,
-            delay=wait_after_pickup,
-        )
+        remove = volumes.get("vol_remove_before_flush") or 0
+        if remove > 0:
+            # Pre-remove some of the old liquid before the reagent goes in, so
+            # the incoming liquid is not diluted: pump out `remove`, inject the
+            # bulk with simultaneous extraction, then inject the last `remove`
+            # without extraction to restore the sample volume.
+            self.create_step_pumpout(volume=remove, extractionfactor=1)
+            self.create_step_inject(
+                volume=vol - remove,
+                reservoir_id=res_idcs[reagent],
+                delay=wait_after_pickup,
+            )
+            self.create_step_inject(
+                volume=remove,
+                reservoir_id=res_idcs[reagent],
+                extractionfactor=0,
+                delay=wait_after_pickup,
+            )
+        else:
+            # No pre-removal requested: a single inject. Without this branch
+            # the zero volume would be clamped to a spurious 1 µl pump-out +
+            # 1 µl re-inject (create_step_pumpout / create_step_inject floor at
+            # 1), which cost time and moved no meaningful liquid.
+            self.create_step_inject(
+                volume=vol,
+                reservoir_id=res_idcs[reagent],
+                delay=wait_after_pickup,
+            )
         if t_incubate > 0:
             self.create_step_incubate(t_incubate)
         if unique_name is not None:

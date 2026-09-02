@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Dropped the spurious 1 µl pump-out + 1 µl re-inject that preceded every
+  flush when `vol_remove_before_flush` is 0 (its default). `create_step_pumpout`
+  / `create_step_inject` floor volumes at 1 µl, so a 0 pre-removal compiled to a
+  token 1 µl pump-out and a 1 µl re-inject per flush — time spent moving no
+  meaningful liquid. `create_stepset_flush` now emits a single inject when no
+  pre-removal is requested, and the full pump-out → inject → restore sequence
+  only when `vol_remove_before_flush > 0`. Any real under-pressure/suction need
+  is served by `inject_precreate_underpressure` (full-syringe pull) or a
+  non-zero `vol_remove_before_flush`, not the 1 µl artefact. The `exchange_basic`
+  regression snapshot was regenerated (10 × 1 µl injects and 10 × 1 µl
+  pump-outs removed).
 - Unified the imager/reagent injection volumes across experiment types and
   added an optional post-imaging top-up. `fluid.settings.vol_reagent` is now
   the volume dispensed into the sample **before** imaging each round (imager /

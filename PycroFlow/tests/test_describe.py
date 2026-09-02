@@ -85,16 +85,28 @@ class TestDescribeProtocol(unittest.TestCase):
         self.assertLess(i_acq, i_buffer)
         self.assertLess(i_buffer, i_img2)
 
-    def test_merges_adjacent_same_reservoir_injects(self):
-        # The builder's main + tiny helper injects for one imager collapse to
-        # a single line (100 + 1 µl -> 101 µl).
+    def test_single_pre_inject_line_per_imager(self):
+        # One clean pre-imaging inject line per imager (no 1 µl artefacts).
         _names, protocol = _exchange_protocol()
         lines = describe_protocol(
             protocol, {1: "Imager 1", 2: "Imager 2", 3: "Buffer"}
         )
-        self.assertTrue(any("101 µl of Imager 1" in ln for ln in lines))
-        # No two consecutive lines both inject Imager 1 (they were merged).
+        self.assertTrue(any("100 µl of Imager 1" in ln for ln in lines))
         self.assertEqual(sum("of Imager 1 into" in ln for ln in lines), 1)
+
+    def test_coalesces_adjacent_same_reservoir_injects(self):
+        # When the builder does emit adjacent same-reservoir injects, they
+        # merge into one line summing the volumes (100 + 1 -> 101).
+        protocol = {
+            "fluid": {
+                "protocol_entries": [
+                    {"$type": "inject", "reservoir_id": 1, "volume": 100},
+                    {"$type": "inject", "reservoir_id": 1, "volume": 1},
+                ]
+            }
+        }
+        lines = describe_protocol(protocol, {1: "Imager 1"})
+        self.assertEqual(lines, ["Pump 101 µl of Imager 1 into the sample"])
 
     def test_empty_protocol_is_empty_list(self):
         self.assertEqual(describe_protocol({}), [])
