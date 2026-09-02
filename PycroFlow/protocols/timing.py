@@ -135,9 +135,13 @@ def estimate_volumes(protocol):
     """Total liquid volumes a compiled protocol consumes, in µl.
 
     Sums the fluid ``inject`` volumes per source reservoir (what must be
-    loaded) and the ``pump_out`` volumes (waste extracted). ``inject`` also
-    drives simultaneous extraction, so the waste total is a lower bound; it is
-    reported separately rather than conflated with reagent use.
+    loaded) and the total waste extracted. Every ``inject`` *also* runs the
+    extraction pump at the same time, removing ``extractionfactor × volume``
+    from the sample; standalone ``pump_out`` steps do the same. So the waste
+    total counts the simultaneous extraction of each inject **and** the
+    pump-outs — using each entry's own ``extractionfactor`` when it sets one
+    (e.g. the ``0`` re-inject that pushes liquid back without extracting) and
+    otherwise the fluid ``parameters['extractionfactor']`` (default 1).
 
     Parameters
     ----------
@@ -149,27 +153,47 @@ def estimate_volumes(protocol):
     dict
         ``{'per_reservoir': {reservoir_id: µl}, 'total_injected': µl,
         'total_waste': µl}``. ``per_reservoir`` omits reservoirs never
-        injected; keys are the ids used in the fluid entries.
+        injected; keys are the ids used in the fluid entries. ``total_waste``
+        typically exceeds ``total_injected`` when the extraction factor is
+        greater than 1.
     """
     per_reservoir = {}
     total_injected = 0.0
     total_waste = 0.0
     fluid = (protocol or {}).get("fluid")
-    entries = fluid.get("protocol_entries") if isinstance(fluid, dict) else None
-    for entry in entries or []:
+    if not isinstance(fluid, dict):
+        return {
+            "per_reservoir": per_reservoir,
+            "total_injected": total_injected,
+            "total_waste": total_waste,
+        }
+    entries = fluid.get("protocol_entries") or []
+    params = fluid.get("parameters") or {}
+    try:
+        default_ef = float(params.get("extractionfactor", 1))
+    except (TypeError, ValueError):
+        default_ef = 1.0
+    for entry in entries:
         if not isinstance(entry, dict):
             continue
         type_ = entry.get("$type")
+        if type_ not in ("inject", "pump_out"):
+            continue
         try:
             vol = float(entry.get("volume") or 0)
         except (TypeError, ValueError):
             continue
+        ef = entry.get("extractionfactor")
+        try:
+            ef = float(ef) if ef is not None else default_ef
+        except (TypeError, ValueError):
+            ef = default_ef
+        # Every inject/pump_out extracts extractionfactor * volume to waste.
+        total_waste += ef * vol
         if type_ == "inject":
             rid = entry.get("reservoir_id")
             per_reservoir[rid] = per_reservoir.get(rid, 0.0) + vol
             total_injected += vol
-        elif type_ == "pump_out":
-            total_waste += vol
     return {
         "per_reservoir": per_reservoir,
         "total_injected": total_injected,

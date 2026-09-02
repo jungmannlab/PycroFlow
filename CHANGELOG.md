@@ -75,8 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Experiment Design tab now previews **what a design will do**: the compiled
   sequence of events (e.g. "Pump 101 µl of Imager 1 into the sample → Acquire
   30000 frames → Pump 501 µl of Buffer …") and the **total reagent volumes**
-  required (per reservoir + grand total, plus waste extracted), in a foldable
-  "Sequence & volumes" panel. The total reagent volume also rides alongside the
+  required (per reservoir + grand total, plus total waste — which counts the
+  extraction pump's simultaneous `extractionfactor × volume` withdrawal on
+  every inject, not just standalone pump-outs), in a foldable "Sequence &
+  volumes" panel. The total reagent volume also rides alongside the
   live duration estimate. Backed by pure helpers `protocols.describe`
   (`describe_protocol`) and `protocols.timing` (`estimate_volumes` /
   `format_volume`), both read from the compiled Run Sequence so they work for

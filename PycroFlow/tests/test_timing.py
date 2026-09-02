@@ -148,7 +148,30 @@ class TestVolumes(unittest.TestCase):
         vols = estimate_volumes(protocol)
         self.assertEqual(vols["per_reservoir"], {1: 150.0, 2: 500.0})
         self.assertEqual(vols["total_injected"], 650.0)
-        self.assertEqual(vols["total_waste"], 600.0)
+        # Waste = simultaneous extraction of every inject (ef defaults to 1)
+        # plus the standalone pump_out: 100 + 50 + 500 + 600.
+        self.assertEqual(vols["total_waste"], 1250.0)
+
+    def test_waste_scales_with_extraction_factor(self):
+        # Each inject extracts extractionfactor * volume; a per-entry factor
+        # (e.g. the 0 re-inject that pushes liquid back) overrides the default.
+        from PycroFlow.protocols.timing import estimate_volumes
+
+        protocol = {
+            "fluid": {
+                "parameters": {"extractionfactor": 6},
+                "protocol_entries": [
+                    {"$type": "inject", "reservoir_id": 1, "volume": 100},
+                    {"$type": "inject", "reservoir_id": 1, "volume": 10,
+                     "extractionfactor": 0},
+                    {"$type": "pump_out", "volume": 5, "extractionfactor": 1},
+                ],
+            }
+        }
+        vols = estimate_volumes(protocol)
+        self.assertEqual(vols["total_injected"], 110.0)
+        # 6*100 (default ef) + 0*10 (per-entry) + 1*5 (per-entry) = 605.
+        self.assertEqual(vols["total_waste"], 605.0)
 
     def test_empty_protocol_is_zero(self):
         from PycroFlow.protocols.timing import estimate_volumes
