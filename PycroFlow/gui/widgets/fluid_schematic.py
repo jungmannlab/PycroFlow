@@ -52,7 +52,8 @@ _IDLE = QColor(96, 100, 108)  # an idle leg
 _TEXT = QColor(228, 230, 234)
 _MUTED = QColor(150, 154, 162)
 _HILITE = QColor(90, 200, 235)  # hovered / selected reservoir path
-_VOLBAR = QColor(64, 132, 214)  # used-volume progress on a reservoir port
+_VOLBAR = QColor(64, 132, 214)  # remaining reagent (left tank, drains down)
+_WASTEBAR = QColor(200, 96, 72)  # consumed/waste (right column, fills up)
 _VOLBAR_TRACK = QColor(24, 25, 28)
 
 
@@ -434,30 +435,24 @@ class FluidSchematic(QWidget):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
             "{}".format(channel),
         )
-        # Live used-volume bar along the bottom, for a reservoir the design
-        # plans to inject from (total_vol > 0): fills as it is pumped.
+        # Live volume gauges, for a reservoir the design plans to inject from
+        # (total_vol > 0): a "tank" on the left that starts full and drains as
+        # the reagent is pumped out (fill height = remaining fraction), and a
+        # waste column on the right that fills upward as it is consumed.
         total_vol = (label_info or {}).get("total_vol") or 0
-        bottom_reserve = 0.0
         if total_vol > 0 and not unused:
             used_vol = (label_info or {}).get("used_vol") or 0
-            frac = max(0.0, min(1.0, used_vol / total_vol))
-            bar_h = 4.0
-            bottom_reserve = bar_h + 3
-            track = QRectF(
-                r.left() + 3, r.bottom() - bar_h - 2, r.width() - 6, bar_h
-            )
+            used_frac = max(0.0, min(1.0, used_vol / total_vol))
+            bar_w = 4.0
+            top = r.top() + 3
+            bottom = r.bottom() - 3
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(_VOLBAR_TRACK))
-            painter.drawRoundedRect(track, 2, 2)
-            if frac > 0:
-                painter.setBrush(QBrush(_VOLBAR))
-                painter.drawRoundedRect(
-                    QRectF(
-                        track.left(), track.top(),
-                        track.width() * frac, track.height()
-                    ),
-                    2, 2,
-                )
+            # Left: remaining reagent, drains from full to empty.
+            left = QRectF(r.left() + 2, top, bar_w, bottom - top)
+            self._draw_vgauge(painter, left, 1.0 - used_frac, _VOLBAR)
+            # Right: waste consumed, fills from empty to full.
+            right = QRectF(r.right() - 2 - bar_w, top, bar_w, bottom - top)
+            self._draw_vgauge(painter, right, used_frac, _WASTEBAR)
         if is_pump:
             painter.setPen(QPen(_PUMP_PORT))
             painter.drawText(
@@ -465,10 +460,29 @@ class FluidSchematic(QWidget):
                     r.left(),
                     r.bottom() - r.height() * 0.42,
                     r.width(),
-                    r.height() * 0.4 - bottom_reserve,
+                    r.height() * 0.4,
                 ),
                 Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
                 "→ pump_a",
+            )
+
+    @staticmethod
+    def _draw_vgauge(painter, track, frac, color):
+        """Draw a vertical gauge: dark track + bottom-anchored ``frac`` fill."""
+        painter.setBrush(QBrush(_VOLBAR_TRACK))
+        painter.drawRoundedRect(track, 2, 2)
+        frac = max(0.0, min(1.0, frac))
+        if frac > 0:
+            fill_h = track.height() * frac
+            painter.setBrush(QBrush(color))
+            painter.drawRoundedRect(
+                QRectF(
+                    track.left(),
+                    track.bottom() - fill_h,
+                    track.width(),
+                    fill_h,
+                ),
+                2, 2,
             )
 
     # -- pumps / sample / flow ---------------------------------------------

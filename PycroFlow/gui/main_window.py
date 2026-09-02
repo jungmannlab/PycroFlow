@@ -58,6 +58,9 @@ class PycroFlowMainWindow(QMainWindow):
         from PycroFlow import __version__
 
         self.setWindowTitle("PycroFlow {}".format(__version__))
+        # Open wide enough for the Fluid tab's wiring schematic (24-port grid
+        # + pumps) to show without the user having to widen the window first.
+        self.resize(1280, 820)
         self._build_toolbar()
         self._build_tabs()
         self._build_statusbar()

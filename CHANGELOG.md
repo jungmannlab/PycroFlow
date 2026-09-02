@@ -99,12 +99,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - The Fluid live view now tracks **per-reservoir volume**: each in-use port
-  shows a fill bar of volume pumped so far vs. the total the design plans to
-  inject, with exact figures (`X used / Y needed (Z%)`) in the hover tooltip.
-  The fluid handler accumulates pumped volume per reservoir as inject steps run
-  (`reservoir_used`) and derives the plan from the assigned protocol
-  (`reservoir_totals`); `SystemService.fluid_reservoir_labels()` exposes both,
-  read cache-only so the schematic stays live during a run without serial I/O.
+  shows two vertical gauges — a blue "tank" on the left that starts full and
+  drains as the reagent is pumped out, and a waste column on the right that
+  fills upward as it is consumed — with exact figures (`X used / Y needed
+  (Z%)`) in the hover tooltip. The fluid handler accumulates pumped volume per
+  reservoir as inject steps run (`reservoir_used`) and derives the plan from
+  the assigned protocol (`reservoir_totals`);
+  `SystemService.fluid_reservoir_labels()` exposes both, read cache-only so the
+  schematic stays live during a run without serial I/O. The main window also
+  opens wide enough (1280×820) to show the wiring schematic without resizing.
 - The Run Sequence progress readout now names the **current action** in plain
   language instead of the raw `$type`: e.g. `inject Imager 1`, `acquire EGFR`,
   `extract`, `wait`, `sync` (reservoir names come from the loaded design; a
