@@ -53,6 +53,12 @@ fluid:
     baud: 115200      # device runs 115200 8N1; only ';' terminates a command
     channels: 24
     address: ibidi    # key referenced by each reservoir's valve_pos
+    # Physical port layout for the GUI's live wiring schematic (advisory —
+    # no effect on routing). Ports meander upward on a grid `grid_cols` wide:
+    # port 1 lower left, port 6 lower right, port 7 directly above port 6.
+    # `pump_channel` is the port tubed to pump_a.
+    grid_cols: 6
+    pump_channel: 1
     # Switch one valve at a time. The unit cannot supply the inrush current
     # of many valves actuating together, so the single atomic SETBATCHVALVES
     # command leaves some of them unmoved — silently, since it still answers
@@ -100,29 +106,29 @@ fluid:
   # pump_a: one segment per reservoir plus the pump->sample / pump->waste legs.
   tubing:
     - {from: R1,  to: pump_a, volume: 325}
-    - {from: R2,  to: pump_a, volume: 325}
-    - {from: R3,  to: pump_a, volume: 325}
-    - {from: R4,  to: pump_a, volume: 325}
-    - {from: R5,  to: pump_a, volume: 325}
-    - {from: R6,  to: pump_a, volume: 325}
-    - {from: R7,  to: pump_a, volume: 325}
-    - {from: R8,  to: pump_a, volume: 325}
-    - {from: R9,  to: pump_a, volume: 325}
-    - {from: R10, to: pump_a, volume: 325}
-    - {from: R11, to: pump_a, volume: 325}
-    - {from: R12, to: pump_a, volume: 325}
-    - {from: R13, to: pump_a, volume: 325}
-    - {from: R14, to: pump_a, volume: 325}
-    - {from: R15, to: pump_a, volume: 325}
-    - {from: R16, to: pump_a, volume: 325}
-    - {from: R17, to: pump_a, volume: 325}
-    - {from: R18, to: pump_a, volume: 325}
-    - {from: R19, to: pump_a, volume: 325}
-    - {from: R20, to: pump_a, volume: 325}
-    - {from: R21, to: pump_a, volume: 325}
-    - {from: R22, to: pump_a, volume: 325}
-    - {from: R23, to: pump_a, volume: 325}
-    - {from: R24, to: pump_a, volume: 325}
+    - {from: R2,  to: R1, volume: 10}
+    - {from: R3,  to: R2, volume: 10}
+    - {from: R4,  to: R3, volume: 10}
+    - {from: R5,  to: R4, volume: 10}
+    - {from: R6,  to: R5, volume: 10}
+    - {from: R7,  to: R6, volume: 50}
+    - {from: R8,  to: R7, volume: 10}
+    - {from: R9,  to: R8, volume: 10}
+    - {from: R10, to: R9, volume: 10}
+    - {from: R11, to: R10, volume: 10}
+    - {from: R12, to: R11, volume: 10}
+    - {from: R13, to: R12, volume: 50}
+    - {from: R14, to: R13, volume: 10}
+    - {from: R15, to: R14, volume: 10}
+    - {from: R16, to: R15, volume: 10}
+    - {from: R17, to: R16, volume: 10}
+    - {from: R18, to: R17, volume: 10}
+    - {from: R19, to: R18, volume: 50}
+    - {from: R20, to: R19, volume: 10}
+    - {from: R21, to: R20, volume: 10}
+    - {from: R22, to: R21, volume: 10}
+    - {from: R23, to: R22, volume: 10}
+    - {from: R24, to: R23, volume: 10}
     - {from: pump_a, to: sample, volume: 325}
     - {from: pump_a, to: flush_waste, volume: 650}
 

@@ -611,6 +611,163 @@ class SystemService:
                 "close")
         mux.close_all()
 
+    # --- Live fluid schematic (topology + valve/syringe state) ----------
+
+    def fluid_topology(self):
+        """Describe the fluid wiring for the live schematic, from the setup.
+
+        Read purely from the loaded setup config (not the connected
+        hardware), so the schematic can be drawn before anything is
+        connected and reflects exactly what the YAML wires. Only the ibidi
+        multiplexer layout is described here — the pump/sample/waste macro
+        topology is fixed for the legacy architecture.
+
+        The ibidi ports sit on a physical grid that meanders upward: port 1
+        at the lower left, filling each row left-to-right / right-to-left in
+        turn (``grid_cols`` wide, default 6), so port 7 is directly above
+        port 6. The grid geometry is returned so the widget can place each
+        port without re-deriving the wiring.
+
+        Returns
+        -------
+        dict or None
+            ``None`` when no setup is loaded. Otherwise a dict with
+            ``'pumps'`` (which of pump_a / pump_out exist) and
+            ``'multiplexer'`` — ``None`` when the setup has no ibidi unit,
+            else ``{channels, cols, rows, pump_channel, ports, edges}``.
+            ``ports[ch]['reservoir']`` is the reservoir *tapped* at that
+            channel (the last channel in its ``valve_pos`` route — the leaf);
+            ``ports[ch]['used_by']`` lists every reservoir whose route opens
+            the channel (so shared bridge channels are visible); ``edges``
+            are the ``(from, to)`` manifold links traced by consecutive
+            channels in each route; ``routes`` maps each reservoir id to its
+            ordered channel list (for highlighting one reservoir's path).
+        """
+        if self._setup is None:
+            return None
+        fluid = self._setup.get('fluid') or {}
+        pumps = fluid.get('pumps') or {}
+        topo = {
+            'pumps': {
+                'pump_a': 'pump_a' in pumps,
+                'pump_out': 'pump_out' in pumps,
+            },
+            'multiplexer': None,
+        }
+        mux = fluid.get('multiplexer') or {}
+        if mux.get('driver') != IBIDI_MULTIFLOW:
+            return topo
+
+        address = mux.get('address', 'ibidi')
+        channels = int(mux.get('channels', 24))
+        cols = int(mux.get('grid_cols', 6)) or 6
+        rows = (channels + cols - 1) // cols
+        pump_channel = int(mux.get('pump_channel', 1))
+
+        ports = {ch: {'reservoir': None, 'used_by': []}
+                 for ch in range(1, channels + 1)}
+        edges = set()
+        routes = {}
+        from PycroFlow.configs import setup_reservoirs
+        for entry in setup_reservoirs(self._setup):
+            if not isinstance(entry, dict):
+                continue
+            rid = entry.get('id')
+            chans = self._ibidi_channels(entry.get('valve_pos'), address)
+            if rid is not None:
+                routes[rid] = chans
+            for ch in chans:
+                if ch in ports:
+                    ports[ch]['used_by'].append(rid)
+            # Consecutive channels in a route trace the manifold path from
+            # the pump to the reservoir; their union is the wiring tree.
+            for a, b in zip(chans, chans[1:]):
+                if a in ports and b in ports:
+                    edges.add((a, b))
+            if chans:
+                tap = chans[-1]   # the leaf: last channel in the route
+                if tap in ports:
+                    ports[tap]['reservoir'] = rid
+        topo['multiplexer'] = {
+            'channels': channels,
+            'cols': cols,
+            'rows': rows,
+            'pump_channel': pump_channel,
+            'ports': ports,
+            'edges': sorted(edges),
+            'routes': routes,
+        }
+        return topo
+
+    @staticmethod
+    def _ibidi_channels(valve_pos, address):
+        """Extract a reservoir's ibidi channel list from its ``valve_pos``.
+
+        Accepts a single channel (``{ibidi: 3}``) or a list
+        (``{ibidi: [1, 3]}``); returns ``[]`` when the mapping names no ibidi
+        channel.
+        """
+        if not isinstance(valve_pos, dict):
+            return []
+        pos = valve_pos.get(address)
+        if pos is None:
+            return []
+        if isinstance(pos, (list, tuple)):
+            return [int(c) for c in pos]
+        return [int(pos)]
+
+    def fluid_state(self):
+        """Snapshot the live valve and syringe state for the schematic.
+
+        Reads only cached driver attributes — ``multiplexer.channel_states``
+        and each pump's ``valve_pos`` / ``target_volume`` — so it issues
+        **no** serial traffic and is safe to poll continuously, including
+        while the orchestrator owns the bus during a run.
+
+        Returns
+        -------
+        dict or None
+            ``None`` when no fluid system is connected. Otherwise
+            ``{'multiplexer', 'pump_a', 'pump_out'}``. ``multiplexer`` is
+            ``{'channels', 'open'}`` (or ``None``) where ``open[i]`` is the
+            last-commanded state of channel ``i+1`` (True = open/flowing) or
+            ``None`` when unknown (e.g. after a raw ``SETALL``). Each pump is
+            ``{'valve', 'volume', 'capacity'}``; ``valve`` is the syringe
+            port — ``'in'`` (the multiplexer side) or ``'out'`` (the sample
+            side).
+        """
+        fs = self.fluid_system
+        if fs is None:
+            return None
+        state = {'multiplexer': None, 'pump_a': None, 'pump_out': None}
+        mux = getattr(fs, 'multiplexer', None)
+        if mux is not None:
+            states = list(getattr(mux, 'channel_states', []) or [])
+            state['multiplexer'] = {
+                'channels': int(getattr(mux, 'channels', len(states))),
+                'open': states,
+            }
+        for name in ('pump_a', 'pump_out'):
+            state[name] = self._pump_snapshot(getattr(fs, name, None))
+        return state
+
+    @staticmethod
+    def _pump_snapshot(pump):
+        """Cached ``{valve, volume, capacity}`` for a pump (no serial poll)."""
+        if pump is None:
+            return None
+        capacity = float(getattr(pump, 'syringe_volume', 0) or 0)
+        # target_volume is the commanded syringe fill, updated in-process on
+        # every pickup/dispense; get_current_volume() would poll the bus.
+        volume = float(getattr(pump, 'target_volume', 0) or 0)
+        if capacity > 0:
+            volume = max(0.0, min(volume, capacity))
+        return {
+            'valve': getattr(pump, 'valve_pos', None),
+            'volume': volume,
+            'capacity': capacity,
+        }
+
     def stop_all_moves(self) -> None:
         """Emergency stop on the fluid system. Safe to call from anywhere."""
         if self.fluid_system is None:

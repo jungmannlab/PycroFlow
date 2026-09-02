@@ -11,6 +11,7 @@ All commands go through
 reaches into private attributes of the fluid system.
 """
 
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -22,9 +23,16 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QComboBox,
     QMessageBox,
+    QScrollArea,
+    QSplitter,
 )
 
 from PycroFlow.gui.widgets.worker import run_in_background
+from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+
+#: How often (ms) the live schematic re-reads cached valve/syringe state. The
+#: read issues no serial traffic, so this can stay brisk during a run.
+_SCHEMATIC_POLL_MS = 300
 
 _STOP_STYLE = (
     "background-color: #b00000; color: white; font-weight: bold; "
@@ -47,7 +55,14 @@ class FluidTab(QWidget):
         ]
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        outer.addWidget(splitter)
+
+        # --- left: the controls column (scrollable so the schematic keeps
+        # its width on small windows).
+        controls = QWidget()
+        layout = QVBoxLayout(controls)
 
         # --- status + connect
         status_box = QGroupBox("Fluid system")
@@ -72,6 +87,32 @@ class FluidTab(QWidget):
         self.stop_btn.clicked.connect(self._on_stop)
         layout.addWidget(self.stop_btn)
         layout.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(controls)
+        splitter.addWidget(scroll)
+
+        # --- right: live wiring / valve-state schematic.
+        schematic_box = QGroupBox("Live wiring && valve state")
+        sbl = QVBoxLayout(schematic_box)
+        self.schematic = FluidSchematic()
+        sbl.addWidget(self.schematic)
+        splitter.addWidget(schematic_box)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([420, 560])
+
+        # Poll cached valve/syringe state (no serial I/O) so the schematic
+        # stays live, including while the orchestrator owns the bus.
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(_SCHEMATIC_POLL_MS)
+        self._poll_timer.timeout.connect(self._refresh_schematic_state)
+        self._poll_timer.start()
+        self._reload_topology()
+        # Apply the initial reservoir selection's highlight now the schematic
+        # exists (during control construction it did not yet).
+        self._update_route_hint()
 
     @staticmethod
     def _hint(text):
@@ -236,6 +277,23 @@ class FluidTab(QWidget):
             "connected" if connected else "not connected")
         # The setup (hence its manifold) can change between refreshes.
         self._refresh_reservoirs()
+        # The setup also fixes the schematic's wiring topology.
+        self._reload_topology()
+
+    def _reload_topology(self):
+        """Rebuild the schematic's static wiring from the loaded setup."""
+        try:
+            self.schematic.set_topology(self._svc.fluid_topology())
+        except Exception:  # pragma: no cover - schematic is best-effort
+            self.schematic.set_topology(None)
+        self._refresh_schematic_state()
+
+    def _refresh_schematic_state(self):
+        """Push the latest cached valve/syringe snapshot to the schematic."""
+        try:
+            self.schematic.set_state(self._svc.fluid_state())
+        except Exception:  # pragma: no cover - never let the timer die
+            self.schematic.set_state(None)
 
     def set_status_text(self, text):
         """Set the status label (e.g. 'connecting…') from the coordinator."""
@@ -349,35 +407,11 @@ class FluidTab(QWidget):
         if getattr(self, 'valve_route', None) is None:
             return   # called from _refresh_reservoirs during construction
         rid = self.valve_res.currentData()
-        if rid is None:
-            self.valve_route.setText(
-                "No reservoirs wired — select a setup first.")
-            return
-        try:
-            self.valve_route.setText(self._svc.describe_reservoir_route(rid))
-        except Exception as exc:
-            self.valve_route.setText("Route unavailable: {!r}".format(exc))
-
-    def _refresh_reservoirs(self):
-        """Re-fill the reservoir dropdown from the loaded setup's manifold."""
-        current = self.valve_res.currentData()
-        self.valve_res.clear()
-        for rid in self._svc.reservoir_ids():
-            self.valve_res.addItem(str(rid), rid)
-        if current is not None:
-            index = self.valve_res.findData(current)
-            if index >= 0:
-                self.valve_res.setCurrentIndex(index)
-        self.valve_btn.setEnabled(self.valve_res.count() > 0)
-        # "Close all valves" is only meaningful for the ibidi multiplexer.
-        self.close_valves_btn.setVisible(self._svc.has_multiplexer())
-        self._update_route_hint()
-
-    def _update_route_hint(self):
-        """Describe the selected reservoir's route below the dropdown."""
-        if getattr(self, 'valve_route', None) is None:
-            return   # called from _refresh_reservoirs during construction
-        rid = self.valve_res.currentData()
+        # Mirror the selection onto the schematic's highlighted path (the
+        # widget may not exist yet during construction).
+        schematic = getattr(self, 'schematic', None)
+        if schematic is not None:
+            schematic.highlight_reservoir(rid)
         if rid is None:
             self.valve_route.setText(
                 "No reservoirs wired — select a setup first.")

@@ -410,6 +410,58 @@ class TestSystemService(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             svc.close_all_valves()
 
+    def test_fluid_topology_reads_meander_grid_and_taps(self):
+        # The live-schematic topology is read straight from the setup: the
+        # ibidi grid geometry, the pump-wired port, and each port's tap.
+        svc = SystemService()
+        svc.load_setup('Ibidi')
+        topo = svc.fluid_topology()
+        mux = topo['multiplexer']
+        self.assertEqual((mux['cols'], mux['rows']), (6, 4))
+        self.assertEqual(mux['channels'], 24)
+        self.assertEqual(mux['pump_channel'], 1)
+        # R8 is tapped at its leaf channel (last in the route [1, 6, 7, 8]).
+        self.assertEqual(mux['ports'][8]['reservoir'], 8)
+        # Ports 6/7 are shared bridges on the way to R8..R24.
+        self.assertIn(8, mux['ports'][6]['used_by'])
+        self.assertIn(8, mux['ports'][7]['used_by'])
+        # The manifold path to R8 is 1->6->7->8.
+        for edge in [(1, 6), (6, 7), (7, 8)]:
+            self.assertIn(edge, mux['edges'])
+        # Each reservoir's full ordered route is exposed for path highlight.
+        self.assertEqual(mux['routes'][8], [1, 6, 7, 8])
+        self.assertEqual(mux['routes'][23], [1, 6, 7, 12, 13, 18, 19, 23])
+        self.assertTrue(topo['pumps']['pump_a'])
+        self.assertTrue(topo['pumps']['pump_out'])
+
+    def test_fluid_topology_none_without_setup_and_no_mux(self):
+        svc = SystemService()
+        self.assertIsNone(svc.fluid_topology())
+        svc.load_setup('Mercury')   # Hamilton MVP, no ibidi multiplexer
+        topo = svc.fluid_topology()
+        self.assertIsNone(topo['multiplexer'])
+
+    def test_fluid_state_reflects_routing_without_serial_poll(self):
+        # fluid_state() reads cached driver attributes only (no bus traffic),
+        # so it is safe to poll live — here it mirrors a manual route.
+        svc = SystemService()
+        svc.load_setup('IbidiEmulator')
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200},
+            'settings': {
+                'reservoir_names': {i: 'R%d' % i for i in range(1, 4)},
+                'special_names': {}},
+        })
+        self.assertIsNone(SystemService().fluid_state())   # not connected
+        svc.set_valves(3)
+        state = svc.fluid_state()
+        opened = [i + 1 for i, v in enumerate(state['multiplexer']['open'])
+                  if v]
+        self.assertEqual(opened, [3])
+        self.assertEqual(state['pump_a']['valve'], 'in')
+        self.assertEqual(state['pump_a']['capacity'], 500.0)
+        self.assertIsNotNone(state['pump_out'])
+
     def test_fill_tubings_without_flushbuffer_skips_final_flush(self):
         # A design that defines no 'flushbuffer_a' must not crash fill: the
         # post-fill flushbuffer step is skipped rather than dead-ending in

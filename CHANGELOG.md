@@ -37,6 +37,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Live fluid-wiring schematic in the GUI **Fluid** tab: a custom-painted panel
+  that draws the ibidi multiplexer's 24 ports on their physical 6×4 meander
+  grid (port 1 lower-left wired to pump_a, port 7 above port 6), the manifold
+  tree traced from each reservoir's `valve_pos`, and pump_a / sample / pump_out.
+  It overlays live state — open/closed channels, the energised flow path, each
+  pump's valve position (IN → multiplexer / OUT → sample) and syringe fill —
+  polling cached driver attributes (`multiplexer.channel_states`,
+  `pump.valve_pos` / `target_volume`) every 300 ms, so it issues no serial
+  traffic and stays live during a run. Hovering a port (or picking a reservoir
+  in the manual "Set valves" dropdown) highlights that reservoir's full
+  expected path to the pump, so the intended route can be compared against the
+  live open-valve path at a glance. Backed by new frontend-agnostic
+  `SystemService.fluid_topology()` (incl. per-reservoir `routes`) /
+  `fluid_state()`. Optional
+  `fluid.multiplexer.grid_cols` / `pump_channel` keys tune the drawn geometry
+  (default 6 / port 1). Removed a stale duplicate of the Fluid tab's
+  `_refresh_reservoirs` / `_update_route_hint` while wiring this in.
 - Per-subsystem selection: an `enabled` flag on the fluid / img / illu
   sections of an experiment design lets a subsystem be deselected. The
   builder omits deselected subsystems from the compiled Run Sequence, prunes

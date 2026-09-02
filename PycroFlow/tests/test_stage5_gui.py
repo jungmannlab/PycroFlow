@@ -2036,5 +2036,157 @@ class TestWorker(unittest.TestCase):
         self.assertIsInstance(errors[0], RuntimeError)
 
 
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestFluidSchematic(unittest.TestCase):
+    """The live fluid-wiring schematic renders topology + valve state."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_meander_layout_matches_hardware_grid(self):
+        # Port 1 lower left, port 6 lower right, port 7 one up from port 6.
+        from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+
+        cell = FluidSchematic._meander_cell
+        self.assertEqual(cell(1, 6, 4), (0, 3))    # bottom-left
+        self.assertEqual(cell(6, 6, 4), (5, 3))    # bottom-right
+        self.assertEqual(cell(7, 6, 4), (5, 2))    # one row up from port 6
+        self.assertEqual(cell(12, 6, 4), (0, 2))   # end of the second row
+
+    def test_renders_topology_and_live_state_without_error(self):
+        from PyQt6.QtGui import QPixmap
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+
+        svc = SystemService()
+        svc.load_setup('Ibidi')
+        widget = FluidSchematic()
+        widget.resize(900, 500)
+        widget.set_topology(svc.fluid_topology())
+        opened = [c in (1, 6, 7, 8) for c in range(1, 25)]
+        widget.set_state({
+            'multiplexer': {'channels': 24, 'open': opened},
+            'pump_a': {'valve': 'in', 'volume': 250.0, 'capacity': 500.0},
+            'pump_out': {'valve': 'out', 'volume': 0.0, 'capacity': 5000.0},
+        })
+        pix = QPixmap(widget.size())
+        widget.render(pix)   # exercises paintEvent; must not raise
+        self.assertFalse(pix.isNull())
+        # Robust to missing / partial data too.
+        widget.set_topology(None)
+        widget.render(pix)
+        widget.set_topology({'multiplexer': None, 'pumps': {}})
+        widget.set_state(None)
+        widget.render(pix)
+
+    def test_highlight_reservoir_marks_its_full_route(self):
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+
+        svc = SystemService()
+        svc.load_setup('Ibidi')
+        widget = FluidSchematic()
+        widget.set_topology(svc.fluid_topology())
+        # No selection -> nothing highlighted.
+        self.assertEqual(widget._active_highlight(), (None, set()))
+        # Selecting a reservoir highlights every channel on its route.
+        widget.highlight_reservoir(8)
+        rid, channels = widget._active_highlight()
+        self.assertEqual(rid, 8)
+        self.assertEqual(channels, {1, 6, 7, 8})
+        # A transient hover overrides the persistent selection.
+        widget._hover_res = 23
+        rid, channels = widget._active_highlight()
+        self.assertEqual(rid, 23)
+        self.assertEqual(channels, {1, 6, 7, 12, 13, 18, 19, 23})
+        # Clearing the selection (hover gone) highlights nothing.
+        widget._hover_res = None
+        widget.highlight_reservoir(None)
+        self.assertEqual(widget._active_highlight(), (None, set()))
+
+    def test_hovering_a_port_highlights_and_emits(self):
+        from PyQt6.QtGui import QPixmap, QMouseEvent
+        from PyQt6.QtCore import QEvent, Qt
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+
+        svc = SystemService()
+        svc.load_setup('Ibidi')
+        widget = FluidSchematic()
+        widget.resize(1000, 560)
+        widget.set_topology(svc.fluid_topology())
+        widget.render(QPixmap(widget.size()))   # populates the port hit-boxes
+
+        hovered = []
+        widget.reservoir_hovered.connect(hovered.append)
+        pos = widget._port_rects[8].center()
+        move = QMouseEvent(
+            QEvent.Type.MouseMove, pos, pos, Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier)
+        widget.mouseMoveEvent(move)
+        self.assertEqual(widget._hover_res, 8)
+        self.assertEqual(hovered, [8])
+        rid, channels = widget._active_highlight()
+        self.assertEqual((rid, channels), (8, {1, 6, 7, 8}))
+        # Leaving the widget clears the transient highlight.
+        widget.leaveEvent(QEvent(QEvent.Type.Leave))
+        self.assertIsNone(widget._hover_res)
+        self.assertEqual(hovered, [8, None])
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestFluidTabSchematic(unittest.TestCase):
+    """The Fluid tab embeds the schematic and polls live state."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_tab_reloads_topology_and_pushes_state_on_refresh(self):
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.tabs.fluid_tab import FluidTab
+
+        svc = SystemService()
+        svc.load_setup('IbidiEmulator')
+        tab = FluidTab(svc)
+        # Topology is rebuilt from the setup on refresh.
+        tab.refresh()
+        self.assertIsNotNone(tab.schematic._topo)
+        self.assertEqual(tab.schematic._topo['multiplexer']['channels'], 24)
+        # A live connection makes the polled snapshot flow to the widget.
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200},
+            'settings': {'reservoir_names': {1: 'R1', 2: 'R2'},
+                         'special_names': {}},
+        })
+        svc.set_valves(2)
+        tab._refresh_schematic_state()
+        opened = [i + 1 for i, v in
+                  enumerate(tab.schematic._state['multiplexer']['open']) if v]
+        self.assertEqual(opened, [2])
+
+    def test_reservoir_dropdown_drives_schematic_highlight(self):
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.tabs.fluid_tab import FluidTab
+
+        svc = SystemService()
+        svc.load_setup('Ibidi')
+        tab = FluidTab(svc)
+        tab.refresh()
+        # Pick a reservoir in the manual "Set valves" dropdown; the schematic
+        # highlights that reservoir's route.
+        index = tab.valve_res.findData(8)
+        self.assertGreaterEqual(index, 0)
+        tab.valve_res.setCurrentIndex(index)
+        rid, channels = tab.schematic._active_highlight()
+        self.assertEqual(rid, 8)
+        self.assertEqual(channels, {1, 6, 7, 8})
+
+
 if __name__ == "__main__":
     unittest.main()
