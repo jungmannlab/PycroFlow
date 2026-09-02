@@ -255,8 +255,8 @@ class TestMainWindow(unittest.TestCase):
         # per-subsystem status: centered, current step name in brackets
         from PyQt6.QtCore import Qt
 
-        # fluid cur=1 -> entries[1] is the 'signal' step
-        self.assertIn("fluid 1/3 (signal)", tab.step_status.text())
+        # fluid cur=1 -> entries[1] is the 'signal' step, shown as 'sync'
+        self.assertIn("fluid 1/3 (sync)", tab.step_status.text())
         self.assertTrue(
             bool(tab.step_status.alignment() & Qt.AlignmentFlag.AlignCenter)
         )
@@ -2100,17 +2100,24 @@ class TestFluidSchematic(unittest.TestCase):
         widget = FluidSchematic()
         widget.resize(900, 500)
         widget.set_topology(svc.fluid_topology())
-        labels = {rid: {'name': None, 'used': False} for rid in range(1, 25)}
-        labels[1] = {'name': 'Imager 1', 'used': True}
-        labels[8] = {'name': 'Buffer', 'used': True}
+        labels = {
+            rid: {'name': None, 'used': False, 'used_vol': 0, 'total_vol': 0}
+            for rid in range(1, 25)
+        }
+        labels[1] = {'name': 'Imager 1', 'used': True,
+                     'used_vol': 0, 'total_vol': 0}
+        labels[8] = {'name': 'Buffer', 'used': True,
+                     'used_vol': 150, 'total_vol': 600}
         widget.set_reservoir_labels(labels)
-        # Stored and used in the hover tooltip (name + unused note).
+        # Stored and used in the hover tooltip (name + unused note + volume).
         self.assertEqual(widget._res_labels[8]['name'], 'Buffer')
         widget._update_hover_tooltip(8, 8)
         self.assertIn('Buffer', widget.toolTip())
+        self.assertIn('150 µl used', widget.toolTip())
+        self.assertIn('600 µl needed', widget.toolTip())
         widget._update_hover_tooltip(2, 2)
         self.assertIn('not used', widget.toolTip())
-        # Rendering with labels must not raise (names elided to the cell).
+        # Rendering with labels + volume bars must not raise.
         widget.render(QPixmap(widget.size()))
 
     def test_highlight_reservoir_marks_its_full_route(self):

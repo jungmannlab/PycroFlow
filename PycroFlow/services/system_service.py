@@ -489,17 +489,21 @@ class SystemService:
         return sorted(getattr(self.fluid_system, 'reservoir_paths', {}) or {})
 
     def fluid_reservoir_labels(self) -> dict:
-        """Per-reservoir ``{name, used}`` for the live schematic.
+        """Per-reservoir ``{name, used, used_vol, total_vol}`` for the schematic.
 
         Combines the setup's wired reservoir ids with the connected design's
-        ``reservoir_names`` (labels) and ``reservoir_paths`` (which ids the
-        design actually routes to). Empty when no fluid system is connected —
-        the schematic then leaves every port neutral.
+        ``reservoir_names`` (labels), ``reservoir_paths`` (which ids the design
+        routes to), and the live volume counters the fluid handler keeps
+        (``reservoir_totals`` = planned inject volume, ``reservoir_used`` =
+        pumped so far). Empty when no fluid system is connected — the schematic
+        then leaves every port neutral. Reads cached attributes only (no serial
+        I/O), so it is safe to poll continuously during a run.
 
         Returns
         -------
         dict
-            ``{reservoir_id: {'name': str | None, 'used': bool}}`` over every
+            ``{reservoir_id: {'name': str | None, 'used': bool,
+            'used_vol': float µl, 'total_vol': float µl}}`` over every
             reservoir wired in the setup manifold.
         """
         fs = self.fluid_system
@@ -507,11 +511,15 @@ class SystemService:
             return {}
         names = getattr(fs, '_reservoir_names', {}) or {}
         used = set(getattr(fs, 'reservoir_paths', {}) or {})
+        totals = getattr(fs, 'reservoir_totals', {}) or {}
+        pumped = getattr(fs, 'reservoir_used', {}) or {}
         labels = {}
         for rid in self.reservoir_ids():
             labels[rid] = {
                 'name': names.get(rid) or names.get(str(rid)),
                 'used': rid in used,
+                'used_vol': float(pumped.get(rid, 0) or 0),
+                'total_vol': float(totals.get(rid, 0) or 0),
             }
         return labels
 

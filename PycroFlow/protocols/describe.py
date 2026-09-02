@@ -121,6 +121,48 @@ def describe_entry(entry, reservoir_names=None):
     return None
 
 
+def action_label(entry, reservoir_names=None):
+    """A short imperative label for a live-progress readout.
+
+    Compact form of :func:`describe_entry` (no volumes/frame counts) for the
+    Run Sequence tab's status line, e.g. ``'inject Imager 1'`` /
+    ``'acquire EGFR'`` / ``'wash'`` / ``'wait'``. An unknown ``$type`` falls
+    back to the raw type so nothing is hidden.
+
+    Parameters
+    ----------
+    entry : dict
+        A protocol entry.
+    reservoir_names : dict, optional
+        ``{reservoir_id: name}`` to name injected sources.
+    """
+    if not isinstance(entry, dict):
+        return "—"
+    type_ = entry.get("$type")
+    if type_ == "inject":
+        return "inject {}".format(
+            _reservoir_label(entry.get("reservoir_id"), reservoir_names)
+        )
+    if type_ == "pump_out":
+        return "extract"
+    if type_ == "incubate":
+        return "incubate"
+    if type_ == "acquire":
+        name = entry.get("name")
+        return "acquire {}".format(name) if name else "acquire"
+    if type_ == "wait for signal":
+        return "wait"
+    if type_ == "signal":
+        return "sync"
+    if type_ == "set power":
+        return "set laser power"
+    if type_ == "set shutter":
+        return "set shutter"
+    if type_ == "laser enable":
+        return "toggle laser"
+    return str(type_ or "—")
+
+
 #: Entry ``$type``\ s that carry narration (everything else is dropped).
 _NARRATABLE = ("inject", "pump_out", "incubate", "acquire")
 

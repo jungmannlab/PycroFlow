@@ -492,12 +492,43 @@ class TestSystemService(unittest.TestCase):
                          'special_names': {}},
         })
         labels = svc.fluid_reservoir_labels()
-        self.assertEqual(labels[1], {'name': 'Imager 1', 'used': True})
-        self.assertEqual(labels[3], {'name': 'Buffer', 'used': True})
+        self.assertEqual(labels[1]['name'], 'Imager 1')
+        self.assertTrue(labels[1]['used'])
+        self.assertEqual(labels[3]['name'], 'Buffer')
+        self.assertTrue(labels[3]['used'])
         # A wired-but-unused reservoir is present, named None, marked unused.
-        self.assertEqual(labels[2], {'name': None, 'used': False})
+        self.assertEqual(labels[2]['name'], None)
+        self.assertFalse(labels[2]['used'])
+        # No protocol assigned yet -> zero planned/used volume.
+        self.assertEqual(labels[1]['used_vol'], 0.0)
+        self.assertEqual(labels[1]['total_vol'], 0.0)
         # Not connected -> empty (schematic then stays neutral).
         self.assertEqual(SystemService().fluid_reservoir_labels(), {})
+
+    def test_reservoir_labels_track_planned_and_pumped_volume(self):
+        svc = SystemService()
+        svc.load_setup('IbidiEmulator')
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200},
+            'settings': {'reservoir_names': {1: 'Imager 1', 2: 'Buffer'},
+                         'special_names': {}},
+        })
+        # Assigning a protocol sets the per-reservoir planned totals.
+        svc.fluid_system._assign_protocol({
+            'parameters': {'max_velocity': 200},
+            'protocol_entries': [
+                {'$type': 'inject', 'reservoir_id': 1, 'volume': 300},
+                {'$type': 'inject', 'reservoir_id': 1, 'volume': 200},
+                {'$type': 'inject', 'reservoir_id': 2, 'volume': 1000},
+            ],
+        })
+        labels = svc.fluid_reservoir_labels()
+        self.assertEqual(labels[1]['total_vol'], 500.0)
+        self.assertEqual(labels[2]['total_vol'], 1000.0)
+        self.assertEqual(labels[1]['used_vol'], 0.0)
+        # Recording pumped volume shows up as used.
+        svc.fluid_system._record_used(1, 300)
+        self.assertEqual(svc.fluid_reservoir_labels()[1]['used_vol'], 300.0)
 
     def test_toggle_and_labels_survive_reservoir_resync(self):
         # sync_fluid_reservoirs re-applies a changed design live (no serial

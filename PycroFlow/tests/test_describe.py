@@ -5,7 +5,11 @@ import unittest
 
 import PycroFlow.tests  # noqa: F401  (installs hardware mocks)
 from PycroFlow.protocols import ProtocolBuilder
-from PycroFlow.protocols.describe import describe_entry, describe_protocol
+from PycroFlow.protocols.describe import (
+    action_label,
+    describe_entry,
+    describe_protocol,
+)
 
 
 def _exchange_protocol():
@@ -27,6 +31,32 @@ def _exchange_protocol():
         "img": {"settings": {"t_exp": 100, "frames": 30000}},
     }
     return design, ProtocolBuilder().build_protocol(design)
+
+
+class TestActionLabel(unittest.TestCase):
+
+    def test_compact_labels_for_the_status_line(self):
+        self.assertEqual(
+            action_label(
+                {"$type": "inject", "reservoir_id": 1}, {1: "Imager 1"}
+            ),
+            "inject Imager 1",
+        )
+        self.assertEqual(
+            action_label({"$type": "inject", "reservoir_id": 7}, {}),
+            "inject reservoir 7",
+        )
+        self.assertEqual(
+            action_label({"$type": "acquire", "name": "EGFR"}), "acquire EGFR"
+        )
+        self.assertEqual(action_label({"$type": "pump_out"}), "extract")
+        self.assertEqual(action_label({"$type": "wait for signal"}), "wait")
+        self.assertEqual(action_label({"$type": "signal"}), "sync")
+        self.assertEqual(action_label({"$type": "incubate"}), "incubate")
+
+    def test_unknown_type_falls_back_to_raw(self):
+        self.assertEqual(action_label({"$type": "mystery"}), "mystery")
+        self.assertEqual(action_label("not a dict"), "—")
 
 
 class TestDescribeEntry(unittest.TestCase):

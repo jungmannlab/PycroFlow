@@ -36,6 +36,8 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import QWidget, QSizePolicy
 
+from PycroFlow.protocols.timing import format_volume
+
 # Palette (explicit so it reads the same under any Qt theme).
 _OPEN = QColor(46, 160, 67)  # flowing
 _CLOSED = QColor(70, 74, 82)  # shut
@@ -50,6 +52,8 @@ _IDLE = QColor(96, 100, 108)  # an idle leg
 _TEXT = QColor(228, 230, 234)
 _MUTED = QColor(150, 154, 162)
 _HILITE = QColor(90, 200, 235)  # hovered / selected reservoir path
+_VOLBAR = QColor(64, 132, 214)  # used-volume progress on a reservoir port
+_VOLBAR_TRACK = QColor(24, 25, 28)
 
 
 class FluidSchematic(QWidget):
@@ -226,6 +230,14 @@ class FluidSchematic(QWidget):
             and not label_info.get("used", True)
         ):
             suffix = " — not used by the loaded design"
+        # Planned vs pumped volume, when the design plans injects from here.
+        total_vol = label_info.get("total_vol") or 0
+        if total_vol > 0:
+            used_vol = label_info.get("used_vol") or 0
+            pct = int(round(100 * used_vol / total_vol))
+            suffix += " Volume: {} used / {} needed ({}%).".format(
+                format_volume(used_vol), format_volume(total_vol), pct
+            )
         self.setToolTip(
             "Reservoir {}: opens ibidi channels {} (all others closed); "
             "port {} is its tap.{}".format(
@@ -422,6 +434,30 @@ class FluidSchematic(QWidget):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
             "{}".format(channel),
         )
+        # Live used-volume bar along the bottom, for a reservoir the design
+        # plans to inject from (total_vol > 0): fills as it is pumped.
+        total_vol = (label_info or {}).get("total_vol") or 0
+        bottom_reserve = 0.0
+        if total_vol > 0 and not unused:
+            used_vol = (label_info or {}).get("used_vol") or 0
+            frac = max(0.0, min(1.0, used_vol / total_vol))
+            bar_h = 4.0
+            bottom_reserve = bar_h + 3
+            track = QRectF(
+                r.left() + 3, r.bottom() - bar_h - 2, r.width() - 6, bar_h
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(_VOLBAR_TRACK))
+            painter.drawRoundedRect(track, 2, 2)
+            if frac > 0:
+                painter.setBrush(QBrush(_VOLBAR))
+                painter.drawRoundedRect(
+                    QRectF(
+                        track.left(), track.top(),
+                        track.width() * frac, track.height()
+                    ),
+                    2, 2,
+                )
         if is_pump:
             painter.setPen(QPen(_PUMP_PORT))
             painter.drawText(
@@ -429,7 +465,7 @@ class FluidSchematic(QWidget):
                     r.left(),
                     r.bottom() - r.height() * 0.42,
                     r.width(),
-                    r.height() * 0.4,
+                    r.height() * 0.4 - bottom_reserve,
                 ),
                 Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
                 "→ pump_a",

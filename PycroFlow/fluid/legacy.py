@@ -330,6 +330,37 @@ class LegacyArchitecture(AbstractSystem):
     def _assign_protocol(self, protocol):
         self.protocol = protocol["protocol_entries"]
         self.parameters = protocol["parameters"]
+        # Per-reservoir planned volume (sum of the protocol's inject volumes)
+        # and the running total pumped, for the fluid live view. Assigning a
+        # protocol is a fresh plan, so the used counter resets.
+        self.reservoir_totals = self._sum_inject_volumes(self.protocol)
+        self.reservoir_used = {}
+
+    @staticmethod
+    def _sum_inject_volumes(entries):
+        """Sum ``inject`` volumes per ``reservoir_id`` over protocol entries."""
+        totals = {}
+        for entry in entries or []:
+            if not isinstance(entry, dict) or entry.get("$type") != "inject":
+                continue
+            rid = entry.get("reservoir_id")
+            try:
+                vol = float(entry.get("volume") or 0)
+            except (TypeError, ValueError):
+                continue
+            totals[rid] = totals.get(rid, 0.0) + vol
+        return totals
+
+    def _record_used(self, reservoir_id, volume):
+        """Add ``volume`` µl to the running total pumped from a reservoir."""
+        try:
+            vol = float(volume or 0)
+        except (TypeError, ValueError):
+            return
+        used = getattr(self, "reservoir_used", None)
+        if used is None:
+            used = self.reservoir_used = {}
+        used[reservoir_id] = used.get(reservoir_id, 0.0) + vol
 
     def _assign_tubing_config(self, config):
         self.tubing_config = TubingConfig(config)
@@ -970,6 +1001,7 @@ class LegacyArchitecture(AbstractSystem):
                     self._inject(
                         vol, delay=delay, extractionfactor=extractionfactor
                     )
+                    self._record_used(reservoir_id, vol)
                 self.last_protocol_entry = i
             elif self.parameters["mode"] == "tubing_flush":
                 # # this way, we flush (1+flushfactor)
@@ -1066,6 +1098,7 @@ class LegacyArchitecture(AbstractSystem):
                 delay=delay,
                 extractionfactor=extractionfactor,
             )
+            self._record_used(pentry["reservoir_id"], injection_volume)
             # afterwards, flush in buffer to get the pentry
             # volume to the sample
             # self._set_valves(self.special_names['flushbuffer_a'])

@@ -42,6 +42,7 @@ from PycroFlow.protocols.timing import (
     estimate_remaining,
     format_duration,
 )
+from PycroFlow.protocols.describe import action_label
 
 # The subsystems, in display order.
 _SYSTEMS = ("fluid", "img", "illu")
@@ -136,6 +137,10 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # Human-readable description of each round (one per imaging acquire),
         # used to annotate the "Round k/N" status line.
         self._round_names = []
+        # {reservoir_id: name} from the loaded design, to name injected
+        # reservoirs in the live action readout ({} when a bare Run Sequence
+        # was loaded without a design).
+        self._reservoir_names = {}
         # Per-step logical "time" (longest-path level over the signal/wait
         # happens-before graph), used to correlate concurrent steps across
         # systems. {system: [level per entry]}.
@@ -443,6 +448,13 @@ class ExperimentTab(YamlDropMixin, QWidget):
             for e in self._entries.get("img", [])
             if isinstance(e, dict) and e.get("$type") == "acquire"
         ]
+        design = self._service.experiment_design or {}
+        self._reservoir_names = (
+            ((design.get("fluid") or {}).get("settings") or {}).get(
+                "reservoir_names"
+            )
+            or {}
+        )
         self._durations = estimate_durations(protocol)
         self._total_duration = estimate_total_duration(protocol)
         self._overall_sw.reset()
@@ -708,10 +720,14 @@ class ExperimentTab(YamlDropMixin, QWidget):
         return "{} {:.0f}/{:.0f} s".format(name, cur, tot)
 
     def _step_name(self, system, cur):
-        """``$type`` of the step a subsystem is currently on (or 'done')."""
+        """Human-readable action a subsystem is currently on (or 'done').
+
+        E.g. ``'inject Imager 1'`` / ``'acquire EGFR'`` / ``'wait'`` instead of
+        the raw ``$type``, so the status line reads as what is happening now.
+        """
         entries = self._entries.get(system, [])
         if 0 <= cur < len(entries) and isinstance(entries[cur], dict):
-            return entries[cur].get("$type", "?")
+            return action_label(entries[cur], self._reservoir_names)
         if entries and cur >= len(entries):
             return "done"
         return "—"

@@ -140,6 +140,20 @@ class LegacyArchitectureTest(unittest.TestCase):
         self.la.execute_protocol_entry(0)
         self.assertGreater(len(self.fake.command_log), before)
 
+    def test_assign_protocol_sums_totals_and_resets_used(self):
+        # entry 0 injects 10 µl from reservoir 0 (see INJECT_PROTOCOL).
+        self.assertEqual(self.la.reservoir_totals.get(0), 10)
+        self.assertEqual(self.la.reservoir_used, {})
+
+    def test_inject_accumulates_used_volume(self):
+        self.la.parameters["mode"] = "tubing_ignore"
+        self.la.execute_protocol_entry(0)
+        # reservoir 0 injected 10 µl -> tracked as used.
+        self.assertEqual(self.la.reservoir_used.get(0), 10)
+        # A second execution accumulates.
+        self.la.execute_protocol_entry(0)
+        self.assertEqual(self.la.reservoir_used.get(0), 20)
+
     def test_execute_protocol_entry_tubing_stack_inject(self):
         self.la.parameters["mode"] = "tubing_stack"
         before = len(self.fake.command_log)

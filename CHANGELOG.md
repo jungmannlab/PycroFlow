@@ -83,6 +83,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The Fluid live view now tracks **per-reservoir volume**: each in-use port
+  shows a fill bar of volume pumped so far vs. the total the design plans to
+  inject, with exact figures (`X used / Y needed (Z%)`) in the hover tooltip.
+  The fluid handler accumulates pumped volume per reservoir as inject steps run
+  (`reservoir_used`) and derives the plan from the assigned protocol
+  (`reservoir_totals`); `SystemService.fluid_reservoir_labels()` exposes both,
+  read cache-only so the schematic stays live during a run without serial I/O.
+- The Run Sequence progress readout now names the **current action** in plain
+  language instead of the raw `$type`: e.g. `inject Imager 1`, `acquire EGFR`,
+  `extract`, `wait`, `sync` (reservoir names come from the loaded design; a
+  bare Run Sequence falls back to `reservoir <id>`). This joins the existing
+  `Round k/N: <round name>` prefix (round names are the acquire steps' labels,
+  e.g. `R1` / `EGFR barcode (pre)` / `A1 RESI round 2`), so the status line now
+  reads e.g. `Round 2/5: EGFR   fluid 7/20 (inject Imager 1)   img 2/5 (acquire
+  EGFR)`. Backed by `protocols.describe.action_label`.
 - Experiment Design tab now previews **what a design will do**: the compiled
   sequence of events (e.g. "Pump 101 µl of Imager 1 into the sample → Acquire
   30000 frames → Pump 501 µl of Buffer …") and the **total reagent volumes**
