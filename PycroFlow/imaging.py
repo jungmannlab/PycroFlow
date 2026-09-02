@@ -355,6 +355,9 @@ class ImagingSystem(AbstractSystem):
         self.studio.get_application().refresh_gui()
         if self.protocol["parameters"].get("show_progress"):
             self.probar = ProgressBar("Acquisition", n_frames)
+        # Bound up front: with show_display off, the viewer is never fetched,
+        # and the close check below must still see it as absent.
+        viewer = None
         with Acquisition(
             directory=acq_dir,
             name=acq_name,

@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not import. This unblocks the hosted `Unit Tests (hosted)` job, which
   installs only `.[dev,gui]` (no `[hardware]` SDKs). All three are wheel-only,
   so the base install stays wheel-only.
+- Exchange builder no longer crashes compiling a design that omits (or
+  deselects) the `illu` block: `create_steps_exchange` read the illumination
+  settings via `config.get("illu", {}).get("settings")`, which raised
+  `AttributeError` when `illu` was present-but-`None`. Now uses
+  `(config.get("illu") or {})`, matching the MERPAINT builder.
+- `imaging.record_movie` no longer raises `UnboundLocalError` on `viewer` when
+  an acquisition runs with `show_display` off — `viewer` is now bound to
+  `None` before the acquisition block so the post-acquisition close check is
+  safe.
 
 ### Added
 

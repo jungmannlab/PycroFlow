@@ -555,7 +555,7 @@ class ProtocolBuilder:
             if darkframes
             else None
         )
-        illusttg = config.get("illu", {}).get("settings")
+        illusttg = (config.get("illu") or {}).get("settings")
 
         # check that all mentioned sources acqually exist
         assert experiment["wash_buffer"] in reservoirs.values()
