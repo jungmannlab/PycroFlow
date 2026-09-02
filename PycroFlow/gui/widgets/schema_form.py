@@ -867,12 +867,19 @@ class SchemaForm(QWidget):
                 hint = QLabel(unit)
                 hint.setStyleSheet("color: gray;")
                 editor.add_suffix(hint)
-            if meta.get("tooltip"):
-                editor.setToolTip(meta["tooltip"])
+            tooltip = meta.get("tooltip")
+            if tooltip:
+                editor.setToolTip(tooltip)
             if getattr(editor, "is_block", False):
                 form.addRow(editor)
             else:
-                form.addRow(alias, editor)
+                # Build the label as a widget (not a bare string) so the
+                # tooltip is shown when hovering the parameter *name*, which is
+                # the natural place to ask "what does this do?".
+                label = QLabel(alias)
+                if tooltip:
+                    label.setToolTip(tooltip)
+                form.addRow(label, editor)
 
     def field_editor(self, alias):
         """Return the editor widget for a top-level field (None if absent)."""

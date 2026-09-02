@@ -474,9 +474,47 @@ class TestSystemService(unittest.TestCase):
         # Each reservoir's full ordered route is exposed for path highlight.
         self.assertEqual(mux['routes'][8], [1, 6, 12, 8])
         self.assertEqual(
-            mux['routes'][23], [1, 6, 7, 12, 13, 18, 24, 23])
+            mux['routes'][23], [1, 6, 12, 7, 13, 18, 24, 23])
+        # The old meander-numbering leftover (a direct 6->7 link) is gone.
+        self.assertNotIn((6, 7), mux['edges'])
+        self.assertNotIn((7, 6), mux['edges'])
         self.assertTrue(topo['pumps']['pump_a'])
         self.assertTrue(topo['pumps']['pump_out'])
+
+    def test_fluid_reservoir_labels_names_and_usage(self):
+        # After connecting, the labels expose the design's names and mark
+        # which setup-wired reservoirs the design actually uses.
+        svc = SystemService()
+        svc.load_setup('IbidiEmulator')
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200},
+            'settings': {'reservoir_names': {1: 'Imager 1', 3: 'Buffer'},
+                         'special_names': {}},
+        })
+        labels = svc.fluid_reservoir_labels()
+        self.assertEqual(labels[1], {'name': 'Imager 1', 'used': True})
+        self.assertEqual(labels[3], {'name': 'Buffer', 'used': True})
+        # A wired-but-unused reservoir is present, named None, marked unused.
+        self.assertEqual(labels[2], {'name': None, 'used': False})
+        # Not connected -> empty (schematic then stays neutral).
+        self.assertEqual(SystemService().fluid_reservoir_labels(), {})
+
+    def test_toggle_and_labels_survive_reservoir_resync(self):
+        # sync_fluid_reservoirs re-applies a changed design live (no serial
+        # reconnect) and refreshes the schematic's names/usage.
+        svc = SystemService()
+        svc.load_setup('IbidiEmulator')
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200},
+            'settings': {'reservoir_names': {1: 'A'}, 'special_names': {}},
+        })
+        self.assertFalse(svc.fluid_reservoir_labels()[2]['used'])
+        # Edit the design to add reservoir 2, then re-sync (as Translate does).
+        svc.sync_fluid_reservoirs({'settings': {
+            'reservoir_names': {1: 'A', 2: 'B'}, 'special_names': {}}})
+        labels = svc.fluid_reservoir_labels()
+        self.assertTrue(labels[2]['used'])
+        self.assertEqual(labels[2]['name'], 'B')
 
     def test_fluid_topology_none_without_setup_and_no_mux(self):
         svc = SystemService()

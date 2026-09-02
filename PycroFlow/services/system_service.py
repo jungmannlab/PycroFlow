@@ -259,7 +259,15 @@ class SystemService:
         self.fluid_system._assign_protocol(
             {"parameters": dict(parameters), "protocol_entries": []}
         )
+        # Remember the design's reservoir names so the live schematic can
+        # label ports and mark which reservoirs the design actually uses.
+        self._store_reservoir_names(settings.get("reservoir_names"))
         return self.fluid_system
+
+    def _store_reservoir_names(self, reservoir_names) -> None:
+        """Stash the design's ``{id: name}`` on the fluid system (for labels)."""
+        if self.fluid_system is not None:
+            self.fluid_system._reservoir_names = dict(reservoir_names or {})
 
     def connect_imaging(self, imaging_config=None):
         """Build and connect the imaging system.
@@ -468,6 +476,8 @@ class SystemService:
 
         hamilton, _ = assemble_hamilton_config(self._setup, settings)
         update(hamilton)
+        # Keep the schematic's port names/usage in step with the new design.
+        self._store_reservoir_names(settings.get('reservoir_names'))
         logger.debug("fluid reservoirs re-synced from the design: {}".format(
             sorted(getattr(self.fluid_system, 'reservoir_paths', {}))))
         return True
@@ -477,6 +487,33 @@ class SystemService:
         if self.fluid_system is None:
             return []
         return sorted(getattr(self.fluid_system, 'reservoir_paths', {}) or {})
+
+    def fluid_reservoir_labels(self) -> dict:
+        """Per-reservoir ``{name, used}`` for the live schematic.
+
+        Combines the setup's wired reservoir ids with the connected design's
+        ``reservoir_names`` (labels) and ``reservoir_paths`` (which ids the
+        design actually routes to). Empty when no fluid system is connected —
+        the schematic then leaves every port neutral.
+
+        Returns
+        -------
+        dict
+            ``{reservoir_id: {'name': str | None, 'used': bool}}`` over every
+            reservoir wired in the setup manifold.
+        """
+        fs = self.fluid_system
+        if fs is None:
+            return {}
+        names = getattr(fs, '_reservoir_names', {}) or {}
+        used = set(getattr(fs, 'reservoir_paths', {}) or {})
+        labels = {}
+        for rid in self.reservoir_ids():
+            labels[rid] = {
+                'name': names.get(rid) or names.get(str(rid)),
+                'used': rid in used,
+            }
+        return labels
 
     def reservoir_route(self, reservoir_id) -> dict:
         """Return the ``{valve address: position}`` map for a reservoir.

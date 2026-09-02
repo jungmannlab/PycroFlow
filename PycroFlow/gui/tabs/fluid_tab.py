@@ -302,6 +302,9 @@ class FluidTab(QWidget):
         """Push the latest cached valve/syringe snapshot to the schematic."""
         try:
             self.schematic.set_state(self._svc.fluid_state())
+            # Reservoir names + which the design uses (cheap; no serial I/O).
+            self.schematic.set_reservoir_labels(
+                self._svc.fluid_reservoir_labels())
         except Exception:  # pragma: no cover - never let the timer die
             self.schematic.set_state(None)
 

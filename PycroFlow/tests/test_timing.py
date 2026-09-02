@@ -129,5 +129,49 @@ class TestFormatDuration(unittest.TestCase):
         self.assertEqual(format_duration(90000), "1d 1h")
 
 
+class TestVolumes(unittest.TestCase):
+
+    def test_sums_injects_per_reservoir_and_waste(self):
+        from PycroFlow.protocols.timing import estimate_volumes
+
+        protocol = {
+            "fluid": {
+                "protocol_entries": [
+                    {"$type": "inject", "reservoir_id": 1, "volume": 100},
+                    {"$type": "inject", "reservoir_id": 1, "volume": 50},
+                    {"$type": "inject", "reservoir_id": 2, "volume": 500},
+                    {"$type": "pump_out", "volume": 600},
+                    {"$type": "signal", "value": "x"},  # ignored
+                ]
+            }
+        }
+        vols = estimate_volumes(protocol)
+        self.assertEqual(vols["per_reservoir"], {1: 150.0, 2: 500.0})
+        self.assertEqual(vols["total_injected"], 650.0)
+        self.assertEqual(vols["total_waste"], 600.0)
+
+    def test_empty_protocol_is_zero(self):
+        from PycroFlow.protocols.timing import estimate_volumes
+
+        vols = estimate_volumes({})
+        self.assertEqual(vols["per_reservoir"], {})
+        self.assertEqual(vols["total_injected"], 0.0)
+
+    def test_example_protocol_has_positive_volume(self):
+        from PycroFlow.protocols.timing import estimate_volumes
+
+        vols = estimate_volumes(_example_protocol())
+        self.assertGreater(vols["total_injected"], 0)
+
+    def test_format_volume(self):
+        from PycroFlow.protocols.timing import format_volume
+
+        self.assertEqual(format_volume(0), "0 µl")
+        self.assertEqual(format_volume(-5), "0 µl")
+        self.assertEqual(format_volume(750), "750 µl")
+        self.assertEqual(format_volume(1000), "1 ml")
+        self.assertEqual(format_volume(2500), "2.50 ml")
+
+
 if __name__ == "__main__":
     unittest.main()

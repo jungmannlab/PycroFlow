@@ -131,6 +131,69 @@ def estimate_remaining(durations, current):
     return remaining
 
 
+def estimate_volumes(protocol):
+    """Total liquid volumes a compiled protocol consumes, in µl.
+
+    Sums the fluid ``inject`` volumes per source reservoir (what must be
+    loaded) and the ``pump_out`` volumes (waste extracted). ``inject`` also
+    drives simultaneous extraction, so the waste total is a lower bound; it is
+    reported separately rather than conflated with reagent use.
+
+    Parameters
+    ----------
+    protocol : dict
+        A compiled Run Sequence protocol (see :func:`estimate_durations`).
+
+    Returns
+    -------
+    dict
+        ``{'per_reservoir': {reservoir_id: µl}, 'total_injected': µl,
+        'total_waste': µl}``. ``per_reservoir`` omits reservoirs never
+        injected; keys are the ids used in the fluid entries.
+    """
+    per_reservoir = {}
+    total_injected = 0.0
+    total_waste = 0.0
+    fluid = (protocol or {}).get("fluid")
+    entries = fluid.get("protocol_entries") if isinstance(fluid, dict) else None
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        type_ = entry.get("$type")
+        try:
+            vol = float(entry.get("volume") or 0)
+        except (TypeError, ValueError):
+            continue
+        if type_ == "inject":
+            rid = entry.get("reservoir_id")
+            per_reservoir[rid] = per_reservoir.get(rid, 0.0) + vol
+            total_injected += vol
+        elif type_ == "pump_out":
+            total_waste += vol
+    return {
+        "per_reservoir": per_reservoir,
+        "total_injected": total_injected,
+        "total_waste": total_waste,
+    }
+
+
+def format_volume(microliters):
+    """Compact human-readable volume, e.g. ``'750 µl'`` / ``'2.5 ml'``.
+
+    Falls back to ``'0 µl'`` for zero/negative input.
+    """
+    microliters = max(float(microliters or 0), 0.0)
+    if microliters <= 0:
+        return "0 µl"
+    if microliters < 1000:
+        return "{:d} µl".format(int(round(microliters)))
+    ml = microliters / 1000.0
+    # Whole millilitres drop the decimals; otherwise show two places.
+    if abs(ml - round(ml)) < 1e-9:
+        return "{:d} ml".format(int(round(ml)))
+    return "{:.2f} ml".format(ml)
+
+
 def format_duration(seconds):
     """Compact human-readable duration, e.g. ``'2h 5m'`` / ``'45s'``.
 

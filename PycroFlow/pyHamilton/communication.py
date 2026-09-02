@@ -60,6 +60,12 @@ class SerialBus:
         self.lock = threading.Lock()
 
     def initialize(self, comm_port, baudrate):
+        # Release any port this bus already holds before opening a new one.
+        # Without this, a reconnect (e.g. re-applying a changed design) would
+        # abandon the previous still-open handle and the fresh open() would
+        # fail with the port "already occupied" — the exact symptom when a
+        # disconnect was skipped or an earlier connect half-completed.
+        self.disconnect()
         self.ser = serial.Serial()
         self.ser.port = self.com_port_prefix + str(comm_port)
         self.ser.baudrate = baudrate
@@ -75,8 +81,14 @@ class SerialBus:
             logger.debug("Open: " + self.ser.portstr)
 
     def disconnect(self):
-        if self.ser is not None and self.ser.isOpen():
-            self.ser.close()
+        if self.ser is not None:
+            try:
+                if self.ser.isOpen():
+                    self.ser.close()
+            finally:
+                # Drop the handle so the OS frees the port and a later
+                # initialize() starts from a clean slate.
+                self.ser = None
 
     def encode_command(self, message):
         """Send ``message`` followed by CRLF, log the response. Does NOT

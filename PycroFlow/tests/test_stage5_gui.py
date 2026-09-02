@@ -1685,7 +1685,14 @@ class TestExperimentDesignTab(unittest.TestCase):
         self.assertFalse(hasattr(tab, "estimate_btn"))
         tab.load_design_path(path)
         tab._recompute_estimate()  # fire the debounced recompute directly
-        self.assertIn("Estimated duration: ~", tab.estimate_label.text())
+        text = tab.estimate_label.text()
+        self.assertIn("Estimated: ~", text)
+        # Total reagent volume now rides alongside the duration.
+        self.assertIn("reagents", text)
+        # The folded preview lists the volumes and the event sequence.
+        preview = tab.preview_text.toPlainText()
+        self.assertIn("Volumes required:", preview)
+        self.assertIn("Sequence of events:", preview)
 
     def test_incomplete_design_estimate_is_graceful(self):
         from PycroFlow.services import ExperimentService
@@ -2082,6 +2089,29 @@ class TestFluidSchematic(unittest.TestCase):
         widget.set_topology({'multiplexer': None, 'pumps': {}})
         widget.set_state(None)
         widget.render(pix)
+
+    def test_reservoir_labels_render_names_and_dim_unused(self):
+        from PyQt6.QtGui import QPixmap
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+
+        svc = SystemService()
+        svc.load_setup('Ibidi')
+        widget = FluidSchematic()
+        widget.resize(900, 500)
+        widget.set_topology(svc.fluid_topology())
+        labels = {rid: {'name': None, 'used': False} for rid in range(1, 25)}
+        labels[1] = {'name': 'Imager 1', 'used': True}
+        labels[8] = {'name': 'Buffer', 'used': True}
+        widget.set_reservoir_labels(labels)
+        # Stored and used in the hover tooltip (name + unused note).
+        self.assertEqual(widget._res_labels[8]['name'], 'Buffer')
+        widget._update_hover_tooltip(8, 8)
+        self.assertIn('Buffer', widget.toolTip())
+        widget._update_hover_tooltip(2, 2)
+        self.assertIn('not used', widget.toolTip())
+        # Rendering with labels must not raise (names elided to the cell).
+        widget.render(QPixmap(widget.size()))
 
     def test_highlight_reservoir_marks_its_full_route(self):
         from PycroFlow.services import SystemService

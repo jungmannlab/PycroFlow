@@ -62,6 +62,24 @@ class TestExperimentDesignSchema(unittest.TestCase):
         # Unitless fields report None.
         self.assertIsNone(u(FluidParameters, "extractionfactor"))
 
+    def test_key_fields_carry_tooltips(self):
+        from PycroFlow.schemas.experiment_design import (
+            field_meta,
+            ExchangeExperiment,
+            FluidParameters,
+            FluidSettings,
+        )
+
+        def tip(model, field):
+            return field_meta(model.model_fields[field]).get("tooltip")
+
+        # Volumes / velocities / experiment fields explain themselves on hover.
+        self.assertIn("reagent", tip(FluidSettings, "vol_reagent").lower())
+        self.assertTrue(tip(FluidSettings, "vol_wash"))
+        self.assertTrue(tip(FluidParameters, "extractionfactor"))
+        self.assertTrue(tip(FluidParameters, "max_velocity"))
+        self.assertIn("wash", tip(ExchangeExperiment, "wash_buffer").lower())
+
     def test_fluid_settings_reordered_and_wash_buffers_removed(self):
         from PycroFlow.schemas.experiment_design import FluidSettings
 

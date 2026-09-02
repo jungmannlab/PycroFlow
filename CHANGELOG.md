@@ -43,8 +43,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an acquisition runs with `show_display` off — `viewer` is now bound to
   `None` before the acquisition block so the post-acquisition close check is
   safe.
+- Reconnecting the Hamilton fluid bus no longer fails with the serial port
+  "already occupied". `SerialBus.initialize` now releases any port it already
+  holds before opening a new one (and `disconnect` drops the handle), so
+  re-applying a changed design — or reconnecting after switching setups — works
+  without restarting the GUI. A changed design's reservoirs are also applied
+  live on **Translate** (via `update_reservoirs`, no serial reconnect needed).
+- Removed a leftover `6 → 7` connector in the ibidi schematic: it came from
+  reservoirs 19–23 whose `Ibidi.yaml` routes still listed `6, 7` adjacent (a
+  meander-numbering remnant) rather than `6, 12, 7` like the others. The routes
+  are reordered to the real tubing path (channel order does not affect
+  routing), so the wiring tree is consistent.
 
 ### Added
+
+- Experiment Design tab now previews **what a design will do**: the compiled
+  sequence of events (e.g. "Pump 101 µl of Imager 1 into the sample → Acquire
+  30000 frames → Pump 501 µl of Buffer …") and the **total reagent volumes**
+  required (per reservoir + grand total, plus waste extracted), in a foldable
+  "Sequence & volumes" panel. The total reagent volume also rides alongside the
+  live duration estimate. Backed by pure helpers `protocols.describe`
+  (`describe_protocol`) and `protocols.timing` (`estimate_volumes` /
+  `format_volume`), both read from the compiled Run Sequence so they work for
+  every experiment type.
+- Hover tooltips on the Experiment Design parameters explaining what each does
+  (volumes, velocities, `extractionfactor`, wash buffers, imagers, laser
+  power, …). The schema-driven form now shows the tooltip on the parameter
+  **label**, not just the input, so hovering the name answers "what is this?".
+- The fluid schematic now shows each reservoir's **name** (from the design) on
+  its port and **dims reservoirs the loaded design does not use**, so it is
+  clear at a glance which reservoirs are in play. Backed by
+  `SystemService.fluid_reservoir_labels()`.
+
+- Live fluid-wiring schematic in the GUI **Fluid** tab: a custom-painted panel
+  that draws the ibidi multiplexer's 24 ports on their physical 6×4 grid
+  (numbered left-to-right, bottom-to-top: port 1 lower-left wired to pump_a,
+  port 7 above port 1), the meandered manifold tubing traced as edges from
+  each reservoir's `valve_pos`, and pump_a / sample / pump_out.
+  It overlays live state — open/closed channels, the energised flow path, each
+  pump's valve position (IN → multiplexer / OUT → sample) and syringe fill —
+  polling cached driver attributes (`multiplexer.channel_states`,
+  `pump.valve_pos` / `target_volume`) every 300 ms, so it issues no serial
+  traffic and stays live during a run. Hovering a port (or picking a reservoir
+  in the manual "Set valves" dropdown) highlights that reservoir's full
 
 - Live fluid-wiring schematic in the GUI **Fluid** tab: a custom-painted panel
   that draws the ibidi multiplexer's 24 ports on their physical 6×4 grid

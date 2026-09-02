@@ -98,11 +98,11 @@ fluid:
     - {id: 17, valve_pos: {ibidi: [1, 6, 12, 7, 13, 17], 1: in}}
     - {id: 18,  valve_pos: {ibidi: [1, 6, 12, 7, 13, 18],  1: in}}
     - {id: 24,  valve_pos: {ibidi: [1, 6, 12, 7, 13, 18, 24],  1: in}}
-    - {id: 23, valve_pos: {ibidi: [1, 6, 7, 12, 13, 18, 24, 23], 1: in}}
-    - {id: 22, valve_pos: {ibidi: [1, 6, 7, 12, 13, 18, 24, 22], 1: in}}
-    - {id: 21, valve_pos: {ibidi: [1, 6, 7, 12, 13, 18, 24, 21], 1: in}}
-    - {id: 20, valve_pos: {ibidi: [1, 6, 7, 12, 13, 18, 24, 20], 1: in}}
-    - {id: 19, valve_pos: {ibidi: [1, 6, 7, 12, 13, 18, 24, 19], 1: in}}
+    - {id: 23, valve_pos: {ibidi: [1, 6, 12, 7, 13, 18, 24, 23], 1: in}}
+    - {id: 22, valve_pos: {ibidi: [1, 6, 12, 7, 13, 18, 24, 22], 1: in}}
+    - {id: 21, valve_pos: {ibidi: [1, 6, 12, 7, 13, 18, 24, 21], 1: in}}
+    - {id: 20, valve_pos: {ibidi: [1, 6, 12, 7, 13, 18, 24, 20], 1: in}}
+    - {id: 19, valve_pos: {ibidi: [1, 6, 12, 7, 13, 18, 24, 19], 1: in}}
   # Tubing volumes (ul) — EDIT to your measured values (run a tubing
   # calibration). With the multiplexer each reservoir connects directly to
   # pump_a: one segment per reservoir plus the pump->sample / pump->waste legs.

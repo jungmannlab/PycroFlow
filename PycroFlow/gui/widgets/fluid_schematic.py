@@ -32,6 +32,7 @@ from PyQt6.QtGui import (
     QPen,
     QBrush,
     QPolygonF,
+    QFontMetrics,
 )
 from PyQt6.QtWidgets import QWidget, QSizePolicy
 
@@ -68,6 +69,10 @@ class FluidSchematic(QWidget):
         super().__init__(parent)
         self._topo = None
         self._state = None
+        # {reservoir_id: {'name': str|None, 'used': bool}} from the connected
+        # design; drives port names and the dimmed "unused" look. Empty ->
+        # every reservoir drawn neutral (no design connected yet).
+        self._res_labels = {}
         # Route highlighting: a persistent "selected" reservoir (e.g. the tab's
         # dropdown) and a transient "hovered" one; hover wins while present.
         self._selected_res = None
@@ -98,6 +103,11 @@ class FluidSchematic(QWidget):
     def set_state(self, state):
         """Set the live valve/syringe snapshot (``fluid_state``); repaint."""
         self._state = state
+        self.update()
+
+    def set_reservoir_labels(self, labels):
+        """Set ``{id: {name, used}}`` for port names + unused dimming."""
+        self._res_labels = labels or {}
         self.update()
 
     def highlight_reservoir(self, reservoir_id):
@@ -206,12 +216,23 @@ class FluidSchematic(QWidget):
             )
             return
         route = self._routes().get(rid, [])
+        label_info = self._res_labels.get(rid) or {}
+        name = label_info.get("name")
+        who = "R{} ({})".format(rid, name) if name else "R{}".format(rid)
+        suffix = ""
+        if (
+            self._res_labels
+            and label_info
+            and not label_info.get("used", True)
+        ):
+            suffix = " — not used by the loaded design"
         self.setToolTip(
-            "Reservoir R{}: opens ibidi channels {} (all others closed); "
-            "port {} is its tap.".format(
-                rid,
+            "Reservoir {}: opens ibidi channels {} (all others closed); "
+            "port {} is its tap.{}".format(
+                who,
                 ", ".join(str(c) for c in route),
                 route[-1] if route else channel,
+                suffix,
             )
         )
 
@@ -346,24 +367,49 @@ class FluidSchematic(QWidget):
             fill = _CLOSED
         else:
             fill = _UNKNOWN
+        rid = info.get("reservoir")
+        label_info = self._res_labels.get(rid) if rid is not None else None
+        # A reservoir the connected design does not use is drawn dimmed.
+        unused = (
+            bool(self._res_labels)
+            and label_info is not None
+            and not label_info.get("used", True)
+        )
         painter.setBrush(QBrush(fill))
         pen = QPen(
             _PUMP_PORT if is_pump else _PORT_EDGE, 2.4 if is_pump else 1.0
         )
         painter.setPen(pen)
         painter.drawRoundedRect(r, 4, 4)
+        if unused:
+            # Darken the cell to read as "not part of this experiment".
+            painter.setBrush(QBrush(QColor(20, 21, 24, 150)))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(r, 4, 4)
         if state is None:
             painter.setPen(QPen(QColor(90, 90, 90), 1, Qt.PenStyle.DotLine))
             painter.drawLine(r.topLeft(), r.bottomRight())
 
-        rid = info.get("reservoir")
-        primary = "R{}".format(rid) if rid is not None else ""
-        # Primary label (reservoir tapped here), channel number small above.
+        # Primary label: the reservoir's name if the design gave one, else its
+        # id; channel number small in the corner. Names use a smaller font and
+        # are elided to the cell width so they never spill over the port.
+        name = (label_info or {}).get("name")
         f = painter.font()
-        f.setPointSizeF(max(6.5, min(11.0, r.height() * 0.32)))
         f.setBold(True)
+        if name:
+            primary = str(name)
+            f.setPointSizeF(max(6.0, min(8.5, r.height() * 0.24)))
+        elif rid is not None:
+            primary = "R{}".format(rid)
+            f.setPointSizeF(max(6.5, min(11.0, r.height() * 0.30)))
+        else:
+            primary = ""
+            f.setPointSizeF(max(6.5, min(11.0, r.height() * 0.30)))
         painter.setFont(f)
-        painter.setPen(QPen(_TEXT))
+        primary = QFontMetrics(f).elidedText(
+            primary, Qt.TextElideMode.ElideRight, int(r.width() - 4)
+        )
+        painter.setPen(QPen(_MUTED if unused else _TEXT))
         painter.drawText(r, Qt.AlignmentFlag.AlignCenter, primary)
         f.setBold(False)
         f.setPointSizeF(max(5.5, min(8.0, r.height() * 0.22)))
