@@ -2117,14 +2117,50 @@ class TestFluidSchematic(unittest.TestCase):
         widget.set_reservoir_labels(labels)
         # Stored and used in the hover tooltip (name + unused note + volume).
         self.assertEqual(widget._res_labels[8]['name'], 'Buffer')
-        widget._update_hover_tooltip(8, 8)
+        widget._update_hover_tooltip(8)
         self.assertIn('Buffer', widget.toolTip())
         self.assertIn('150 µl used', widget.toolTip())
         self.assertIn('600 µl needed', widget.toolTip())
-        widget._update_hover_tooltip(2, 2)
+        widget._update_hover_tooltip(2)
         self.assertIn('not used', widget.toolTip())
         # Rendering with labels + volume bars must not raise.
         widget.render(QPixmap(widget.size()))
+
+    def test_renders_mvp_valve_topology(self):
+        from PyQt6.QtGui import QPixmap
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+
+        svc = SystemService()
+        svc.load_setup('Mercury')
+        widget = FluidSchematic()
+        widget.resize(1000, 560)
+        widget.set_topology(svc.fluid_topology())
+        # Valve 3 at its bridge port (1), valve 5 at port 8 -> reservoir 21.
+        widget.set_state({
+            'multiplexer': None,
+            'valves': {3: 1, 5: 8, 1: 'in'},
+            'pump_a': {'valve': 'in', 'volume': 100, 'capacity': 500},
+            'pump_out': {'valve': 'out', 'volume': 0, 'capacity': 5000},
+        })
+        widget.set_reservoir_labels({
+            1: {'name': 'Buffer', 'used': True,
+                'used_vol': 200, 'total_vol': 800},
+            21: {'name': 'Imager 8', 'used': True,
+                 'used_vol': 0, 'total_vol': 703},
+        })
+        # Reservoir 21 is the fully-routed reservoir (its whole path matches).
+        routes = widget._routes()
+        self.assertEqual(
+            widget._active_reservoir(routes, {3: 1, 5: 8}), 21
+        )
+        # Painting lays out the reservoir boxes (hit-test rects) and must not
+        # raise; the box for reservoir 21 is then present for hover/click.
+        widget.render(QPixmap(widget.size()))
+        self.assertIn(21, widget._res_rects)
+        widget._update_hover_tooltip(21)
+        self.assertIn('valve 3 → port 1', widget.toolTip())
+        self.assertIn('valve 5 → port 8', widget.toolTip())
 
     def test_highlight_reservoir_marks_its_full_route(self):
         from PycroFlow.services import SystemService

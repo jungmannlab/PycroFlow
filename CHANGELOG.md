@@ -98,6 +98,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The Fluid live schematic now also draws the **standard Hamilton MVP
+  rotary-valve** topology (not just the ibidi multiplexer). Each chained valve
+  is a hub drawn **on top**, with its reservoirs stacked in one or two short
+  columns **below** it (rather than one wide row, to save horizontal space and
+  keep every box readable); the hub's tubing drops radially to a per-column
+  rail and branches into each box, and the hub notes its selected port. A
+  rotary valve selects one port at a time, so the live path (hub → rail →
+  box) is lit and a reservoir box goes green only when its whole root→leaf
+  path is live (bridge ports that chain to the next valve are drawn
+  hub-to-hub, and the root valve sits nearest pump_a). The boxes carry the
+  same volume gauges and hover tooltip (which names the valve→port path) as
+  the ibidi ports. Backed by
+  `SystemService.fluid_topology()` (new `valves` block: per-valve `taps` /
+  `bridges` + per-reservoir `(valve, port)` `routes`) and `fluid_state()` (new
+  `valves` map of each MVP valve's last-selected position); the MVP `Valve`
+  now caches its `valve_pos` in-process like the pump.
+- The Fluid schematic now draws a **waste container** (beside the sample)
+  with a live/expected fill gauge analogous to the reservoirs. It is the one
+  physical waste bottle both pumps dispense into, fed by two legs: pump_out's
+  extraction (lit while pump_out pushes ``out``) and, **only when the setup's
+  tubing wires it** (``pump_a → flush_waste``), pump_a's flush. The gauge sums
+  both sinks and fills bottom-up with the consumed fraction over ``used /
+  total`` — the extraction total is derived from the protocol
+  (``extractionfactor × volume`` summed) and accrues live as the run runs;
+  flush volume accrues when ``fill_tubings`` flushes (its total backfilled
+  from what it received). Backed by `SystemService.fluid_waste_labels()` (+ a
+  `flush_waste` flag on `fluid_topology()`) and new `waste_totals` /
+  `waste_used` tracking on the fluid handler. Previously waste was only a text
+  label on the pump.
 - The Fluid live view now tracks **per-reservoir volume**: each in-use port
   shows two vertical gauges — a blue "tank" on the left that starts full and
   drains as the reagent is pumped out, and a waste column on the right that

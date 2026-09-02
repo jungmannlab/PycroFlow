@@ -305,6 +305,7 @@ class FluidTab(QWidget):
             # Reservoir names + which the design uses (cheap; no serial I/O).
             self.schematic.set_reservoir_labels(
                 self._svc.fluid_reservoir_labels())
+            self.schematic.set_waste_labels(self._svc.fluid_waste_labels())
         except Exception:  # pragma: no cover - never let the timer die
             self.schematic.set_state(None)
 

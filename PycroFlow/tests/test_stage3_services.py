@@ -480,6 +480,57 @@ class TestSystemService(unittest.TestCase):
         self.assertNotIn((7, 6), mux['edges'])
         self.assertTrue(topo['pumps']['pump_a'])
         self.assertTrue(topo['pumps']['pump_out'])
+        self.assertIsNone(topo['valves'])  # ibidi setup has no rotary valves
+
+    def test_fluid_topology_describes_chained_mvp_valves(self):
+        # A Hamilton MVP setup yields a `valves` topology (not `multiplexer`):
+        # the root valve taps its own reservoirs and bridges to the next valve.
+        svc = SystemService()
+        svc.load_setup('Mercury')
+        topo = svc.fluid_topology()
+        self.assertIsNone(topo['multiplexer'])
+        vt = topo['valves']
+        v3, v5 = vt['valves']
+        self.assertEqual((v3['address'], v3['index'], v3['ports']), (3, 0, 8))
+        self.assertEqual((v5['address'], v5['index'], v5['ports']), (5, 1, 8))
+        # V3 ports 2..8 tap reservoirs 1..7; port 1 bridges to valve 5.
+        self.assertEqual(v3['taps'][2], 1)
+        self.assertEqual(v3['taps'][8], 7)
+        self.assertEqual(v3['bridges'], {1: 5})
+        # V5 taps reservoirs 14..21 and bridges nowhere (it is the leaf valve).
+        self.assertEqual(v5['taps'][8], 21)
+        self.assertEqual(v5['bridges'], {})
+        # Routes run root -> leaf as (valve, port) pairs.
+        self.assertEqual(vt['routes'][1], [(3, 2)])
+        self.assertEqual(vt['routes'][21], [(3, 1), (5, 8)])
+        # Mercury wires a flush_waste sink (pump_a -> flush_waste).
+        self.assertTrue(topo['flush_waste'])
+
+    def test_fluid_waste_labels_track_extraction_and_flush(self):
+        svc = SystemService()
+        svc.load_setup('IbidiEmulator')
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200, 'extractionfactor': 2},
+            'settings': {'reservoir_names': {1: 'Imager 1'},
+                         'special_names': {}},
+        })
+        svc.fluid_system._assign_protocol({
+            'parameters': {'max_velocity': 200, 'extractionfactor': 2},
+            'protocol_entries': [
+                {'$type': 'inject', 'reservoir_id': 1, 'volume': 300},
+                {'$type': 'pump_out', 'volume': 100},
+            ],
+        })
+        waste = svc.fluid_waste_labels()
+        # Extraction waste planned = 2*(300+100) = 800 µl; flush_waste wired.
+        self.assertEqual(waste['waste']['total_vol'], 800.0)
+        self.assertEqual(waste['waste']['used_vol'], 0.0)
+        self.assertIn('flush_waste', waste)
+        # Recording flush volume backfills its total from the amount received.
+        svc.fluid_system._record_waste('flush_waste', 650)
+        waste = svc.fluid_waste_labels()
+        self.assertEqual(waste['flush_waste']['used_vol'], 650.0)
+        self.assertEqual(waste['flush_waste']['total_vol'], 650.0)
 
     def test_fluid_reservoir_labels_names_and_usage(self):
         # After connecting, the labels expose the design's names and mark

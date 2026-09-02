@@ -321,6 +321,10 @@ class Valve:
         # ``_assign_multiprocess_events``.
         self.pause_flag = threading.Event()
         self.abort_flag = threading.Event()
+        #: Last commanded position (updated in-process on every ``set_valve``),
+        #: so the GUI schematic can show the rotary valve's current selection
+        #: without polling the bus. ``None`` until first moved.
+        self.valve_pos = None
 
     def set_valve(self, pos, move_now=True):
         """Set the valve position of the PSD.
@@ -338,6 +342,7 @@ class Valve:
             The command to execute later, only if ``move_now`` is True.
         """
         assert pos in ["in", "out", *list(range(1, 9))]
+        self.valve_pos = pos
 
         i = 0
         while self.pause_flag.is_set():

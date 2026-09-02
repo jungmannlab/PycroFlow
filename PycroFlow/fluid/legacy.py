@@ -332,9 +332,18 @@ class LegacyArchitecture(AbstractSystem):
         self.parameters = protocol["parameters"]
         # Per-reservoir planned volume (sum of the protocol's inject volumes)
         # and the running total pumped, for the fluid live view. Assigning a
-        # protocol is a fresh plan, so the used counter resets.
+        # protocol is a fresh plan, so the used counters reset.
         self.reservoir_totals = self._sum_inject_volumes(self.protocol)
         self.reservoir_used = {}
+        # Waste sinks: the extraction pump dumps ``extractionfactor * volume``
+        # to the ``waste`` sink on every inject/pump_out, so its planned total
+        # is derivable from the protocol; ``flush_waste`` is only fed by the
+        # prep flush/fill routines (never the run), so it starts at 0.
+        default_ef = self.parameters.get("extractionfactor", 1)
+        self.waste_totals = {
+            "waste": self._sum_waste_volumes(self.protocol, default_ef)
+        }
+        self.waste_used = {}
 
     @staticmethod
     def _sum_inject_volumes(entries):
@@ -351,6 +360,30 @@ class LegacyArchitecture(AbstractSystem):
             totals[rid] = totals.get(rid, 0.0) + vol
         return totals
 
+    @staticmethod
+    def _sum_waste_volumes(entries, default_ef):
+        """Sum ``extractionfactor * volume`` over injects/pump_outs (waste)."""
+        try:
+            default_ef = float(default_ef)
+        except (TypeError, ValueError):
+            default_ef = 1.0
+        total = 0.0
+        for entry in entries or []:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("$type") not in ("inject", "pump_out"):
+                continue
+            ef = entry.get("extractionfactor")
+            try:
+                ef = float(ef) if ef is not None else default_ef
+            except (TypeError, ValueError):
+                ef = default_ef
+            try:
+                total += ef * float(entry.get("volume") or 0)
+            except (TypeError, ValueError):
+                continue
+        return total
+
     def _record_used(self, reservoir_id, volume):
         """Add ``volume`` µl to the running total pumped from a reservoir."""
         try:
@@ -361,6 +394,27 @@ class LegacyArchitecture(AbstractSystem):
         if used is None:
             used = self.reservoir_used = {}
         used[reservoir_id] = used.get(reservoir_id, 0.0) + vol
+
+    def _record_waste(self, sink, volume):
+        """Add ``volume`` µl to the running total sent to a waste sink."""
+        try:
+            vol = float(volume or 0)
+        except (TypeError, ValueError):
+            return
+        used = getattr(self, "waste_used", None)
+        if used is None:
+            used = self.waste_used = {}
+        used[sink] = used.get(sink, 0.0) + vol
+
+    def _entry_extractionfactor(self, entry):
+        """Effective extraction factor for an entry (its own, else default)."""
+        ef = entry.get("extractionfactor") if isinstance(entry, dict) else None
+        if ef is None:
+            ef = self.parameters.get("extractionfactor", 1)
+        try:
+            return float(ef)
+        except (TypeError, ValueError):
+            return 1.0
 
     def _assign_tubing_config(self, config):
         self.tubing_config = TubingConfig(config)
@@ -996,12 +1050,14 @@ class LegacyArchitecture(AbstractSystem):
             if self.parameters["mode"] == "tubing_stack":
                 if (self.last_protocol_entry != i - 1) or (i == 0):
                     self._assemble_tubing_stack(i)
+                ef = self._entry_extractionfactor(self.protocol[i])
                 for reservoir_id, vol in self.tubing_stack[i]:
                     self._set_valves(reservoir_id)
                     self._inject(
                         vol, delay=delay, extractionfactor=extractionfactor
                     )
                     self._record_used(reservoir_id, vol)
+                    self._record_waste("waste", ef * vol)
                 self.last_protocol_entry = i
             elif self.parameters["mode"] == "tubing_flush":
                 # # this way, we flush (1+flushfactor)
@@ -1099,6 +1155,12 @@ class LegacyArchitecture(AbstractSystem):
                 extractionfactor=extractionfactor,
             )
             self._record_used(pentry["reservoir_id"], injection_volume)
+            # The extraction pump simultaneously removes extractionfactor * vol
+            # from the sample to the waste sink.
+            self._record_waste(
+                "waste",
+                self._entry_extractionfactor(pentry) * injection_volume,
+            )
             # afterwards, flush in buffer to get the pentry
             # volume to the sample
             # self._set_valves(self.special_names['flushbuffer_a'])
@@ -1107,6 +1169,10 @@ class LegacyArchitecture(AbstractSystem):
             self._pump_out(
                 pentry["volume"],
                 extractionfactor=pentry.get("extractionfactor"),
+            )
+            self._record_waste(
+                "waste",
+                self._entry_extractionfactor(pentry) * pentry["volume"],
             )
 
         # tubing full of buffer, cannot simply proceed
@@ -2177,6 +2243,8 @@ class LegacyArchitecture(AbstractSystem):
                 dispense_flushvalve=dispense_flushvalve,
                 delay=delay,
             )
+            # This leg dispenses to the flush_waste sink (live view gauge).
+            self._record_waste("flush_waste", vol)
 
         if post_fill_flushbuffer and "flushbuffer_a" not in self.special_names:
             # No flush buffer defined: skip the final central-tubing flush

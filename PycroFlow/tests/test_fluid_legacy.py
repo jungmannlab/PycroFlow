@@ -154,6 +154,21 @@ class LegacyArchitectureTest(unittest.TestCase):
         self.la.execute_protocol_entry(0)
         self.assertEqual(self.la.reservoir_used.get(0), 20)
 
+    def test_assign_protocol_sums_extraction_waste_total(self):
+        # Two 10 µl injects at extractionfactor 2 -> 40 µl planned to waste;
+        # flush_waste has no protocol basis, so it is not pre-seeded.
+        self.assertEqual(self.la.waste_totals.get("waste"), 40.0)
+        self.assertNotIn("flush_waste", self.la.waste_totals)
+        self.assertEqual(self.la.waste_used, {})
+
+    def test_inject_accumulates_extraction_waste(self):
+        self.la.parameters["mode"] = "tubing_ignore"
+        self.la.execute_protocol_entry(0)
+        # Every inject sends extractionfactor * volume (2 * 10) to the waste.
+        self.assertEqual(self.la.waste_used.get("waste"), 20.0)
+        self.la.execute_protocol_entry(0)
+        self.assertEqual(self.la.waste_used.get("waste"), 40.0)
+
     def test_execute_protocol_entry_tubing_stack_inject(self):
         self.la.parameters["mode"] = "tubing_stack"
         before = len(self.fake.command_log)

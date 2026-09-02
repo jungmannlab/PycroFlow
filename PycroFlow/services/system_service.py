@@ -11,7 +11,7 @@ from __future__ import annotations
 from loguru import logger
 
 
-from PycroFlow.configs import IBIDI_MULTIFLOW
+from PycroFlow.configs import HAMILTON_MVP, IBIDI_MULTIFLOW
 
 
 def _as_wavelength(value):
@@ -523,6 +523,43 @@ class SystemService:
             }
         return labels
 
+    def fluid_waste_labels(self) -> dict:
+        """Per-waste-sink ``{used_vol, total_vol}`` for the schematic gauges.
+
+        Mirrors :meth:`fluid_reservoir_labels` for the waste sinks the fluid
+        handler tracks: ``waste`` (the extraction pump's sink — fills live as
+        injects/pump-outs run, planned total from the protocol) and, when the
+        setup wires it, ``flush_waste`` (fed only by the prep flush/fill
+        routines, so it stays empty during a run). Reads cached attributes
+        only (no serial I/O). Empty when no fluid system is connected.
+
+        Returns
+        -------
+        dict
+            ``{sink: {'used_vol': float µl, 'total_vol': float µl}}`` for each
+            waste sink present (``'waste'`` always; ``'flush_waste'`` only when
+            wired in the setup).
+        """
+        fs = self.fluid_system
+        if fs is None:
+            return {}
+        totals = getattr(fs, 'waste_totals', {}) or {}
+        used = getattr(fs, 'waste_used', {}) or {}
+        sinks = ['waste']
+        if self._tubing_wires_flush_waste((self._setup or {}).get('fluid')):
+            sinks.append('flush_waste')
+        labels = {}
+        for sink in sinks:
+            u = float(used.get(sink, 0) or 0)
+            t = float(totals.get(sink, 0) or 0)
+            # flush_waste has no protocol-planned total; once it has received
+            # any volume, treat that as its expected fill so the gauge reads
+            # against a total rather than staying blank.
+            if t <= 0 and u > 0:
+                t = u
+            labels[sink] = {'used_vol': u, 'total_vol': t}
+        return labels
+
     def reservoir_route(self, reservoir_id) -> dict:
         """Return the ``{valve address: position}`` map for a reservoir.
 
@@ -765,9 +802,17 @@ class SystemService:
                 'pump_out': 'pump_out' in pumps,
             },
             'multiplexer': None,
+            'valves': None,
+            # flush_waste is a distinct waste sink only when the setup's
+            # tubing actually wires it (``pump_a -> flush_waste``).
+            'flush_waste': self._tubing_wires_flush_waste(fluid),
         }
         mux = fluid.get('multiplexer') or {}
-        if mux.get('driver') != IBIDI_MULTIFLOW:
+        driver = mux.get('driver')
+        if driver == HAMILTON_MVP:
+            topo['valves'] = self._mvp_valves_topology(mux)
+            return topo
+        if driver != IBIDI_MULTIFLOW:
             return topo
 
         address = mux.get('address', 'ibidi')
@@ -828,6 +873,96 @@ class SystemService:
             return [int(c) for c in pos]
         return [int(pos)]
 
+    def _mvp_valves_topology(self, mux):
+        """Describe chained Hamilton MVP rotary valves for the schematic.
+
+        The setup lists the valves in chain order (root first — the one wired
+        to the pump); each reservoir's ``valve_pos`` names the port to select
+        on every valve on its path. A rotary valve selects exactly one port at
+        a time, so each port either **taps** a reservoir (the leaf valve of its
+        route) or **bridges** to the next valve downstream.
+
+        Returns
+        -------
+        dict
+            ``{'valves': [ {address, index, ports, taps, bridges}, ...],
+            'routes': {reservoir_id: [(valve_address, port), ...]}}`` — ``taps``
+            maps a port to the reservoir tapped there, ``bridges`` maps a port
+            to the downstream valve address it chains to, and each route lists
+            ``(valve, port)`` from the root valve to the reservoir's leaf.
+        """
+        from PycroFlow.configs import setup_reservoirs
+
+        valves_cfg = mux.get('valves') or []
+        addrs = [v.get('address') for v in valves_cfg]
+        addr_index = {a: i for i, a in enumerate(addrs)}
+        valves = [
+            {
+                'address': v.get('address'),
+                'index': i,
+                'ports': self._valve_port_count(v.get('valve_type')),
+                'taps': {},
+                'bridges': {},
+            }
+            for i, v in enumerate(valves_cfg)
+        ]
+        routes = {}
+        for entry in setup_reservoirs(self._setup):
+            if not isinstance(entry, dict):
+                continue
+            rid = entry.get('id')
+            vp = entry.get('valve_pos')
+            if not isinstance(vp, dict):
+                continue
+            # (chain index, valve address, port) for the MVP valves this
+            # reservoir routes through, ordered root -> leaf.
+            chain = sorted(
+                (
+                    (addr_index[a], a, p)
+                    for a, p in vp.items()
+                    if a in addr_index
+                ),
+                key=lambda t: t[0],
+            )
+            if not chain:
+                continue
+            routes[rid] = [(a, p) for _i, a, p in chain]
+            for k in range(len(chain) - 1):
+                i, _a, p = chain[k]
+                valves[i]['bridges'][p] = chain[k + 1][1]  # downstream address
+            i, _a, p = chain[-1]
+            valves[i]['taps'][p] = rid  # leaf: this port taps the reservoir
+        return {'valves': valves, 'routes': routes}
+
+    @staticmethod
+    def _tubing_wires_flush_waste(fluid):
+        """True when the setup's tubing wires a ``flush_waste`` sink.
+
+        Handles both the assembled tuple-keyed form (``{(from, to): vol}``)
+        and the raw list-of-segments form (``[{from, to, volume}, ...]``).
+        """
+        tubing = (fluid or {}).get('tubing') or {}
+        if isinstance(tubing, dict):
+            return any(
+                isinstance(k, (tuple, list)) and 'flush_waste' in k
+                for k in tubing
+            )
+        if isinstance(tubing, list):
+            return any(
+                isinstance(s, dict)
+                and 'flush_waste' in (s.get('from'), s.get('to'))
+                for s in tubing
+            )
+        return False
+
+    @staticmethod
+    def _valve_port_count(valve_type):
+        """Number of selectable ports from a valve type like ``'8-5'``."""
+        try:
+            return int(str(valve_type).split('-')[0])
+        except (TypeError, ValueError):
+            return 8
+
     def fluid_state(self):
         """Snapshot the live valve and syringe state for the schematic.
 
@@ -843,7 +978,9 @@ class SystemService:
             ``{'multiplexer', 'pump_a', 'pump_out'}``. ``multiplexer`` is
             ``{'channels', 'open'}`` (or ``None``) where ``open[i]`` is the
             last-commanded state of channel ``i+1`` (True = open/flowing) or
-            ``None`` when unknown (e.g. after a raw ``SETALL``). Each pump is
+            ``None`` when unknown (e.g. after a raw ``SETALL``). ``valves`` is
+            ``{valve_address: last-selected position}`` for chained MVP rotary
+            valves (empty for an ibidi setup). Each pump is
             ``{'valve', 'volume', 'capacity'}``; ``valve`` is the syringe
             port — ``'in'`` (the multiplexer side) or ``'out'`` (the sample
             side).
@@ -851,7 +988,12 @@ class SystemService:
         fs = self.fluid_system
         if fs is None:
             return None
-        state = {'multiplexer': None, 'pump_a': None, 'pump_out': None}
+        state = {
+            'multiplexer': None,
+            'valves': {},
+            'pump_a': None,
+            'pump_out': None,
+        }
         mux = getattr(fs, 'multiplexer', None)
         if mux is not None:
             states = list(getattr(mux, 'channel_states', []) or [])
@@ -859,6 +1001,11 @@ class SystemService:
                 'channels': int(getattr(mux, 'channels', len(states))),
                 'open': states,
             }
+        # Rotary MVP valve positions (last commanded, cached in-process). The
+        # pump's own Y-valve is in ``valve_a`` too; harmless, the schematic
+        # only reads the reservoir-multiplexer addresses from the topology.
+        for addr, valve in (getattr(fs, 'valve_a', {}) or {}).items():
+            state['valves'][addr] = getattr(valve, 'valve_pos', None)
         for name in ('pump_a', 'pump_out'):
             state[name] = self._pump_snapshot(getattr(fs, name, None))
         return state
