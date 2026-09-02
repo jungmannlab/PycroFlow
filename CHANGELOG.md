@@ -38,9 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Live fluid-wiring schematic in the GUI **Fluid** tab: a custom-painted panel
-  that draws the ibidi multiplexer's 24 ports on their physical 6×4 meander
-  grid (port 1 lower-left wired to pump_a, port 7 above port 6), the manifold
-  tree traced from each reservoir's `valve_pos`, and pump_a / sample / pump_out.
+  that draws the ibidi multiplexer's 24 ports on their physical 6×4 grid
+  (numbered left-to-right, bottom-to-top: port 1 lower-left wired to pump_a,
+  port 7 above port 1), the meandered manifold tubing traced as edges from
+  each reservoir's `valve_pos`, and pump_a / sample / pump_out.
   It overlays live state — open/closed channels, the energised flow path, each
   pump's valve position (IN → multiplexer / OUT → sample) and syringe fill —
   polling cached driver attributes (`multiplexer.channel_states`,

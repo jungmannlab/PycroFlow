@@ -688,11 +688,12 @@ class SystemService:
         multiplexer layout is described here — the pump/sample/waste macro
         topology is fixed for the legacy architecture.
 
-        The ibidi ports sit on a physical grid that meanders upward: port 1
-        at the lower left, filling each row left-to-right / right-to-left in
-        turn (``grid_cols`` wide, default 6), so port 7 is directly above
-        port 6. The grid geometry is returned so the widget can place each
-        port without re-deriving the wiring.
+        The ibidi ports are numbered left-to-right, bottom-to-top on their
+        physical grid (``grid_cols`` wide, default 6): port 1 lower left, port
+        6 lower right, port 7 directly above port 1. The *tubing* between ports
+        meanders — that shape is captured by ``edges`` (traced from each
+        reservoir's route), not by the port numbering. The grid geometry is
+        returned so the widget can place each port without re-deriving it.
 
         Returns
         -------

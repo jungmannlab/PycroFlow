@@ -2046,15 +2046,16 @@ class TestFluidSchematic(unittest.TestCase):
 
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_meander_layout_matches_hardware_grid(self):
-        # Port 1 lower left, port 6 lower right, port 7 one up from port 6.
+    def test_grid_layout_matches_hardware_numbering(self):
+        # Ports numbered left-to-right, bottom-to-top: port 1 lower left,
+        # port 6 lower right, port 7 directly above port 1.
         from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
 
-        cell = FluidSchematic._meander_cell
+        cell = FluidSchematic._grid_cell
         self.assertEqual(cell(1, 6, 4), (0, 3))    # bottom-left
         self.assertEqual(cell(6, 6, 4), (5, 3))    # bottom-right
-        self.assertEqual(cell(7, 6, 4), (5, 2))    # one row up from port 6
-        self.assertEqual(cell(12, 6, 4), (0, 2))   # end of the second row
+        self.assertEqual(cell(7, 6, 4), (0, 2))    # above port 1, row start
+        self.assertEqual(cell(12, 6, 4), (5, 2))   # end of the second row
 
     def test_renders_topology_and_live_state_without_error(self):
         from PyQt6.QtGui import QPixmap
@@ -2066,7 +2067,7 @@ class TestFluidSchematic(unittest.TestCase):
         widget = FluidSchematic()
         widget.resize(900, 500)
         widget.set_topology(svc.fluid_topology())
-        opened = [c in (1, 6, 7, 8) for c in range(1, 25)]
+        opened = [c in (1, 6, 12, 8) for c in range(1, 25)]
         widget.set_state({
             'multiplexer': {'channels': 24, 'open': opened},
             'pump_a': {'valve': 'in', 'volume': 250.0, 'capacity': 500.0},
@@ -2096,12 +2097,12 @@ class TestFluidSchematic(unittest.TestCase):
         widget.highlight_reservoir(8)
         rid, channels = widget._active_highlight()
         self.assertEqual(rid, 8)
-        self.assertEqual(channels, {1, 6, 7, 8})
+        self.assertEqual(channels, {1, 6, 12, 8})
         # A transient hover overrides the persistent selection.
         widget._hover_res = 23
         rid, channels = widget._active_highlight()
         self.assertEqual(rid, 23)
-        self.assertEqual(channels, {1, 6, 7, 12, 13, 18, 19, 23})
+        self.assertEqual(channels, {1, 6, 7, 12, 13, 18, 24, 23})
         # Clearing the selection (hover gone) highlights nothing.
         widget._hover_res = None
         widget.highlight_reservoir(None)
@@ -2130,7 +2131,7 @@ class TestFluidSchematic(unittest.TestCase):
         self.assertEqual(widget._hover_res, 8)
         self.assertEqual(hovered, [8])
         rid, channels = widget._active_highlight()
-        self.assertEqual((rid, channels), (8, {1, 6, 7, 8}))
+        self.assertEqual((rid, channels), (8, {1, 6, 12, 8}))
         # Leaving the widget clears the transient highlight.
         widget.leaveEvent(QEvent(QEvent.Type.Leave))
         self.assertIsNone(widget._hover_res)
@@ -2214,7 +2215,7 @@ class TestFluidTabSchematic(unittest.TestCase):
         tab.valve_res.setCurrentIndex(index)
         rid, channels = tab.schematic._active_highlight()
         self.assertEqual(rid, 8)
-        self.assertEqual(channels, {1, 6, 7, 8})
+        self.assertEqual(channels, {1, 6, 12, 8})
 
     def test_schematic_clicks_toggle_hardware_and_respect_run_lock(self):
         from PycroFlow.gui.widgets import worker

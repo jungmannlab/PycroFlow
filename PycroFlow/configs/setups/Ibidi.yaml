@@ -54,9 +54,11 @@ fluid:
     channels: 24
     address: ibidi    # key referenced by each reservoir's valve_pos
     # Physical port layout for the GUI's live wiring schematic (advisory —
-    # no effect on routing). Ports meander upward on a grid `grid_cols` wide:
-    # port 1 lower left, port 6 lower right, port 7 directly above port 6.
-    # `pump_channel` is the port tubed to pump_a.
+    # no effect on routing). Ports are numbered left-to-right, bottom-to-top
+    # on a grid `grid_cols` wide: port 1 lower left, port 6 lower right, port
+    # 7 directly above port 1. (The tubing between ports meanders; that shows
+    # up in the reservoir routes, not the numbering.) `pump_channel` is the
+    # port tubed to pump_a.
     grid_cols: 6
     pump_channel: 1
     # Switch one valve at a time. The unit cannot supply the inrush current

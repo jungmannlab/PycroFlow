@@ -453,7 +453,7 @@ class TestSystemService(unittest.TestCase):
         with self.assertRaises(KeyError):
             svc.toggle_pump_valve('pump_nope')
 
-    def test_fluid_topology_reads_meander_grid_and_taps(self):
+    def test_fluid_topology_reads_grid_and_taps(self):
         # The live-schematic topology is read straight from the setup: the
         # ibidi grid geometry, the pump-wired port, and each port's tap.
         svc = SystemService()
@@ -463,17 +463,18 @@ class TestSystemService(unittest.TestCase):
         self.assertEqual((mux['cols'], mux['rows']), (6, 4))
         self.assertEqual(mux['channels'], 24)
         self.assertEqual(mux['pump_channel'], 1)
-        # R8 is tapped at its leaf channel (last in the route [1, 6, 7, 8]).
+        # R8 is tapped at its leaf channel (last in the route [1, 6, 12, 8]).
         self.assertEqual(mux['ports'][8]['reservoir'], 8)
-        # Ports 6/7 are shared bridges on the way to R8..R24.
+        # Ports 6/12 are shared bridges on the way to R8..R24.
         self.assertIn(8, mux['ports'][6]['used_by'])
-        self.assertIn(8, mux['ports'][7]['used_by'])
-        # The manifold path to R8 is 1->6->7->8.
-        for edge in [(1, 6), (6, 7), (7, 8)]:
+        self.assertIn(8, mux['ports'][12]['used_by'])
+        # The (meandered) tubing path to R8 is 1->6->12->8.
+        for edge in [(1, 6), (6, 12), (12, 8)]:
             self.assertIn(edge, mux['edges'])
         # Each reservoir's full ordered route is exposed for path highlight.
-        self.assertEqual(mux['routes'][8], [1, 6, 7, 8])
-        self.assertEqual(mux['routes'][23], [1, 6, 7, 12, 13, 18, 19, 23])
+        self.assertEqual(mux['routes'][8], [1, 6, 12, 8])
+        self.assertEqual(
+            mux['routes'][23], [1, 6, 7, 12, 13, 18, 24, 23])
         self.assertTrue(topo['pumps']['pump_a'])
         self.assertTrue(topo['pumps']['pump_out'])
 

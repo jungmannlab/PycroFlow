@@ -10,10 +10,12 @@ Layout, left to right::
 
     [ ibidi multiplexer 6x4 grid ]  ->  pump_a  ->  sample  ->  pump_out -> waste
 
-The multiplexer ports meander upward on their physical grid: port 1 lower
-left, filling each row alternately left-to-right / right-to-left, so port 7
-sits directly above port 6 (see :meth:`_meander_cell`). The port wired to
-pump_a (``pump_channel``, port 1 by default) is drawn with a stub to the pump.
+The multiplexer ports are numbered left-to-right, bottom-to-top on their
+physical grid (``grid_cols`` wide): port 1 lower left, port 6 lower right,
+port 7 directly above port 1 (see :meth:`_grid_cell`). The *tubing* between
+them meanders — that shape shows up as the edges traced from each reservoir's
+route, not in the port numbering. The port wired to pump_a (``pump_channel``,
+port 1 by default) is drawn with a stub to the pump.
 
 Each port is shaded by its live state — green open (flowing), grey closed,
 hatched when unknown. pump_a's valve position lights the active leg (syringe
@@ -122,19 +124,18 @@ class FluidSchematic(QWidget):
 
     # -- geometry -----------------------------------------------------------
     @staticmethod
-    def _meander_cell(channel, cols, rows):
-        """Grid (col, row_from_top) of a 1-based port on the meander layout.
+    def _grid_cell(channel, cols, rows):
+        """Grid (col, row_from_top) of a 1-based port on the layout.
 
-        Row 0 is the bottom row (port 1 lower left); even rows run
-        left-to-right, odd rows right-to-left, so consecutive ports snake
-        upward. Returns the row counted *from the top* for painting.
+        Ports are numbered left-to-right, bottom-to-top: row 0 is the bottom
+        row (port 1 lower left, port ``cols`` lower right), row 1 starts again
+        at the left (port ``cols + 1`` directly above port 1). Returns the row
+        counted *from the top* for painting.
         """
         idx = channel - 1
         row = idx // cols
-        col_in_row = idx % cols
-        if row % 2 == 1:
-            col_in_row = cols - 1 - col_in_row
-        return col_in_row, rows - 1 - row
+        col = idx % cols
+        return col, rows - 1 - row
 
     # -- mouse interaction --------------------------------------------------
     def _channel_at(self, pos):
@@ -284,7 +285,7 @@ class FluidSchematic(QWidget):
         # beneath the ports (and so the cursor can hit-test ports).
         rects = {}
         for channel in range(1, mux["channels"] + 1):
-            col, row_top = self._meander_cell(channel, cols, rows)
+            col, row_top = self._grid_cell(channel, cols, rows)
             x = ox + col * cell
             y = oy + row_top * cell
             rects[channel] = QRectF(
