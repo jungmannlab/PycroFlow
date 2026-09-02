@@ -16,7 +16,7 @@ def _exchange_protocol():
             "settings": {
                 "reservoir_names": {1: "Imager 1", 2: "Imager 2", 3: "Buffer"},
                 "vol_wash": 500,
-                "vol_imager_post": 100,
+                "vol_reagent": 100,
                 "experiment": {
                     "type": "Exchange",
                     "wash_buffer": "Buffer",

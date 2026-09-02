@@ -143,8 +143,8 @@ class TestProtocolBuilder(unittest.TestCase):
                 "settings": {
                     "vol_wash_pre": 50,
                     "vol_wash": 500,
-                    "vol_imager_pre": 500,
-                    "vol_imager_post": 100,
+                    "vol_reagent": 500,
+                    "vol_reagent_post": 100,
                     "vol_remove_before_wash": 50,
                     "wait_after_pickup": 5,
                     "reservoir_names": reservoir_names,
@@ -196,8 +196,8 @@ class TestProtocolBuilder(unittest.TestCase):
                 "settings": {
                     "vol_wash_pre": 50,
                     "vol_wash": 500,
-                    "vol_imager_pre": 500,
-                    "vol_imager_post": 100,
+                    "vol_reagent": 500,
+                    "vol_reagent_post": 100,
                     "vol_remove_before_wash": 50,
                     "wait_after_pickup": 5,
                     "reservoir_names": reservoir_names,
@@ -262,8 +262,8 @@ class TestProtocolBuilder(unittest.TestCase):
             "base_name": "AutomationTest_R2R4",
             "fluid_settings": {
                 "vol_wash": 500,
-                "vol_imager_pre": 500,
-                "vol_imager_post": 100,
+                "vol_reagent": 500,
+                "vol_reagent_post": 100,
                 "reservoir_names": reservoir_names,
                 "experiment": {
                     "type": "FlushTest",
@@ -306,8 +306,8 @@ class TestProtocolBuilder(unittest.TestCase):
                 "settings": {
                     "vol_wash_pre": 50,
                     "vol_wash": 500,
-                    "vol_imager_pre": 500,
-                    "vol_imager_post": 100,
+                    "vol_reagent": 500,
+                    "vol_reagent_post": 100,
                     "vol_remove_before_wash": 50,
                     "wait_after_pickup": 5,
                     "reservoir_names": reservoir_names,
@@ -345,7 +345,7 @@ class TestOptionalDarkframes(unittest.TestCase):
         design = {
             'base_name': 'x', 'save_dir': TEST_OUTPUT_DIR,
             'fluid': {'settings': {
-                'vol_wash': 200., 'vol_reagent': 100., 'vol_imager_post': 50.,
+                'vol_wash': 200., 'vol_reagent': 100.,
                 'reservoir_names': {2: 'Buffer', 3: 'I1', 4: 'I2'},
                 'special_names': {},
                 'experiment': {'type': 'Exchange', 'wash_buffer': 'Buffer',
@@ -410,3 +410,97 @@ class TestOptionalDarkframes(unittest.TestCase):
         waits = {e['value'] for e in self._entries(protocol)
                  if e['$type'] == 'wait for signal'}
         self.assertEqual(waits - signals, set())
+
+
+class TestReagentVolumes(unittest.TestCase):
+    """vol_reagent (before imaging) / vol_reagent_post (after imaging)."""
+
+    @staticmethod
+    def _exchange(**settings):
+        from PycroFlow.schemas import validate_experiment_design
+
+        design = {
+            'base_name': 'x', 'save_dir': TEST_OUTPUT_DIR,
+            'fluid': {'settings': {
+                'vol_wash': 200.,
+                'reservoir_names': {2: 'Buffer', 3: 'I1'},
+                'special_names': {},
+                'experiment': {'type': 'Exchange', 'wash_buffer': 'Buffer',
+                               'imagers': ['I1']},
+                **settings}},
+            'img': {'settings': {'t_exp': 100., 'frames': 10}},
+        }
+        design = validate_experiment_design(design).model_dump(by_alias=True)
+        return pprot.ProtocolBuilder().build_protocol(design)
+
+    @staticmethod
+    def _injects(protocol):
+        return [e for e in protocol['fluid']['protocol_entries']
+                if e['$type'] == 'inject']
+
+    @staticmethod
+    def _types(protocol):
+        return [e['$type'] for e in protocol['fluid']['protocol_entries']]
+
+    def test_vol_reagent_is_the_pre_imaging_inject(self):
+        protocol = self._exchange(vol_reagent=120.)
+        # I1 is reservoir 3; its main pre-inject carries the vol_reagent volume.
+        vols = [e['volume'] for e in self._injects(protocol)
+                if e['reservoir_id'] == 3]
+        self.assertIn(120., vols)
+
+    def test_vol_reagent_post_injects_after_acquisition(self):
+        # With a post volume, an extra imager inject appears right after the
+        # acquire (and not without it).
+        without = self._exchange(vol_reagent=120.)
+        with_post = self._exchange(vol_reagent=120., vol_reagent_post=15.)
+        self.assertEqual(
+            self._types(with_post).count('inject'),
+            self._types(without).count('inject') + 1,
+        )
+        entries = with_post['fluid']['protocol_entries']
+        types = [e['$type'] for e in entries]
+        # The 15 µl top-up follows the imaging wait, i.e. after acquisition.
+        post = [i for i, e in enumerate(entries)
+                if e['$type'] == 'inject' and e.get('volume') == 15.]
+        self.assertEqual(len(post), 1)
+        self.assertIn('wait for signal', types[:post[0]])
+
+    def test_back_compat_vol_imager_post_drives_the_pre_inject(self):
+        # Designs predating the split set vol_imager_post; it still feeds the
+        # pre-inject (via fallback) and adds no post-inject.
+        legacy = self._exchange(vol_imager_post=90.)
+        vols = [e['volume'] for e in self._injects(legacy)
+                if e['reservoir_id'] == 3]
+        self.assertIn(90., vols)
+        # No post-inject was introduced.
+        self.assertNotIn(0., vols)
+        modern = self._exchange(vol_reagent=90.)
+        self.assertEqual(
+            self._types(legacy).count('inject'),
+            self._types(modern).count('inject'),
+        )
+
+    def test_sph_resi_post_inject_after_each_acquisition(self):
+        import os
+        import yaml
+        import PycroFlow
+        from PycroFlow.schemas import validate_experiment_design
+
+        path = os.path.join(
+            os.path.dirname(PycroFlow.__file__),
+            'examples', 'sph_resi_6plex.yaml')
+        raw = yaml.safe_load(open(path))
+        base = validate_experiment_design(raw).model_dump(by_alias=True)
+        n_acq = sum(
+            e['$type'] == 'acquire'
+            for e in pprot.ProtocolBuilder().build_protocol(base)['img'][
+                'protocol_entries'])
+        raw['fluid']['settings']['vol_reagent_post'] = 25
+        withpost = validate_experiment_design(raw).model_dump(by_alias=True)
+        proto = pprot.ProtocolBuilder().build_protocol(withpost)
+        n_post = sum(
+            e['$type'] == 'inject' and e.get('volume') == 25
+            for e in proto['fluid']['protocol_entries'])
+        # One top-up per acquisition.
+        self.assertEqual(n_post, n_acq)

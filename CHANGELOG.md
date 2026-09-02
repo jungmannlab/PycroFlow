@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Unified the imager/reagent injection volumes across experiment types and
+  added an optional post-imaging top-up. `fluid.settings.vol_reagent` is now
+  the volume dispensed into the sample **before** imaging each round (imager /
+  adapter / blocker) for **both** Exchange and SPH-RESI, and the new
+  `vol_reagent_post` is an optional volume dispensed **after** each acquisition
+  (skipped when unset). The Exchange builder previously (mis)used
+  `vol_imager_post` as its pre-imaging volume and ignored `vol_reagent`; it now
+  reads `vol_reagent`, **falling back to `vol_imager_post`** so pre-split
+  Exchange designs keep working unchanged. `vol_imager_post` is renamed to
+  `vol_reagent_post` in the schema/editor. The regression fixture
+  `exchange_basic` and the protocol/description tests moved to the new names
+  (its snapshot was regenerated: the imager pre-inject is now the full
+  `0.9·imager_volume` and a `0.1·imager_volume` post-inject was added). The
+  initial-imager Exchange round injects no top-up (that imager is already in
+  the sample and need not be a reservoir).
 - Versioning now derives from the git tag via `setuptools-scm` (writes
   `PycroFlow/_version.py`); the manual `version` string in `pyproject.toml`
   is gone. `PycroFlow.__version__` reads the generated module with a fallback.

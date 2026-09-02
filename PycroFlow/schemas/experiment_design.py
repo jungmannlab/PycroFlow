@@ -299,13 +299,14 @@ class FluidSettings(BaseModel):
         "imaging round, to clear the previous imager.")
     vol_reagent: Optional[float] = _unit(
         None, "µl",
-        tooltip="Volume of reagent injected per reagent step (µl) — e.g. an "
-        "SPH-RESI adapter or blocker. Leave empty for experiment types that "
-        "inject no separate reagent.")
-    vol_imager_post: Optional[float] = _unit(
+        tooltip="Volume of imager/reagent dispensed into the sample BEFORE "
+        "imaging each round — imager, adapter and blocker alike. Used by both "
+        "Exchange and SPH-RESI. (Exchange designs predating this split fall "
+        "back to the old 'vol_imager_post' for this.)")
+    vol_reagent_post: Optional[float] = _unit(
         None, "µl",
-        tooltip="Volume of imager solution injected into the sample before "
-        "acquiring a round.")
+        tooltip="Optional volume of imager/reagent dispensed into the sample "
+        "AFTER imaging a round (a top-up). Leave empty to skip it.")
     vol_remove_before_flush: float = _unit(
         0, "µl",
         tooltip="Volume withdrawn from the sample just before the wash flush, "

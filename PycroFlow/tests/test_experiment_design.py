@@ -74,7 +74,11 @@ class TestExperimentDesignSchema(unittest.TestCase):
             return field_meta(model.model_fields[field]).get("tooltip")
 
         # Volumes / velocities / experiment fields explain themselves on hover.
-        self.assertIn("reagent", tip(FluidSettings, "vol_reagent").lower())
+        # vol_reagent covers imagers too (not adapter-only), and points at the
+        # Exchange counterpart.
+        vol_reagent_tip = tip(FluidSettings, "vol_reagent").lower()
+        self.assertIn("imager", vol_reagent_tip)
+        self.assertIn("vol_imager_post", vol_reagent_tip)
         self.assertTrue(tip(FluidSettings, "vol_wash"))
         self.assertTrue(tip(FluidParameters, "extractionfactor"))
         self.assertTrue(tip(FluidParameters, "max_velocity"))
@@ -113,7 +117,7 @@ class TestExperimentDesignSchema(unittest.TestCase):
             "fluid": {
                 "settings": {
                     "vol_wash": 10,
-                    "vol_imager_post": 5,
+                    "vol_reagent": 5,
                     "reservoir_names": {1: "R1"},
                     "experiment": {
                         "type": "Exchange",
@@ -615,7 +619,7 @@ class TestSubsystemDeselection(unittest.TestCase):
             "fluid": {
                 "settings": {
                     "vol_wash": 10,
-                    "vol_imager_post": 5,
+                    "vol_reagent": 5,
                     "reservoir_names": {1: "R1"},
                     "experiment": {
                         "type": "Exchange",

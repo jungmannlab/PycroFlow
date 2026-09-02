@@ -441,6 +441,37 @@ class ProtocolBuilder:
                     message=f"done flushing {unique_name}",
                 )
 
+    def create_stepset_reagent_post(
+        self, volumes, res_idcs, wait_after_pickup, reagent
+    ):
+        """Optionally top up the reagent in the sample *after* imaging.
+
+        Dispenses ``volumes['vol_reagent_post']`` of ``reagent`` into the
+        sample once a round has been acquired. It needs no cross-subsystem
+        coordination: the preceding acquisition's ``fluid_wait`` already synced
+        the fluid system past imaging, and the next wash (or the run's end)
+        follows. Skipped entirely when ``vol_reagent_post`` is unset or zero.
+
+        Parameters
+        ----------
+        volumes : dict
+            Needs ``'vol_reagent_post'`` (may be ``None``/``0`` to skip).
+        res_idcs : dict
+            Maps reservoir names to reservoir ids.
+        wait_after_pickup : float
+            Seconds to wait between pickup and dispense.
+        reagent : str
+            Reservoir name of the imager/reagent to top up.
+        """
+        vol = volumes.get("vol_reagent_post")
+        if not vol:
+            return
+        self.create_step_inject(
+            volume=vol,
+            reservoir_id=res_idcs[reagent],
+            delay=wait_after_pickup,
+        )
+
     def create_steps_exchange(self, config):
         """Create the protocol steps for an Exchange-PAINT experiment.
 
@@ -528,14 +559,23 @@ class ProtocolBuilder:
         #     'vol_wash_pre': config['fluid']['settings']['vol_wash_pre'],
         # }
 
+        settings = config["fluid"]["settings"]
+        # Pre-imaging imager volume comes from 'vol_reagent'. Back-compat:
+        # designs authored before the vol_reagent / vol_reagent_post split set
+        # 'vol_imager_post' for the pre-inject, so fall back to it.
+        vol_reagent = settings.get("vol_reagent")
+        if vol_reagent is None:
+            vol_reagent = settings.get("vol_imager_post")
         volumes = {
-            "vol_remove_before_flush": config["fluid"]["settings"].get(
+            "vol_remove_before_flush": settings.get(
                 "vol_remove_before_flush", 0
             ),
             # 'vol_reduction': config['fluid']['settings'].get(
             #     'vol_remove_before_wash', 0),
-            "vol_wash": config["fluid"]["settings"]["vol_wash"],
-            "vol_reagent": config["fluid"]["settings"]["vol_imager_post"],
+            "vol_wash": settings["vol_wash"],
+            "vol_reagent": vol_reagent,
+            # Optional top-up injected after each acquisition (None -> skip).
+            "vol_reagent_post": settings.get("vol_reagent_post"),
         }
 
         initial_imager = experiment.get("initial_imager")
@@ -591,6 +631,8 @@ class ProtocolBuilder:
                 readable_name=imager,
                 fluid_wait=True,
             )
+            # No reagent top-up here: the initial imager is already in the
+            # sample and need not be a reservoir (so it is never injected).
             self.create_stepset_flush(
                 volumes,
                 res_idcs,
@@ -656,6 +698,9 @@ class ProtocolBuilder:
                 unique_name=f"img-{round}",
                 readable_name=imager,
                 fluid_wait=True,
+            )
+            self.create_stepset_reagent_post(
+                volumes, res_idcs, wait_after_pickup, imager
             )
 
             if not last_round:
@@ -829,6 +874,10 @@ class ProtocolBuilder:
             ),
             "vol_reagent": config["fluid"]["settings"]["vol_reagent"],
             "vol_wash": config["fluid"]["settings"]["vol_wash"],
+            # Optional top-up injected after each acquisition (None -> skip).
+            "vol_reagent_post": config["fluid"]["settings"].get(
+                "vol_reagent_post"
+            ),
         }
         # volumes = {
         #     'vol_reduction': config['fluid']['settings'].get(
@@ -889,6 +938,12 @@ class ProtocolBuilder:
                 fluid_wait=True,
                 name="Round 0 (alignment)",
             )
+            self.create_stepset_reagent_post(
+                volumes,
+                res_idcs,
+                wait_after_pickup,
+                experiment["round0"]["round0_imager"],
+            )
 
             # wash using wash_buffer_1
             self.create_stepset_flush(
@@ -940,6 +995,10 @@ class ProtocolBuilder:
                 readable_name=f"{tgt}",
                 fluid_wait=True,
                 name=f"{tgt} barcode (pre)",
+            )
+            self.create_stepset_reagent_post(
+                volumes, res_idcs, wait_after_pickup,
+                tgt_pars["BC_imager_pre"],
             )
 
             # wash using wash_buffer_1
@@ -1030,6 +1089,10 @@ class ProtocolBuilder:
                     readable_name=f"{tgt}-{resi_round}",
                     fluid_wait=True,
                     name=f"{tgt} RESI round {resi_round + 1}",
+                )
+                self.create_stepset_reagent_post(
+                    volumes, res_idcs, wait_after_pickup,
+                    tgt_pars["RESI-imager"],
                 )
 
                 # wash using wash_buffer_1
@@ -1136,6 +1199,10 @@ class ProtocolBuilder:
                 readable_name=f"{tgt}",
                 fluid_wait=True,
                 name=f"{tgt} barcode (post)",
+            )
+            self.create_stepset_reagent_post(
+                volumes, res_idcs, wait_after_pickup,
+                tgt_pars["BC_imager_post"],
             )
 
             # if not last round:

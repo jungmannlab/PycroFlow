@@ -46,8 +46,10 @@ CONFIG = {
         "settings": {
             "vol_wash_pre": int(0.1 * WASH_VOLUME),
             "vol_wash": int(0.9 * WASH_VOLUME),
-            "vol_imager_pre": int(0.9 * IMAGER_VOLUME),
-            "vol_imager_post": int(0.1 * IMAGER_VOLUME),
+            # vol_reagent = imager volume dispensed before imaging;
+            # vol_reagent_post = top-up dispensed after imaging.
+            "vol_reagent": int(0.9 * IMAGER_VOLUME),
+            "vol_reagent_post": int(0.1 * IMAGER_VOLUME),
             "vol_remove_before_wash": VOLUME_REDUCTION_FOR_XCHG,
             "wait_after_pickup": 5,
             "reservoir_names": RESERVOIR_NAMES,
