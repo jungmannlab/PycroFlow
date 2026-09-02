@@ -372,6 +372,12 @@ class TestMainWindow(unittest.TestCase):
                 ]
             },
             "img": {
+                # Zero the calibrated acquire overheads so this stays a test
+                # of the incubate+acquire arithmetic, not the tuned constants.
+                "parameters": {
+                    "est_frame_overhead": 0,
+                    "est_acquire_setup": 0,
+                },
                 "protocol_entries": [
                     {"$type": "acquire", "frames": 1000, "t_exp": 120}
                 ]

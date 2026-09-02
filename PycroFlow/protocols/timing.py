@@ -12,11 +12,17 @@ Coordination and instantaneous steps (signal, wait, set power, ...) therefore
 contribute no time, and the wall-clock estimate is the sum of the active-work
 durations across all subsystems.
 
-This is deliberately an estimate: valve moves, serial round-trips and pump
-ramp-up are not modelled, so callers should present the numbers as
-approximate (the GUI prefixes them with ``~``). The per-entry inject/pump_out
-model mirrors
-:meth:`PycroFlow.fluid.legacy.LegacyFluidHandler._estimate_entry_duration`.
+This is deliberately an estimate, but it models the dominant per-step
+overheads (valve switching, serial round-trips, the concurrently-driven
+extraction pump, camera arm/readout) as fixed constants on top of the ideal
+fluid-motion / exposure time, so callers should still present the numbers as
+approximate (the GUI prefixes them with ``~``). The constants below were
+calibrated from ``STEP_TIMING`` run logs (see
+:mod:`PycroFlow.protocols.timing_analysis`) — pure fluid-motion / exposure
+time underestimated real steps badly, especially short ones (a 1 µl inject
+takes ~3 s of valve/serial overhead but only ~0.01 s of motion). They can be
+overridden per setup via the owning subsystem's ``parameters`` block using the
+``est_*`` keys named on each constant.
 """
 
 from __future__ import annotations
@@ -31,19 +37,40 @@ _SYSTEMS = ("fluid", "img", "illu")
 #: the estimates below.
 STEP_TIMING_TAG = 'STEP_TIMING'
 
-#: Marker prefixing the per-step timing records written to the run log by
-#: ``AbstractSystemHandler._log_step_timing``. Each tagged line is followed by
-#: a JSON object holding the measured and estimated duration of one step;
-#: :mod:`PycroFlow.protocols.timing_analysis` mines them to score and improve
-#: the estimates below.
-STEP_TIMING_TAG = 'STEP_TIMING'
+# --- calibrated per-step overheads (seconds) -------------------------------
+# Measured from lab STEP_TIMING logs (ibidi multiplexer + Hamilton PSD/MVP).
+# Each is overridable via the subsystem ``parameters`` block under the given
+# ``est_*`` key once timing_analysis calibrates a specific setup.
+
+#: Fixed cost of an ``inject`` beyond fluid motion: the ibidi channel
+#: switching (~24 ``SET:Valve`` commands), the Hamilton pump-valve rotations,
+#: and the extraction pump driven in parallel. Override: ``est_inject_overhead``.
+DEFAULT_INJECT_OVERHEAD_S = 3.45
+#: Fixed cost of a standalone ``pump_out``. Override: ``est_pumpout_overhead``.
+DEFAULT_PUMPOUT_OVERHEAD_S = 1.6
+#: Per-acquisition arm/ZMQ/PFS startup before frames stream.
+#: Override: ``est_acquire_setup``.
+DEFAULT_ACQUIRE_SETUP_S = 2.0
+#: Camera readout/transfer per frame *beyond* the exposure time.
+#: Override: ``est_frame_overhead``.
+DEFAULT_FRAME_OVERHEAD_S = 0.09
+
+
+def _param(parameters, key, default):
+    """Read a numeric override from a parameters block, else ``default``."""
+    try:
+        val = parameters.get(key)
+        return float(val) if val is not None else float(default)
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def estimate_entry_duration(entry, parameters=None):
     """Estimate one protocol entry's wall-clock duration, in seconds.
 
-    Returns ``0.0`` for coordination / instantaneous steps and for entries
-    whose timing parameters are missing.
+    Adds the calibrated fixed overheads (see the module docstring) to the
+    ideal fluid-motion / exposure time. Returns ``0.0`` for coordination /
+    instantaneous steps and for entries whose timing parameters are missing.
 
     Parameters
     ----------
@@ -51,16 +78,27 @@ def estimate_entry_duration(entry, parameters=None):
         A protocol entry (needs ``$type`` and the type's timing fields).
     parameters : dict, optional
         The owning subsystem's ``parameters`` block, used for the fluid
-        fallback velocity and the inject equilibration delays.
+        fallback velocity, the inject equilibration delays, and the optional
+        ``est_*`` overhead overrides.
     """
     if not isinstance(entry, dict):
         return 0.0
     parameters = parameters or {}
     type_ = entry.get("$type")
     if type_ == "acquire":
-        frames = entry.get("frames") or 0
-        t_exp = entry.get("t_exp") or 0  # milliseconds per frame
-        return float(frames) * float(t_exp) / 1000.0
+        frames = float(entry.get("frames") or 0)
+        t_exp = float(entry.get("t_exp") or 0)  # milliseconds per frame
+        if frames <= 0:
+            return 0.0
+        frame_overhead = _param(
+            parameters, "est_frame_overhead", DEFAULT_FRAME_OVERHEAD_S
+        )
+        setup = _param(
+            parameters, "est_acquire_setup", DEFAULT_ACQUIRE_SETUP_S
+        )
+        # Each frame costs its exposure plus camera readout/transfer, and the
+        # whole acquisition has a fixed arm/PFS/ZMQ startup.
+        return frames * (t_exp / 1000.0 + frame_overhead) + setup
     if type_ == "incubate":
         try:
             return max(float(entry.get("duration") or 0), 0.0)
@@ -77,6 +115,13 @@ def estimate_entry_duration(entry, parameters=None):
             seconds += parameters.get("inject_in_to_out_delay", 0) or 0
             seconds += parameters.get("inject_out_to_in_delay", 0) or 0
             seconds += 2 * (entry.get("delay", 0) or 0)
+            seconds += _param(
+                parameters, "est_inject_overhead", DEFAULT_INJECT_OVERHEAD_S
+            )
+        else:
+            seconds += _param(
+                parameters, "est_pumpout_overhead", DEFAULT_PUMPOUT_OVERHEAD_S
+            )
         return max(seconds, 0.0)
     return 0.0
 

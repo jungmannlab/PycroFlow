@@ -32,12 +32,25 @@ def _example_protocol():
 
 class TestEntryDuration(unittest.TestCase):
 
-    def test_acquire_is_frames_times_exposure(self):
-        # 1000 frames * 100 ms = 100 s.
+    def test_acquire_is_frames_times_exposure_plus_overhead(self):
+        # 1000 frames * (100 ms exposure + 90 ms readout) + 2 s arm/startup.
         d = estimate_entry_duration(
             {"$type": "acquire", "frames": 1000, "t_exp": 100}
         )
-        self.assertAlmostEqual(d, 100.0)
+        self.assertAlmostEqual(d, 1000 * (0.1 + 0.09) + 2.0)
+
+    def test_acquire_overheads_are_overridable(self):
+        # est_frame_overhead / est_acquire_setup tune the acquire model.
+        d = estimate_entry_duration(
+            {"$type": "acquire", "frames": 100, "t_exp": 100},
+            {"est_frame_overhead": 0.0, "est_acquire_setup": 0.0},
+        )
+        self.assertAlmostEqual(d, 10.0)  # back to frames * t_exp
+
+    def test_zero_frame_acquire_is_zero(self):
+        self.assertEqual(
+            estimate_entry_duration({"$type": "acquire", "frames": 0}), 0.0
+        )
 
     def test_incubate_uses_duration(self):
         self.assertAlmostEqual(
@@ -50,25 +63,46 @@ class TestEntryDuration(unittest.TestCase):
             12.0,
         )
 
-    def test_inject_uses_volume_over_velocity(self):
-        # 120 * 500 / 1000 = 60 s, plus delays.
+    def test_inject_uses_volume_over_velocity_plus_overhead(self):
+        # 120 * 500 / 1000 = 60 s motion, plus the fixed inject overhead.
         d = estimate_entry_duration(
             {"$type": "inject", "volume": 500, "velocity": 1000}
         )
-        self.assertAlmostEqual(d, 60.0)
+        self.assertAlmostEqual(d, 60.0 + 3.45)
 
     def test_inject_falls_back_to_max_velocity(self):
         d = estimate_entry_duration(
             {"$type": "inject", "volume": 500}, {"max_velocity": 1000}
         )
+        self.assertAlmostEqual(d, 60.0 + 3.45)
+
+    def test_inject_overhead_dominates_small_volumes(self):
+        # A 1 µl inject is almost all fixed overhead (the log's 1 µl injects
+        # took ~3 s though motion is ~0.01 s).
+        d = estimate_entry_duration(
+            {"$type": "inject", "volume": 1, "velocity": 10000}
+        )
+        self.assertAlmostEqual(d, 120.0 / 10000 + 3.45)
+
+    def test_inject_overhead_is_overridable(self):
+        d = estimate_entry_duration(
+            {"$type": "inject", "volume": 500, "velocity": 1000},
+            {"est_inject_overhead": 0.0},
+        )
         self.assertAlmostEqual(d, 60.0)
+
+    def test_pump_out_adds_its_own_overhead(self):
+        d = estimate_entry_duration(
+            {"$type": "pump_out", "volume": 1, "velocity": 10000}
+        )
+        self.assertAlmostEqual(d, 120.0 / 10000 + 1.6)
 
     def test_inject_adds_equilibration_delays(self):
         d = estimate_entry_duration(
             {"$type": "inject", "volume": 500, "velocity": 1000, "delay": 5},
             {"inject_in_to_out_delay": 3, "inject_out_to_in_delay": 2},
         )
-        self.assertAlmostEqual(d, 60.0 + 3 + 2 + 2 * 5)
+        self.assertAlmostEqual(d, 60.0 + 3 + 2 + 2 * 5 + 3.45)
 
     def test_coordination_and_instant_steps_are_zero(self):
         for entry in (

@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Run Sequence duration estimates are far more accurate. The per-step model
+  (`protocols.timing.estimate_entry_duration`, which drives the design-tab ETA,
+  the live remaining-time readout, and the `STEP_TIMING` log's `estimate_s`)
+  only counted ideal fluid motion / exposure time and so badly underestimated
+  every step — a run estimated at ~1 min actually took ~3.5 min. Calibrated
+  from `STEP_TIMING` run logs, it now adds the dominant fixed overheads: an
+  `inject` adds ~3.45 s (ibidi channel switching, Hamilton pump-valve
+  rotations, the concurrently-driven extraction pump — so a 1 µl inject now
+  reads ~3 s, not 0.01 s), a `pump_out` adds ~1.6 s, and an `acquire` adds
+  ~0.09 s/frame of camera readout beyond exposure plus ~2 s of per-acquisition
+  arm/PFS/ZMQ startup (100 frames @ 100 ms now ~21 s, not 10 s). Each overhead
+  is overridable per setup via the subsystem `parameters` block
+  (`est_inject_overhead` / `est_pumpout_overhead` / `est_frame_overhead` /
+  `est_acquire_setup`) once `protocols.timing_analysis` calibrates it. Also
+  removed a duplicated `STEP_TIMING_TAG` definition.
 - Dropped the spurious 1 µl pump-out + 1 µl re-inject that preceded every
   flush when `vol_remove_before_flush` is 0 (its default). `create_step_pumpout`
   / `create_step_inject` floor volumes at 1 µl, so a 0 pre-removal compiled to a

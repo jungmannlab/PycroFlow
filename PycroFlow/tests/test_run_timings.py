@@ -297,7 +297,8 @@ class TestStepTimingEmission(unittest.TestCase):
         self.assertEqual(record['step'], 3)       # 1-based for humans
         self.assertEqual(record['type'], 'inject')
         self.assertEqual(record['actual_s'], 42.5)
-        self.assertEqual(record['estimate_s'], 60.0)   # 120 * 500 / 1000
+        # 120 * 500 / 1000 motion + the fixed inject overhead (3.45 s).
+        self.assertEqual(record['estimate_s'], 63.45)
         self.assertEqual(record['volume'], 500)
 
     def test_timing_failure_never_breaks_a_run(self):
