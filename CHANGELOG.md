@@ -48,9 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   traffic and stays live during a run. Hovering a port (or picking a reservoir
   in the manual "Set valves" dropdown) highlights that reservoir's full
   expected path to the pump, so the intended route can be compared against the
-  live open-valve path at a glance. Backed by new frontend-agnostic
-  `SystemService.fluid_topology()` (incl. per-reservoir `routes`) /
-  `fluid_state()`. Optional
+  live open-valve path at a glance. Clicking a port toggles that ibidi
+  channel open/closed and clicking a pump flips its syringe valve (in ↔ out)
+  — both raw manual overrides that ignore reservoir routing, backed by
+  `SystemService.toggle_multiplexer_channel()` / `toggle_pump_valve()`, run
+  off the GUI thread and blocked while the orchestrator holds the run lock.
+  The port-1→pump_a feed is drawn out to the left of the grid and over its
+  top so it no longer crosses the other reservoir ports. Backed by new
+  frontend-agnostic `SystemService.fluid_topology()` (incl. per-reservoir
+  `routes`) / `fluid_state()`. Optional
   `fluid.multiplexer.grid_cols` / `pump_channel` keys tune the drawn geometry
   (default 6 / port 1). Removed a stale duplicate of the Fluid tab's
   `_refresh_reservoirs` / `_update_route_hint` while wiring this in.

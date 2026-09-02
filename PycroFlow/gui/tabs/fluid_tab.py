@@ -46,6 +46,8 @@ class FluidTab(QWidget):
         self._svc = system_service
         self._on_connect = on_connect
         self._busy = False
+        # Manual schematic toggles are blocked while the orchestrator runs.
+        self._run_locked = False
         self._build_ui()
         # Buttons disabled while a fluid op runs in the background (the serial
         # bus serves one operation at a time). STOP stays enabled.
@@ -97,7 +99,15 @@ class FluidTab(QWidget):
         schematic_box = QGroupBox("Live wiring && valve state")
         sbl = QVBoxLayout(schematic_box)
         self.schematic = FluidSchematic()
+        # Clicking a port toggles that ibidi channel; clicking a pump toggles
+        # its syringe valve — both raw, ignoring reservoir routing.
+        self.schematic.channel_clicked.connect(self._on_channel_clicked)
+        self.schematic.pump_clicked.connect(self._on_pump_clicked)
         sbl.addWidget(self.schematic)
+        sbl.addWidget(self._hint(
+            "Click a port to toggle that ibidi channel open/closed; click a "
+            "pump to flip its valve (in ↔ out). Raw overrides — routing is "
+            "ignored."))
         splitter.addWidget(schematic_box)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
@@ -295,6 +305,22 @@ class FluidTab(QWidget):
         except Exception:  # pragma: no cover - never let the timer die
             self.schematic.set_state(None)
 
+    def _on_channel_clicked(self, channel):
+        """Toggle one ibidi channel open/closed from a port click."""
+        if self._run_locked or self._svc.fluid_system is None:
+            return
+        self._run(
+            lambda: self._svc.toggle_multiplexer_channel(channel),
+            "Toggle channel {}".format(channel))
+
+    def _on_pump_clicked(self, pump_name):
+        """Toggle a pump's syringe valve (in <-> out) from a pump click."""
+        if self._run_locked or self._svc.fluid_system is None:
+            return
+        self._run(
+            lambda: self._svc.toggle_pump_valve(pump_name),
+            "Toggle {} valve".format(pump_name))
+
     def set_status_text(self, text):
         """Set the status label (e.g. 'connecting…') from the coordinator."""
         self.status_label.setText(text)
@@ -306,6 +332,7 @@ class FluidTab(QWidget):
         connect / tubing / pump actions must not be issued. The emergency
         STOP button is intentionally left enabled.
         """
+        self._run_locked = locked   # also gates schematic click-toggles
         self.connect_btn.setEnabled(not locked)
         for btn in self._busy_buttons:
             btn.setEnabled(not locked)
@@ -473,9 +500,15 @@ class FluidTab(QWidget):
         run_in_background(
             self,
             call,
-            on_done=lambda _: self._set_busy(False),
+            on_done=lambda _: self._on_op_done(),
             on_error=lambda exc: self._on_op_error(exc, what),
         )
+
+    def _on_op_done(self):
+        self._set_busy(False)
+        # Reflect the op's effect on the schematic at once (before the next
+        # poll tick), so a toggle looks instantaneous.
+        self._refresh_schematic_state()
 
     def _on_op_error(self, exc, what):
         self._set_busy(False)

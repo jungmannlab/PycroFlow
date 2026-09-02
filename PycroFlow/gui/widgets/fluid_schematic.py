@@ -29,6 +29,7 @@ from PyQt6.QtGui import (
     QColor,
     QPen,
     QBrush,
+    QPolygonF,
 )
 from PyQt6.QtWidgets import QWidget, QSizePolicy
 
@@ -54,6 +55,12 @@ class FluidSchematic(QWidget):
     #: Emitted with the reservoir id under the cursor (or ``None`` when the
     #: cursor leaves the ports), so a host can echo the hovered route.
     reservoir_hovered = pyqtSignal(object)
+    #: Emitted with an ibidi channel number when its port is clicked (a raw
+    #: open/close toggle, ignoring reservoir routing).
+    channel_clicked = pyqtSignal(int)
+    #: Emitted with a pump name ('pump_a' / 'pump_out') when it is clicked (a
+    #: raw in<->out valve toggle).
+    pump_clicked = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -63,8 +70,10 @@ class FluidSchematic(QWidget):
         # dropdown) and a transient "hovered" one; hover wins while present.
         self._selected_res = None
         self._hover_res = None
-        # channel -> QRectF from the last paint, for cursor hit-testing.
+        # channel -> QRectF and pump-name -> QRectF from the last paint, for
+        # cursor hit-testing (clicks toggle the thing under the cursor).
         self._port_rects = {}
+        self._pump_rects = {}
         self.setMinimumSize(520, 300)
         self.setMouseTracking(True)
         self.setSizePolicy(
@@ -81,6 +90,7 @@ class FluidSchematic(QWidget):
         """Set the static wiring (from ``SystemService.fluid_topology``)."""
         self._topo = topo
         self._port_rects = {}
+        self._pump_rects = {}
         self.update()
 
     def set_state(self, state):
@@ -134,6 +144,13 @@ class FluidSchematic(QWidget):
                 return channel
         return None
 
+    def _pump_at(self, pos):
+        """Pump name whose station rect contains ``pos``, or ``None``."""
+        for name, r in self._pump_rects.items():
+            if r.contains(QPointF(pos)):
+                return name
+        return None
+
     def mouseMoveEvent(self, event):  # noqa: N802 (Qt override)
         channel = self._channel_at(event.position())
         ports = ((self._topo or {}).get("multiplexer") or {}).get("ports", {})
@@ -150,7 +167,28 @@ class FluidSchematic(QWidget):
             self._update_hover_tooltip(channel, rid)
             self.reservoir_hovered.emit(rid)
             self.update()
+        # A pointing-hand cursor advertises the clickable ports / pumps.
+        clickable = channel is not None or self._pump_at(event.position())
+        self.setCursor(
+            Qt.CursorShape.PointingHandCursor
+            if clickable
+            else Qt.CursorShape.ArrowCursor
+        )
         super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event):  # noqa: N802 (Qt override)
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        channel = self._channel_at(event.position())
+        if channel is not None:
+            self.channel_clicked.emit(channel)
+            return
+        pump = self._pump_at(event.position())
+        if pump is not None:
+            self.pump_clicked.emit(pump)
+            return
+        super().mousePressEvent(event)
 
     def leaveEvent(self, event):  # noqa: N802 (Qt override)
         if self._hover_res is not None:
@@ -372,20 +410,23 @@ class FluidSchematic(QWidget):
             cx + col_w * 0.18, top + station_h, col_w * 0.64, station_h * 0.6
         )
         po_rect = QRectF(cx, top + 2 * station_h, col_w, station_h * 0.9)
+        self._pump_rects = {"pump_a": pa_rect, "pump_out": po_rect}
 
         a_valve = pa.get("valve") if pa else None
         # pump_a: 'in' draws syringe<->multiplexer, 'out' syringe<->sample.
         leg_mux_active = a_valve == "in"
         leg_sample_active = a_valve == "out"
 
-        # Connector: multiplexer pump-port -> pump_a.
+        # Connector: multiplexer pump-port (port 1) -> pump_a. Routed out to
+        # the LEFT of the multiplexer and over its top, so it never crosses
+        # the other reservoir ports (port 1 is the grid's bottom-left cell,
+        # with nothing to its left).
         if pump_port_center is not None:
-            self._draw_link(
+            self._draw_feed_line(
                 painter,
                 pump_port_center,
                 QPointF(pa_rect.left(), pa_rect.center().y()),
                 leg_mux_active,
-                elbow=True,
             )
         # pump_a -> sample.
         self._draw_link(
@@ -416,17 +457,33 @@ class FluidSchematic(QWidget):
             out_label="waste",
         )
 
-    def _draw_link(self, painter, p1, p2, active, elbow=False):
+    def _draw_link(self, painter, p1, p2, active):
         pen = QPen(_ACTIVE if active else _IDLE, 3 if active else 2)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
-        if elbow:
-            mid = QPointF(p2.x() - min(24, abs(p2.x() - p1.x()) / 2), p1.y())
-            painter.drawLine(p1, mid)
-            painter.drawLine(mid, QPointF(mid.x(), p2.y()))
-            painter.drawLine(QPointF(mid.x(), p2.y()), p2)
-        else:
-            painter.drawLine(p1, p2)
+        painter.drawLine(p1, p2)
+
+    def _draw_feed_line(self, painter, p_from, p_to, active):
+        """Route the port-1 -> pump_a feed left of the grid and over its top.
+
+        A polyline that exits ``p_from`` (port 1) to the left, climbs the
+        far-left margin, runs along the top above the whole grid, then drops
+        into ``p_to`` (pump_a's left side) — keeping clear of every port.
+        """
+        pen = QPen(_ACTIVE if active else _IDLE, 3 if active else 2)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        x_left = 6.0
+        y_top = 6.0
+        pts = [
+            p_from,
+            QPointF(x_left, p_from.y()),
+            QPointF(x_left, y_top),
+            QPointF(p_to.x(), y_top),
+            p_to,
+        ]
+        painter.drawPolyline(QPolygonF(pts))
 
     def _draw_pump(self, painter, r, name, snap, in_label, out_label):
         """Draw a syringe pump: barrel with a fill level + valve state."""

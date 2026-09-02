@@ -2136,6 +2136,35 @@ class TestFluidSchematic(unittest.TestCase):
         self.assertIsNone(widget._hover_res)
         self.assertEqual(hovered, [8, None])
 
+    def test_clicking_a_port_or_pump_emits_toggle_signals(self):
+        from PyQt6.QtGui import QPixmap, QMouseEvent
+        from PyQt6.QtCore import QEvent, Qt
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+
+        svc = SystemService()
+        svc.load_setup('Ibidi')
+        widget = FluidSchematic()
+        widget.resize(1000, 560)
+        widget.set_topology(svc.fluid_topology())
+        widget.render(QPixmap(widget.size()))   # populates the hit-boxes
+
+        channels, pumps = [], []
+        widget.channel_clicked.connect(channels.append)
+        widget.pump_clicked.connect(pumps.append)
+
+        def click(pos):
+            widget.mousePressEvent(QMouseEvent(
+                QEvent.Type.MouseButtonPress, pos, pos,
+                Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier))
+
+        click(widget._port_rects[8].center())
+        click(widget._pump_rects['pump_a'].center())
+        click(widget._pump_rects['pump_out'].center())
+        self.assertEqual(channels, [8])
+        self.assertEqual(pumps, ['pump_a', 'pump_out'])
+
 
 @unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
 class TestFluidTabSchematic(unittest.TestCase):
@@ -2186,6 +2215,36 @@ class TestFluidTabSchematic(unittest.TestCase):
         rid, channels = tab.schematic._active_highlight()
         self.assertEqual(rid, 8)
         self.assertEqual(channels, {1, 6, 7, 8})
+
+    def test_schematic_clicks_toggle_hardware_and_respect_run_lock(self):
+        from PycroFlow.gui.widgets import worker
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.tabs.fluid_tab import FluidTab
+
+        worker.set_synchronous(True)
+        svc = SystemService()
+        svc.load_setup('IbidiEmulator')
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200},
+            'settings': {'reservoir_names': {1: 'R1', 2: 'R2'},
+                         'special_names': {}},
+        })
+        tab = FluidTab(svc)
+        tab.refresh()
+        mux = svc.fluid_system.multiplexer
+
+        # A port click toggles that raw channel through the service.
+        self.assertFalse(mux.channel_states[6])
+        tab.schematic.channel_clicked.emit(7)
+        self.assertTrue(mux.channel_states[6])
+        # A pump click flips its syringe valve.
+        tab.schematic.pump_clicked.emit('pump_a')
+        self.assertEqual(svc.fluid_system.pump_a.valve_pos, 'in')
+
+        # While the orchestrator holds the run lock, clicks are ignored.
+        tab.set_run_lock(True)
+        tab.schematic.channel_clicked.emit(7)
+        self.assertTrue(mux.channel_states[6])   # unchanged
 
 
 if __name__ == "__main__":

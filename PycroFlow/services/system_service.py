@@ -611,6 +611,72 @@ class SystemService:
                 "close")
         mux.close_all()
 
+    def toggle_multiplexer_channel(self, channel):
+        """Flip one ibidi channel open<->closed, ignoring reservoir routing.
+
+        A raw manual override for probing the plumbing: opens the channel if
+        it is closed (or its state is unknown) and closes it if open, leaving
+        every other channel untouched — unlike :meth:`set_valves`, which opens
+        a reservoir's whole route exclusively.
+
+        Parameters
+        ----------
+        channel : int
+            Channel to toggle (1..channels).
+
+        Returns
+        -------
+        bool
+            The channel's new open state (True = open/flowing).
+
+        Raises
+        ------
+        RuntimeError
+            The connected fluid system has no ibidi multiplexer.
+        """
+        self._require('fluid_system')
+        mux = getattr(self.fluid_system, 'multiplexer', None)
+        if mux is None:
+            raise RuntimeError(
+                "the connected fluid system has no ibidi multiplexer")
+        states = getattr(mux, 'channel_states', []) or []
+        idx = channel - 1
+        current = states[idx] if 0 <= idx < len(states) else None
+        new_open = not bool(current)
+        mux.set_channel(channel, new_open)
+        return new_open
+
+    def toggle_pump_valve(self, pump_name):
+        """Flip a pump's syringe valve between its 'in' and 'out' ports.
+
+        A raw manual override of the syringe routing: ``'in'`` connects the
+        syringe to the multiplexer (reservoir) side, ``'out'`` to the sample
+        side. An unknown current position resolves to ``'in'``.
+
+        Parameters
+        ----------
+        pump_name : str
+            ``'pump_a'`` or ``'pump_out'``.
+
+        Returns
+        -------
+        str
+            The new valve position (``'in'`` or ``'out'``).
+
+        Raises
+        ------
+        KeyError
+            No pump of that name exists on the fluid system.
+        """
+        self._require('fluid_system')
+        pump = getattr(self.fluid_system, pump_name, None)
+        if pump is None:
+            raise KeyError(
+                "no such pump on fluid_system: {!r}".format(pump_name))
+        new_pos = 'out' if getattr(pump, 'valve_pos', None) == 'in' else 'in'
+        pump.set_valve(new_pos)
+        return new_pos
+
     # --- Live fluid schematic (topology + valve/syringe state) ----------
 
     def fluid_topology(self):

@@ -410,6 +410,49 @@ class TestSystemService(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             svc.close_all_valves()
 
+    def test_toggle_multiplexer_channel_flips_raw_state(self):
+        # A raw manual override: toggling one channel does not disturb others
+        # and ignores reservoir routing entirely.
+        svc = SystemService()
+        svc.load_setup('IbidiEmulator')
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200},
+            'settings': {'reservoir_names': {1: 'R1', 2: 'R2'},
+                         'special_names': {}},
+        })
+        mux = svc.fluid_system.multiplexer
+        self.assertFalse(mux.channel_states[4])
+        self.assertTrue(svc.toggle_multiplexer_channel(5))   # closed -> open
+        self.assertTrue(mux.channel_states[4])
+        self.assertFalse(svc.toggle_multiplexer_channel(5))  # open -> closed
+        self.assertFalse(mux.channel_states[4])
+
+    def test_toggle_multiplexer_without_mux_raises(self):
+        svc = SystemService()
+        svc.load_setup('Emulator')
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200},
+            'settings': {'reservoir_names': {1: 'R1'},
+                         'special_names': {'flushbuffer_a': 1}},
+        })
+        with self.assertRaises(RuntimeError):
+            svc.toggle_multiplexer_channel(1)
+
+    def test_toggle_pump_valve_flips_in_out(self):
+        svc = SystemService()
+        svc.load_setup('IbidiEmulator')
+        svc.connect_fluid({
+            'parameters': {'max_velocity': 200},
+            'settings': {'reservoir_names': {1: 'R1'},
+                         'special_names': {}},
+        })
+        self.assertEqual(svc.toggle_pump_valve('pump_a'), 'in')   # None -> in
+        self.assertEqual(svc.fluid_system.pump_a.valve_pos, 'in')
+        self.assertEqual(svc.toggle_pump_valve('pump_a'), 'out')
+        self.assertEqual(svc.toggle_pump_valve('pump_a'), 'in')
+        with self.assertRaises(KeyError):
+            svc.toggle_pump_valve('pump_nope')
+
     def test_fluid_topology_reads_meander_grid_and_taps(self):
         # The live-schematic topology is read straight from the setup: the
         # ibidi grid geometry, the pump-wired port, and each port's tap.
