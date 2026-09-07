@@ -120,6 +120,8 @@ The Experiment Design has its own pydantic schema (`schemas/experiment_design.py
 ### Illumination (`illumination.py`)
 `IlluminationSystem` manages laser power/wavelength via **monet**, which is an external sibling repository (not vendored — see `docs/adr/004`). Tests mock it. The monet config name is the **microscope setup** name (a `monet.CONFIGS` key), passed to `IlluminationSystem(setup=...)` by `SystemService.connect_illumination` — *not* carried in the experiment design. The Experiment Design only holds illumination **intent** (`illu.settings`: laser, power_acq/nonacq in mW, warmup, shutter); it has no `illu.parameters` (monet provides the per-microscope calibration; the old `channel_group`/`filter`/`ROI` were unused). monet loads lazily on first laser use (`_ensure_monet`).
 
+**Future networked clients (registry / monet HTTP APIs).** When PycroFlow starts writing to `picasso-registry` or calling monet's HTTP power API (WP-4 / WP-12x), those calls cross a machine boundary and carry a **bearer token** read from local/per-machine config (env or gitignored secrets — never committed, never logged). This is the client side of the stack-wide service-auth pattern; see `picasso-registry/docs/adr/001-service-authentication.md` and Open-Decisions **A9**. Local seams (serial, pycromanager localhost ZMQ, the Aria localhost socket, `mm_lock`) stay auth-free by design — keep them loopback/OS-isolated, never bound to `0.0.0.0`.
+
 ### Services (`services/`)
 Frontend-agnostic layer both the CLI and the Qt GUI consume: `ExperimentService` (lifecycle + observer hooks), `SystemService` (manual hardware control), `mm_core` (Core ownership).
 
