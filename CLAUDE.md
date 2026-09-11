@@ -10,7 +10,7 @@ See `ARCHITECTURE.md` for the package map, `docs/architecture.md` for detail, an
 
 ## Repository & workflow
 
-- **Active branch:** `feature-FullAutoS0A` (feature branch; PRs target `master`). This repo is one of several checked out under the `DNA-PAINT-FullAutomation` workspace — see the standing pointers below.
+- **Branching:** dev branch `develop`; release path `develop` → `master` (tag on `master`). Work each task on its own feature branch and PR per the **Branch map** in the work-order briefs (see standing pointers). Don't pin the current branch here — check the tracker's branch-state note or `git`; a pinned branch is what goes stale. This repo is one of several checked out under the `DNA-PAINT-FullAutomation` workspace.
 - **Versioning:** driven by `setuptools-scm` from the latest reachable **git tag** (single source of truth — `pyproject.toml` has `dynamic = ["version"]`, no static number). At build/install time scm writes the resolved value into `PycroFlow/_version.py` (git-ignored, generated); `PycroFlow.__init__` imports it (`from ._version import version`), falling back to `importlib.metadata` then `"0.0.0"` in an uninstalled source tree. `[tool.setuptools_scm]` sets `fallback_version` for checkouts with no reachable tag. To release, create an annotated `vX.Y.Z` git tag — do **not** edit a version string.
 - **Changelog:** keep `CHANGELOG.md` (Keep a Changelog format, SemVer) current — add an entry under the `[Unreleased]` heading in every PR that changes behaviour, and promote `[Unreleased]` to a dated, version-stamped section when you cut a release tag.
 
