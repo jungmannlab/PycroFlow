@@ -237,6 +237,24 @@ class TubingConfig:
             for ent in self.config.keys()
             if ent[0] == res and "pump_a" in ent[1]
         ]
+        if not entries:
+            # No valve or pump_a directly downstream of this reservoir. This
+            # is the ibidi MultiFlOW topology: the multiplexer is not part of
+            # the tubing graph, so reservoirs daisy-chain toward the pump via
+            # other reservoir junctions (R2 -> R1 -> pump_a, R3 -> R2 -> ...).
+            # Fall back to the reservoir's own outgoing segment into the next
+            # reservoir node -- its dead leg up to the first shared junction,
+            # which is exactly the volume fill_tubings needs to prime. (For
+            # the Hamilton MVP topology the branches above already matched, so
+            # this changes nothing there.) A segment to a non-reservoir sink
+            # (e.g. 'sample') is not an upstream-to-pump path and still raises.
+            entries = [
+                ent
+                for ent in self.config.keys()
+                if ent[0] == res
+                and isinstance(ent[1], str)
+                and ent[1].startswith("R")
+            ]
         logger.debug("found entries{:s}".format(str(entries)))
         if len(entries) == 1:
             return self.config[entries[0]]
