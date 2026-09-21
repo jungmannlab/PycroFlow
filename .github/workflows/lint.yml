@@ -1,0 +1,50 @@
+name: Lint
+
+# Lint runs on a cheap GitHub-hosted runner (ubuntu-latest). It is one of the
+# REQUIRED status checks that gate merges into develop/master; the self-hosted
+# Windows unit tier (run-unittests-windows.yml) needs lab hardware + USB drivers
+# and is unavailable on forks, so it must NOT be a required check. black and
+# flake8 read their config from pyproject.toml ([tool.black] / [tool.flake8] via
+# Flake8-pyproject); the Black version is pinned to match .pre-commit-config.yaml
+# so CI and the local pre-commit hook agree.
+
+on:
+  push:
+    branches:
+      - master
+      - develop
+  pull_request:
+    branches:
+      - master
+      - develop
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint (black + flake8)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install lint tools
+        # Pin Black to the version the pre-commit hook / local devs run so CI
+        # and pre-commit agree. flake8 reads [tool.flake8] via Flake8-pyproject.
+        run: |
+          python -m pip install --upgrade pip
+          pip install "black==25.9.0" flake8 Flake8-pyproject
+
+      - name: black --check
+        run: black --check .
+
+      - name: flake8
+        run: flake8 .

@@ -87,7 +87,7 @@ PYCROFLOW_UPDATE_SNAPSHOTS=1 python -m unittest PycroFlow.tests.test_regression_
 ```
 Commit the updated JSON in `PycroFlow/tests/fixtures/snapshots/`.
 
-CI runs `python -m unittest discover -v` on Windows / Python 3.10 (`.github/workflows/tests.yml`). There are no configured linters/formatters yet (`ruff`/`mypy` are in the `[dev]` extra).
+CI runs on GitHub-hosted `ubuntu-latest` runners as the required merge gate: a `Lint` job (`black --check` + `flake8`, `.github/workflows/lint.yml`) and a `Unit Tests (hosted)` job (`python -m unittest discover -v` with the Qt runtime libs + `QT_QPA_PLATFORM=offscreen` so the GUI tests run headlessly, `.github/workflows/unit-tests-hosted.yml`), both on push/PR to `master`/`develop`. The Windows unit tier (`.github/workflows/run-unittests-windows.yml`, mirroring the lab target platform) is demoted to `workflow_dispatch` only so a scarce/forks-unavailable runner can't block merges — run it manually from the Actions tab. `ruff`/`mypy` are in the `[dev]` extra but not yet wired into CI.
 
 ### Hardware emulators (`tests/emulators/`)
 Behavioral hardware fakes for tests, in three fidelity layers (vs. the import-only `MagicMock` shims in `tests/_mock_hardware.py`):
@@ -119,6 +119,8 @@ The Experiment Design has its own pydantic schema (`schemas/experiment_design.py
 
 ### Illumination (`illumination.py`)
 `IlluminationSystem` manages laser power/wavelength via **monet**, which is an external sibling repository (not vendored — see `docs/adr/004`). Tests mock it. The monet config name is the **microscope setup** name (a `monet.CONFIGS` key), passed to `IlluminationSystem(setup=...)` by `SystemService.connect_illumination` — *not* carried in the experiment design. The Experiment Design only holds illumination **intent** (`illu.settings`: laser, power_acq/nonacq in mW, warmup, shutter); it has no `illu.parameters` (monet provides the per-microscope calibration; the old `channel_group`/`filter`/`ROI` were unused). monet loads lazily on first laser use (`_ensure_monet`).
+
+**Future networked clients (registry / monet HTTP APIs).** When PycroFlow starts writing to `picasso-registry` or calling monet's HTTP power API (WP-4 / WP-12x), those calls cross a machine boundary and carry a **bearer token** read from local/per-machine config (env or gitignored secrets — never committed, never logged). This is the client side of the stack-wide service-auth pattern; see `picasso-registry/docs/adr/001-service-authentication.md` and Open-Decisions **A9**. Local seams (serial, pycromanager localhost ZMQ, the Aria localhost socket, `mm_lock`) stay auth-free by design — keep them loopback/OS-isolated, never bound to `0.0.0.0`.
 
 ### Services (`services/`)
 Frontend-agnostic layer both the CLI and the Qt GUI consume: `ExperimentService` (lifecycle + observer hooks), `SystemService` (manual hardware control), `mm_core` (Core ownership).

@@ -21,12 +21,25 @@ classifiers = [
 
 # Runtime deps that are needed even for basic library use.
 # Heavy hardware-specific deps live in the [hardware] extra so test/dev
-# environments don't have to install them.
+# environments don't have to install them. numpy / pandas / openpyxl are here
+# (not in [hardware]) because the core, hardware-free modules import them at
+# module load: fluid/legacy.py does the pump-stroke arithmetic with numpy, and
+# imaging.py builds its PFS log as a pandas DataFrame and writes it via
+# DataFrame.to_excel(...xlsx) (which needs openpyxl). All three ship manylinux
+# wheels, so the base install stays wheel-only, and the unit suite can import
+# those modules on a plain `pip install -e .` (no [hardware] SDKs).
 dependencies = [
     "pyserial>=3.5",
     "loguru",
     "pyyaml>=6.0",
     "pydantic>=2,<3",
+    # Capped below 2.0 because the [hardware] stack (pycromanager 0.29.5 /
+    # ndtiff 2.2.1) predates numpy 2's ABI break and is not validated against
+    # it; keep the cap here so a base + [hardware] install resolves to one
+    # compatible numpy. Revisit when bumping pycromanager.
+    "numpy>=1.24,<2",
+    "pandas>=2.3",
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]
@@ -48,13 +61,9 @@ hardware = [
     # Left unpinned here only because the SHA must be resolved against GitHub
     # (no network access during this edit).
     "pycobolt @ git+https://github.com/cobolt-lasers/pycobolt.git",
-    # numpy was pinned to ==1.24.4; loosened to the 1.x line so bugfix
-    # releases are allowed. Capped below 2.0 because pycromanager 0.29.5 /
-    # ndtiff 2.2.1 predate numpy 2's ABI break and are not validated against
-    # it. Revisit when bumping pycromanager.
-    "numpy>=1.24,<2",
-    "pandas>=2.3",
-    "openpyxl>=3.1",
+    # numpy / pandas / openpyxl moved to the base `dependencies` (core
+    # fluid/imaging modules import them at load time); the numpy<2 ABI cap
+    # lives there too.
     "matplotlib>=3.10",
     "lmfit>=1.3",
     "icecream>=2.1",
