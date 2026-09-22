@@ -1947,10 +1947,29 @@ class LegacyArchitecture(AbstractSystem):
                 str(pickup_flushvalve), str(dispense_flushvalve)
             )
         )
+        # A reservoir is reached through the pump's *input* side, and routing
+        # to it (via ``_set_valves``) also drives the pump valve to its input
+        # position ("in"). So a ``pickup_res`` / ``dispense_res`` is only
+        # meaningful when the corresponding direction is that input side;
+        # when it points at the output (sample / waste) side, honouring the
+        # reservoir would clobber the requested "out" back to "in". Ignore it.
+        apply_pickup_res = pickup_res is not None and pickup_dir == "in"
+        apply_dispense_res = dispense_res is not None and dispense_dir == "in"
+        if pickup_res is not None and not apply_pickup_res:
+            logger.warning(
+                "ignoring pickup_res {!r}: pickup_dir {!r} is not the input "
+                "(reservoir) side".format(pickup_res, pickup_dir)
+            )
+        if dispense_res is not None and not apply_dispense_res:
+            logger.warning(
+                "ignoring dispense_res {!r}: dispense_dir {!r} is not the "
+                "input (reservoir) side".format(dispense_res, dispense_dir)
+            )
+
         curr_pump_vol = pump.get_current_volume()
         if curr_pump_vol > 0:
             pump.set_valve(dispense_dir)
-            if dispense_res is not None:
+            if apply_dispense_res:
                 self._set_valves(dispense_res)
             if dispense_flushvalve is not None:
                 self._set_flush_valve(dispense_flushvalve)
@@ -1968,14 +1987,14 @@ class LegacyArchitecture(AbstractSystem):
 
         for pump_volume in pump_volumes:
             pump.set_valve(pickup_dir)
-            if pickup_res is not None:
+            if apply_pickup_res:
                 self._set_valves(pickup_res)
             if pickup_flushvalve is not None:
                 self._set_flush_valve(pickup_flushvalve)
             pump.pickup(pump_volume, velocity, waitForPump=True)
             time.sleep(delay)
             pump.set_valve(dispense_dir)
-            if dispense_res is not None:
+            if apply_dispense_res:
                 self._set_valves(dispense_res)
             if dispense_flushvalve is not None:
                 self._set_flush_valve(dispense_flushvalve)

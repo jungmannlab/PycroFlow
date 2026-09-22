@@ -214,6 +214,26 @@ class LegacyArchitectureTest(unittest.TestCase):
         self.la._flush(flushfactor=1)
         self.assertGreater(len(self.fake.command_log), before)
 
+    def test_pump_ignores_dispense_res_when_dispensing_out(self):
+        # Routing to a reservoir drives the pump valve to its input side, so a
+        # dispense_res is meaningful only when dispensing to that same input
+        # side. Dispensing 'out' must ignore dispense_res (else it would
+        # clobber the requested 'out' back to 'in' -- the ibidi bug report).
+        routed = []
+        self.la._set_valves = lambda rid: routed.append(rid)
+        self.la._pump(
+            self.la.pump_a,
+            10,
+            pickup_dir="in",
+            dispense_dir="out",
+            pickup_res=1,
+            dispense_res=0,
+        )
+        # Pickup ('in') routes reservoir 1; dispense ('out') ignores res 0,
+        # so the reservoir routing can't clobber the requested 'out' valve.
+        self.assertIn(1, routed)
+        self.assertNotIn(0, routed)
+
     # --- lifecycle -------------------------------------------------------
 
     def test_pause_sets_flags_and_stops(self):

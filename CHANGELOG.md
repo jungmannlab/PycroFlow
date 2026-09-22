@@ -67,6 +67,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Manual "Pump move" in the Fluid tab now honours a `dispense_dir` of `out`
+  even when a dispense reservoir is set. Routing to a reservoir (via
+  `_set_valves`) also drives pump_a's valve to its input side ("in"), so a
+  `dispense_res` supplied alongside `dispense_dir='out'` silently clobbered the
+  requested `out` back to `in` — most visible on the ibidi setup, where the
+  pump valve *is* one of the reservoir's routed valves (`valve_pos: {..., 1:
+  in}`). `_pump` now applies `pickup_res` / `dispense_res` only when the
+  matching direction is the input (reservoir) side, ignoring (and logging) the
+  reservoir otherwise. All existing callers already pair a reservoir with an
+  `in` direction, so their behaviour is unchanged.
+- `fill_tubings` (and `fill_tubings_reverse` / cleaning) no longer raise
+  `KeyError: "Cannot find any tubing configuation entry leading from R… to a
+  valve"` on the ibidi MultiFlOW setup. The multiplexer is not part of the
+  tubing graph, so reservoirs daisy-chain toward the pump (`R2 → R1 → pump_a`)
+  rather than each tubing directly to a valve. `TubingConfig.
+  get_reservoir_to_closest_valve` now falls back to the reservoir's own
+  outgoing segment into the next reservoir junction — the dead leg to prime —
+  when no valve/`pump_a` is directly downstream. A reservoir dead-ending at a
+  non-reservoir sink (e.g. `sample`) still raises.
 - `numpy`, `pandas`, and `openpyxl` moved from the `[hardware]` extra into the
   base `dependencies` — they are imported at module load by the core,
   hardware-free `fluid/legacy.py` (numpy) and `imaging.py` (pandas DataFrame +
