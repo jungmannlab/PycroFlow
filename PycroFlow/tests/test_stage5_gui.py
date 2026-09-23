@@ -105,6 +105,7 @@ class TestMainWindow(unittest.TestCase):
         # Loading a design chdirs to its folder; keep test output out of the
         # checkout for whatever runs next.
         from PycroFlow.tests import chdir_to_test_output
+
         chdir_to_test_output()
 
     def _build(self):
@@ -380,7 +381,7 @@ class TestMainWindow(unittest.TestCase):
                 },
                 "protocol_entries": [
                     {"$type": "acquire", "frames": 1000, "t_exp": 120}
-                ]
+                ],
             },
             "illu": {"protocol_entries": []},
         }
@@ -867,6 +868,18 @@ class TestConnectionFlow(unittest.TestCase):
             w._system_service.get_monet_setup(), w.setup_combo.currentText()
         )
 
+    def test_monitoring_attaches_only_for_camera_setup(self):
+        w = self._win()
+        # The default Emulator setup declares no cameras -> inert.
+        w._on_setup_changed("Emulator")
+        self.assertIsNone(w._monitoring)
+        # EmulatorCam declares a monitoring block -> a controller attaches.
+        w._on_setup_changed("EmulatorCam")
+        self.assertIsNotNone(w._monitoring)
+        # Switching back detaches it (no lingering controller/observer).
+        w._on_setup_changed("Emulator")
+        self.assertIsNone(w._monitoring)
+
     def test_autoconnect_on_design_load(self):
         import PycroFlow
 
@@ -1069,8 +1082,10 @@ def _example_design():
     import PycroFlow
     from PycroFlow.services import ExperimentService
     from PycroFlow.tests import chdir_to_test_output
+
     path = os.path.join(
-        os.path.dirname(PycroFlow.__file__), 'examples', 'sph_resi_6plex.yaml')
+        os.path.dirname(PycroFlow.__file__), "examples", "sph_resi_6plex.yaml"
+    )
     try:
         return ExperimentService().load_experiment_design(path), path
     finally:
@@ -1192,12 +1207,16 @@ class TestSchemaForm(unittest.TestCase):
         # can still be entered.
         from PycroFlow.gui.widgets.schema_form import SchemaForm
         from PycroFlow.schemas.experiment_design import IlluSettings
-        form = SchemaForm(IlluSettings, {'laser': 642, 'power_acq': 70},
-                          context={'lasers': []})
-        ed = form.field_editor('laser')
+
+        form = SchemaForm(
+            IlluSettings,
+            {"laser": 642, "power_acq": 70},
+            context={"lasers": []},
+        )
+        ed = form.field_editor("laser")
         self.assertTrue(ed._combo.isEditable())
-        ed._combo.setCurrentText('750')
-        self.assertEqual(form.to_dict()['laser'], 750)
+        ed._combo.setCurrentText("750")
+        self.assertEqual(form.to_dict()["laser"], 750)
 
     def test_reservoir_ids_become_dropdown_when_setup_arrives(self):
         # The form is built before a setup is loaded (empty startup form), so
@@ -1205,26 +1224,34 @@ class TestSchemaForm(unittest.TestCase):
         from PycroFlow.gui.widgets.schema_form import SchemaForm, FormContext
         from PycroFlow.schemas.experiment_design import FluidSettings
         from PyQt6.QtWidgets import QComboBox, QLineEdit
-        ctx = FormContext({'reservoir_ids': []})
-        form = SchemaForm(FluidSettings, {
-            'vol_wash': 10, 'reservoir_names': {1: 'imager1', 2: 'imager2'},
-            'experiment': {'type': 'Exchange', 'wash_buffer': 'imager1'}},
-            context=ctx)
-        ed = form.field_editor('reservoir_names')
+
+        ctx = FormContext({"reservoir_ids": []})
+        form = SchemaForm(
+            FluidSettings,
+            {
+                "vol_wash": 10,
+                "reservoir_names": {1: "imager1", 2: "imager2"},
+                "experiment": {"type": "Exchange", "wash_buffer": "imager1"},
+            },
+            context=ctx,
+        )
+        ed = form.field_editor("reservoir_names")
         self.assertIsInstance(ed._rows[0][0], QLineEdit)
-        ctx.set_options('reservoir_ids', [1, 2, 3])
+        ctx.set_options("reservoir_ids", [1, 2, 3])
         id_cell = ed._rows[0][0]
         self.assertIsInstance(id_cell, QComboBox)
         self.assertEqual(
             [id_cell.itemText(i) for i in range(id_cell.count())],
-            ['1', '2', '3'])
+            ["1", "2", "3"],
+        )
         # Switching the column to dropdowns must not lose the entered data.
-        self.assertEqual(ed.get_value(), {1: 'imager1', 2: 'imager2'})
+        self.assertEqual(ed.get_value(), {1: "imager1", 2: "imager2"})
 
     @staticmethod
     def _next_tab_stop(w):
         """The widget Tab would move focus to (Qt skips non-tabbable ones)."""
         from PyQt6.QtCore import Qt
+
         cur = w.nextInFocusChain()
         while cur is not w:
             if cur.focusPolicy() & Qt.FocusPolicy.TabFocus:
@@ -1239,11 +1266,17 @@ class TestSchemaForm(unittest.TestCase):
         from PyQt6.QtCore import Qt
         from PycroFlow.gui.widgets.schema_form import SchemaForm, FormContext
         from PycroFlow.schemas.experiment_design import FluidSettings
-        form = SchemaForm(FluidSettings, {
-            'vol_wash': 10, 'reservoir_names': {1: 'a', 2: 'b', 3: 'c'},
-            'experiment': {'type': 'Exchange', 'wash_buffer': 'a'}},
-            context=FormContext({'reservoir_ids': [1, 2, 3]}))
-        ed = form.field_editor('reservoir_names')
+
+        form = SchemaForm(
+            FluidSettings,
+            {
+                "vol_wash": 10,
+                "reservoir_names": {1: "a", 2: "b", 3: "c"},
+                "experiment": {"type": "Exchange", "wash_buffer": "a"},
+            },
+            context=FormContext({"reservoir_ids": [1, 2, 3]}),
+        )
+        ed = form.field_editor("reservoir_names")
         (r0_id, r0_name, r0_rm), (_, r1_name, _), (_, r2_name, _) = ed._rows
         self.assertEqual(r0_rm.focusPolicy(), Qt.FocusPolicy.NoFocus)
         self.assertEqual(r0_id.focusPolicy(), Qt.FocusPolicy.ClickFocus)
@@ -1256,10 +1289,16 @@ class TestSchemaForm(unittest.TestCase):
         from PyQt6.QtCore import Qt
         from PycroFlow.gui.widgets.schema_form import SchemaForm
         from PycroFlow.schemas.experiment_design import FluidSettings
-        form = SchemaForm(FluidSettings, {
-            'vol_wash': 10, 'reservoir_names': {1: 'a', 2: 'b'},
-            'experiment': {'type': 'Exchange', 'wash_buffer': 'a'}})
-        ed = form.field_editor('reservoir_names')
+
+        form = SchemaForm(
+            FluidSettings,
+            {
+                "vol_wash": 10,
+                "reservoir_names": {1: "a", 2: "b"},
+                "experiment": {"type": "Exchange", "wash_buffer": "a"},
+            },
+        )
+        ed = form.field_editor("reservoir_names")
         (r0_id, r0_name, _), (r1_id, _, _) = ed._rows
         self.assertNotEqual(r0_id.focusPolicy(), Qt.FocusPolicy.ClickFocus)
         self.assertIs(self._next_tab_stop(r0_id), r0_name)
@@ -1270,123 +1309,32 @@ class TestSchemaForm(unittest.TestCase):
         # setup-derived dropdowns in place, not leave them stale.
         from PycroFlow.services import ExperimentService
         from PycroFlow.gui.tabs.experiment_design_tab import (
-            ExperimentDesignTab)
+            ExperimentDesignTab,
+        )
+
         lasers = []
         tab = ExperimentDesignTab(
-            ExperimentService(), laser_options_provider=lambda: list(lasers),
-            reservoir_ids_provider=lambda: [1, 2])
-        tab._set_form({'base_name': 'x',
-                       'illu': {'settings': {'laser': 642, 'power_acq': 70}}})
-        illu = tab._form.field_editor('illu')
-        ed = illu._form.field_editor('settings')._form.field_editor('laser')
+            ExperimentService(),
+            laser_options_provider=lambda: list(lasers),
+            reservoir_ids_provider=lambda: [1, 2],
+        )
+        tab._set_form(
+            {
+                "base_name": "x",
+                "illu": {"settings": {"laser": 642, "power_acq": 70}},
+            }
+        )
+        illu = tab._form.field_editor("illu")
+        ed = illu._form.field_editor("settings")._form.field_editor("laser")
         self.assertEqual(
-            [ed._combo.itemText(i) for i in range(ed._combo.count())], ['642'])
+            [ed._combo.itemText(i) for i in range(ed._combo.count())], ["642"]
+        )
         lasers[:] = [488, 561, 640]
         tab.refresh_setup_options()
         self.assertEqual(
             [ed._combo.itemText(i) for i in range(ed._combo.count())],
-            ['488', '561', '640', '642'])
-
-    def test_laser_stays_typeable_without_monet_lasers(self):
-        # A monet config that declares no lasers (or no setup loaded) must
-        # not lock the field: the dropdown is editable, so any wavelength
-        # can still be entered.
-        from PycroFlow.gui.widgets.schema_form import SchemaForm
-        from PycroFlow.schemas.experiment_design import IlluSettings
-        form = SchemaForm(IlluSettings, {'laser': 642, 'power_acq': 70},
-                          context={'lasers': []})
-        ed = form.field_editor('laser')
-        self.assertTrue(ed._combo.isEditable())
-        ed._combo.setCurrentText('750')
-        self.assertEqual(form.to_dict()['laser'], 750)
-
-    def test_reservoir_ids_become_dropdown_when_setup_arrives(self):
-        # The form is built before a setup is loaded (empty startup form), so
-        # the id column must follow the context rather than snapshot it.
-        from PycroFlow.gui.widgets.schema_form import SchemaForm, FormContext
-        from PycroFlow.schemas.experiment_design import FluidSettings
-        from PyQt6.QtWidgets import QComboBox, QLineEdit
-        ctx = FormContext({'reservoir_ids': []})
-        form = SchemaForm(FluidSettings, {
-            'vol_wash': 10, 'reservoir_names': {1: 'imager1', 2: 'imager2'},
-            'experiment': {'type': 'Exchange', 'wash_buffer': 'imager1'}},
-            context=ctx)
-        ed = form.field_editor('reservoir_names')
-        self.assertIsInstance(ed._rows[0][0], QLineEdit)
-        ctx.set_options('reservoir_ids', [1, 2, 3])
-        id_cell = ed._rows[0][0]
-        self.assertIsInstance(id_cell, QComboBox)
-        self.assertEqual(
-            [id_cell.itemText(i) for i in range(id_cell.count())],
-            ['1', '2', '3'])
-        # Switching the column to dropdowns must not lose the entered data.
-        self.assertEqual(ed.get_value(), {1: 'imager1', 2: 'imager2'})
-
-    @staticmethod
-    def _next_tab_stop(w):
-        """The widget Tab would move focus to (Qt skips non-tabbable ones)."""
-        from PyQt6.QtCore import Qt
-        cur = w.nextInFocusChain()
-        while cur is not w:
-            if cur.focusPolicy() & Qt.FocusPolicy.TabFocus:
-                return cur
-            cur = cur.nextInFocusChain()
-        return None
-
-    def test_tab_runs_down_the_name_column(self):
-        # Tabbing out of a name field reached the row's ✕ button; it should
-        # go to the next row's name, so names are filled straight down. The
-        # id dropdowns are picked from their list, not tabbed through.
-        from PyQt6.QtCore import Qt
-        from PycroFlow.gui.widgets.schema_form import SchemaForm, FormContext
-        from PycroFlow.schemas.experiment_design import FluidSettings
-        form = SchemaForm(FluidSettings, {
-            'vol_wash': 10, 'reservoir_names': {1: 'a', 2: 'b', 3: 'c'},
-            'experiment': {'type': 'Exchange', 'wash_buffer': 'a'}},
-            context=FormContext({'reservoir_ids': [1, 2, 3]}))
-        ed = form.field_editor('reservoir_names')
-        (r0_id, r0_name, r0_rm), (_, r1_name, _), (_, r2_name, _) = ed._rows
-        self.assertEqual(r0_rm.focusPolicy(), Qt.FocusPolicy.NoFocus)
-        self.assertEqual(r0_id.focusPolicy(), Qt.FocusPolicy.ClickFocus)
-        self.assertIs(self._next_tab_stop(r0_name), r1_name)
-        self.assertIs(self._next_tab_stop(r1_name), r2_name)
-
-    def test_free_text_id_column_stays_tabbable(self):
-        # Without a setup the id column is a text field, not a dropdown — it
-        # must stay in the tab chain or it could not be filled in at all.
-        from PyQt6.QtCore import Qt
-        from PycroFlow.gui.widgets.schema_form import SchemaForm
-        from PycroFlow.schemas.experiment_design import FluidSettings
-        form = SchemaForm(FluidSettings, {
-            'vol_wash': 10, 'reservoir_names': {1: 'a', 2: 'b'},
-            'experiment': {'type': 'Exchange', 'wash_buffer': 'a'}})
-        ed = form.field_editor('reservoir_names')
-        (r0_id, r0_name, _), (r1_id, _, _) = ed._rows
-        self.assertNotEqual(r0_id.focusPolicy(), Qt.FocusPolicy.ClickFocus)
-        self.assertIs(self._next_tab_stop(r0_id), r0_name)
-        self.assertIs(self._next_tab_stop(r0_name), r1_id)
-
-    def test_setup_options_refresh_into_live_form(self):
-        # Picking/switching a setup after a design is loaded must refresh the
-        # setup-derived dropdowns in place, not leave them stale.
-        from PycroFlow.services import ExperimentService
-        from PycroFlow.gui.tabs.experiment_design_tab import (
-            ExperimentDesignTab)
-        lasers = []
-        tab = ExperimentDesignTab(
-            ExperimentService(), laser_options_provider=lambda: list(lasers),
-            reservoir_ids_provider=lambda: [1, 2])
-        tab._set_form({'base_name': 'x',
-                       'illu': {'settings': {'laser': 642, 'power_acq': 70}}})
-        illu = tab._form.field_editor('illu')
-        ed = illu._form.field_editor('settings')._form.field_editor('laser')
-        self.assertEqual(
-            [ed._combo.itemText(i) for i in range(ed._combo.count())], ['642'])
-        lasers[:] = [488, 561, 640]
-        tab.refresh_setup_options()
-        self.assertEqual(
-            [ed._combo.itemText(i) for i in range(ed._combo.count())],
-            ['488', '561', '640', '642'])
+            ["488", "561", "640", "642"],
+        )
 
     def test_imager_dropdowns_update_live_on_reservoir_edit(self):
         from PycroFlow.gui.widgets.schema_form import SchemaForm
@@ -1597,6 +1545,7 @@ class TestExperimentDesignTab(unittest.TestCase):
         # Loading a design chdirs to its folder; keep test output out of the
         # checkout for whatever runs next.
         from PycroFlow.tests import chdir_to_test_output
+
         chdir_to_test_output()
 
     def test_load_and_translate(self):
@@ -1914,15 +1863,8 @@ class TestFluidTab(unittest.TestCase):
         tab, _ = self._tab(reservoir_ids=(2, 3, 8, 20))
         self.assertEqual(
             [tab.valve_res.itemData(i) for i in range(tab.valve_res.count())],
-            [2, 3, 8, 20])
-
-    def test_valve_dropdown_offers_the_setups_manifold(self):
-        # Sparse manifolds (ibidi) are common: the ids offered are exactly
-        # those the setup wires, not a 1..N range nor the design's subset.
-        tab, _ = self._tab(reservoir_ids=(2, 3, 8, 20))
-        self.assertEqual(
-            [tab.valve_res.itemData(i) for i in range(tab.valve_res.count())],
-            [2, 3, 8, 20])
+            [2, 3, 8, 20],
+        )
 
     def test_set_valves_calls_service(self):
         tab, svc = self._tab()
@@ -1949,9 +1891,10 @@ class TestFluidTab(unittest.TestCase):
     def test_set_valves_without_wired_reservoirs_warns(self):
         from unittest.mock import patch
         from PycroFlow.gui.tabs import fluid_tab as ft
+
         tab, svc = self._tab(reservoir_ids=())
         self.assertFalse(tab.valve_btn.isEnabled())
-        with patch.object(ft.QMessageBox, 'warning') as warn:
+        with patch.object(ft.QMessageBox, "warning") as warn:
             tab._on_set_valves()
         warn.assert_called_once()
         svc.set_valves.assert_not_called()
@@ -1959,25 +1902,27 @@ class TestFluidTab(unittest.TestCase):
     def test_route_hint_follows_the_selected_reservoir(self):
         tab, svc = self._tab(reservoir_ids=(2, 8))
         svc.describe_reservoir_route.side_effect = (
-            lambda rid: 'route for {}'.format(rid))
+            lambda rid: "route for {}".format(rid)
+        )
         tab.valve_res.setCurrentIndex(tab.valve_res.findData(8))
-        self.assertEqual(tab.valve_route.text(), 'route for 8')
+        self.assertEqual(tab.valve_route.text(), "route for 8")
         tab.valve_res.setCurrentIndex(tab.valve_res.findData(2))
-        self.assertEqual(tab.valve_route.text(), 'route for 2')
+        self.assertEqual(tab.valve_route.text(), "route for 2")
 
     def test_route_hint_without_a_setup(self):
         tab, _ = self._tab(reservoir_ids=())
-        self.assertIn('No reservoirs wired', tab.valve_route.text())
+        self.assertIn("No reservoirs wired", tab.valve_route.text())
 
     def test_manual_controls_are_explained(self):
         # The two pump groups differ in whether they re-route the valves;
         # that difference must be stated, not left to be discovered.
         tab, _ = self._tab()
         from PyQt6.QtWidgets import QLabel
-        hints = ' '.join(lbl.text() for lbl in tab.findChildren(QLabel))
-        self.assertIn('does NOT change reservoir routing', hints)
-        self.assertIn('Sets the valves itself', hints)
-        self.assertIn('no liquid is moved', hints)
+
+        hints = " ".join(lbl.text() for lbl in tab.findChildren(QLabel))
+        self.assertIn("does NOT change reservoir routing", hints)
+        self.assertIn("Sets the valves itself", hints)
+        self.assertIn("no liquid is moved", hints)
         self.assertTrue(tab.stroke_pump.toolTip())
         self.assertTrue(tab.move_pickup_res.toolTip())
         self.assertTrue(tab.valve_res.toolTip())
@@ -1988,7 +1933,8 @@ class TestFluidTab(unittest.TestCase):
         tab.refresh()
         self.assertEqual(
             [tab.valve_res.itemData(i) for i in range(tab.valve_res.count())],
-            [5, 6, 7])
+            [5, 6, 7],
+        )
 
     def test_stop_calls_service(self):
         tab, svc = self._tab()
@@ -2065,10 +2011,10 @@ class TestFluidSchematic(unittest.TestCase):
         from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
 
         cell = FluidSchematic._grid_cell
-        self.assertEqual(cell(1, 6, 4), (0, 3))    # bottom-left
-        self.assertEqual(cell(6, 6, 4), (5, 3))    # bottom-right
-        self.assertEqual(cell(7, 6, 4), (0, 2))    # above port 1, row start
-        self.assertEqual(cell(12, 6, 4), (5, 2))   # end of the second row
+        self.assertEqual(cell(1, 6, 4), (0, 3))  # bottom-left
+        self.assertEqual(cell(6, 6, 4), (5, 3))  # bottom-right
+        self.assertEqual(cell(7, 6, 4), (0, 2))  # above port 1, row start
+        self.assertEqual(cell(12, 6, 4), (5, 2))  # end of the second row
 
     def test_renders_topology_and_live_state_without_error(self):
         from PyQt6.QtGui import QPixmap
@@ -2076,23 +2022,29 @@ class TestFluidSchematic(unittest.TestCase):
         from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
 
         svc = SystemService()
-        svc.load_setup('Ibidi')
+        svc.load_setup("Ibidi")
         widget = FluidSchematic()
         widget.resize(900, 500)
         widget.set_topology(svc.fluid_topology())
         opened = [c in (1, 6, 12, 8) for c in range(1, 25)]
-        widget.set_state({
-            'multiplexer': {'channels': 24, 'open': opened},
-            'pump_a': {'valve': 'in', 'volume': 250.0, 'capacity': 500.0},
-            'pump_out': {'valve': 'out', 'volume': 0.0, 'capacity': 5000.0},
-        })
+        widget.set_state(
+            {
+                "multiplexer": {"channels": 24, "open": opened},
+                "pump_a": {"valve": "in", "volume": 250.0, "capacity": 500.0},
+                "pump_out": {
+                    "valve": "out",
+                    "volume": 0.0,
+                    "capacity": 5000.0,
+                },
+            }
+        )
         pix = QPixmap(widget.size())
-        widget.render(pix)   # exercises paintEvent; must not raise
+        widget.render(pix)  # exercises paintEvent; must not raise
         self.assertFalse(pix.isNull())
         # Robust to missing / partial data too.
         widget.set_topology(None)
         widget.render(pix)
-        widget.set_topology({'multiplexer': None, 'pumps': {}})
+        widget.set_topology({"multiplexer": None, "pumps": {}})
         widget.set_state(None)
         widget.render(pix)
 
@@ -2102,27 +2054,35 @@ class TestFluidSchematic(unittest.TestCase):
         from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
 
         svc = SystemService()
-        svc.load_setup('Ibidi')
+        svc.load_setup("Ibidi")
         widget = FluidSchematic()
         widget.resize(900, 500)
         widget.set_topology(svc.fluid_topology())
         labels = {
-            rid: {'name': None, 'used': False, 'used_vol': 0, 'total_vol': 0}
+            rid: {"name": None, "used": False, "used_vol": 0, "total_vol": 0}
             for rid in range(1, 25)
         }
-        labels[1] = {'name': 'Imager 1', 'used': True,
-                     'used_vol': 0, 'total_vol': 0}
-        labels[8] = {'name': 'Buffer', 'used': True,
-                     'used_vol': 150, 'total_vol': 600}
+        labels[1] = {
+            "name": "Imager 1",
+            "used": True,
+            "used_vol": 0,
+            "total_vol": 0,
+        }
+        labels[8] = {
+            "name": "Buffer",
+            "used": True,
+            "used_vol": 150,
+            "total_vol": 600,
+        }
         widget.set_reservoir_labels(labels)
         # Stored and used in the hover tooltip (name + unused note + volume).
-        self.assertEqual(widget._res_labels[8]['name'], 'Buffer')
+        self.assertEqual(widget._res_labels[8]["name"], "Buffer")
         widget._update_hover_tooltip(8)
-        self.assertIn('Buffer', widget.toolTip())
-        self.assertIn('150 µl used', widget.toolTip())
-        self.assertIn('600 µl needed', widget.toolTip())
+        self.assertIn("Buffer", widget.toolTip())
+        self.assertIn("150 µl used", widget.toolTip())
+        self.assertIn("600 µl needed", widget.toolTip())
         widget._update_hover_tooltip(2)
-        self.assertIn('not used', widget.toolTip())
+        self.assertIn("not used", widget.toolTip())
         # Rendering with labels + volume bars must not raise.
         widget.render(QPixmap(widget.size()))
 
@@ -2132,42 +2092,52 @@ class TestFluidSchematic(unittest.TestCase):
         from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
 
         svc = SystemService()
-        svc.load_setup('Mercury')
+        svc.load_setup("Mercury")
         widget = FluidSchematic()
         widget.resize(1000, 560)
         widget.set_topology(svc.fluid_topology())
         # Valve 3 at its bridge port (1), valve 5 at port 8 -> reservoir 21.
-        widget.set_state({
-            'multiplexer': None,
-            'valves': {3: 1, 5: 8, 1: 'in'},
-            'pump_a': {'valve': 'in', 'volume': 100, 'capacity': 500},
-            'pump_out': {'valve': 'out', 'volume': 0, 'capacity': 5000},
-        })
-        widget.set_reservoir_labels({
-            1: {'name': 'Buffer', 'used': True,
-                'used_vol': 200, 'total_vol': 800},
-            21: {'name': 'Imager 8', 'used': True,
-                 'used_vol': 0, 'total_vol': 703},
-        })
+        widget.set_state(
+            {
+                "multiplexer": None,
+                "valves": {3: 1, 5: 8, 1: "in"},
+                "pump_a": {"valve": "in", "volume": 100, "capacity": 500},
+                "pump_out": {"valve": "out", "volume": 0, "capacity": 5000},
+            }
+        )
+        widget.set_reservoir_labels(
+            {
+                1: {
+                    "name": "Buffer",
+                    "used": True,
+                    "used_vol": 200,
+                    "total_vol": 800,
+                },
+                21: {
+                    "name": "Imager 8",
+                    "used": True,
+                    "used_vol": 0,
+                    "total_vol": 703,
+                },
+            }
+        )
         # Reservoir 21 is the fully-routed reservoir (its whole path matches).
         routes = widget._routes()
-        self.assertEqual(
-            widget._active_reservoir(routes, {3: 1, 5: 8}), 21
-        )
+        self.assertEqual(widget._active_reservoir(routes, {3: 1, 5: 8}), 21)
         # Painting lays out the reservoir boxes (hit-test rects) and must not
         # raise; the box for reservoir 21 is then present for hover/click.
         widget.render(QPixmap(widget.size()))
         self.assertIn(21, widget._res_rects)
         widget._update_hover_tooltip(21)
-        self.assertIn('valve 3 → port 1', widget.toolTip())
-        self.assertIn('valve 5 → port 8', widget.toolTip())
+        self.assertIn("valve 3 → port 1", widget.toolTip())
+        self.assertIn("valve 5 → port 8", widget.toolTip())
 
     def test_highlight_reservoir_marks_its_full_route(self):
         from PycroFlow.services import SystemService
         from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
 
         svc = SystemService()
-        svc.load_setup('Ibidi')
+        svc.load_setup("Ibidi")
         widget = FluidSchematic()
         widget.set_topology(svc.fluid_topology())
         # No selection -> nothing highlighted.
@@ -2194,18 +2164,23 @@ class TestFluidSchematic(unittest.TestCase):
         from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
 
         svc = SystemService()
-        svc.load_setup('Ibidi')
+        svc.load_setup("Ibidi")
         widget = FluidSchematic()
         widget.resize(1000, 560)
         widget.set_topology(svc.fluid_topology())
-        widget.render(QPixmap(widget.size()))   # populates the port hit-boxes
+        widget.render(QPixmap(widget.size()))  # populates the port hit-boxes
 
         hovered = []
         widget.reservoir_hovered.connect(hovered.append)
         pos = widget._port_rects[8].center()
         move = QMouseEvent(
-            QEvent.Type.MouseMove, pos, pos, Qt.MouseButton.NoButton,
-            Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier)
+            QEvent.Type.MouseMove,
+            pos,
+            pos,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
         widget.mouseMoveEvent(move)
         self.assertEqual(widget._hover_res, 8)
         self.assertEqual(hovered, [8])
@@ -2223,27 +2198,33 @@ class TestFluidSchematic(unittest.TestCase):
         from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
 
         svc = SystemService()
-        svc.load_setup('Ibidi')
+        svc.load_setup("Ibidi")
         widget = FluidSchematic()
         widget.resize(1000, 560)
         widget.set_topology(svc.fluid_topology())
-        widget.render(QPixmap(widget.size()))   # populates the hit-boxes
+        widget.render(QPixmap(widget.size()))  # populates the hit-boxes
 
         channels, pumps = [], []
         widget.channel_clicked.connect(channels.append)
         widget.pump_clicked.connect(pumps.append)
 
         def click(pos):
-            widget.mousePressEvent(QMouseEvent(
-                QEvent.Type.MouseButtonPress, pos, pos,
-                Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
-                Qt.KeyboardModifier.NoModifier))
+            widget.mousePressEvent(
+                QMouseEvent(
+                    QEvent.Type.MouseButtonPress,
+                    pos,
+                    pos,
+                    Qt.MouseButton.LeftButton,
+                    Qt.MouseButton.LeftButton,
+                    Qt.KeyboardModifier.NoModifier,
+                )
+            )
 
         click(widget._port_rects[8].center())
-        click(widget._pump_rects['pump_a'].center())
-        click(widget._pump_rects['pump_out'].center())
+        click(widget._pump_rects["pump_a"].center())
+        click(widget._pump_rects["pump_out"].center())
         self.assertEqual(channels, [8])
-        self.assertEqual(pumps, ['pump_a', 'pump_out'])
+        self.assertEqual(pumps, ["pump_a", "pump_out"])
 
 
 @unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
@@ -2261,22 +2242,29 @@ class TestFluidTabSchematic(unittest.TestCase):
         from PycroFlow.gui.tabs.fluid_tab import FluidTab
 
         svc = SystemService()
-        svc.load_setup('IbidiEmulator')
+        svc.load_setup("IbidiEmulator")
         tab = FluidTab(svc)
         # Topology is rebuilt from the setup on refresh.
         tab.refresh()
         self.assertIsNotNone(tab.schematic._topo)
-        self.assertEqual(tab.schematic._topo['multiplexer']['channels'], 24)
+        self.assertEqual(tab.schematic._topo["multiplexer"]["channels"], 24)
         # A live connection makes the polled snapshot flow to the widget.
-        svc.connect_fluid({
-            'parameters': {'max_velocity': 200},
-            'settings': {'reservoir_names': {1: 'R1', 2: 'R2'},
-                         'special_names': {}},
-        })
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {1: "R1", 2: "R2"},
+                    "special_names": {},
+                },
+            }
+        )
         svc.set_valves(2)
         tab._refresh_schematic_state()
-        opened = [i + 1 for i, v in
-                  enumerate(tab.schematic._state['multiplexer']['open']) if v]
+        opened = [
+            i + 1
+            for i, v in enumerate(tab.schematic._state["multiplexer"]["open"])
+            if v
+        ]
         self.assertEqual(opened, [2])
 
     def test_reservoir_dropdown_drives_schematic_highlight(self):
@@ -2284,7 +2272,7 @@ class TestFluidTabSchematic(unittest.TestCase):
         from PycroFlow.gui.tabs.fluid_tab import FluidTab
 
         svc = SystemService()
-        svc.load_setup('Ibidi')
+        svc.load_setup("Ibidi")
         tab = FluidTab(svc)
         tab.refresh()
         # Pick a reservoir in the manual "Set valves" dropdown; the schematic
@@ -2303,12 +2291,16 @@ class TestFluidTabSchematic(unittest.TestCase):
 
         worker.set_synchronous(True)
         svc = SystemService()
-        svc.load_setup('IbidiEmulator')
-        svc.connect_fluid({
-            'parameters': {'max_velocity': 200},
-            'settings': {'reservoir_names': {1: 'R1', 2: 'R2'},
-                         'special_names': {}},
-        })
+        svc.load_setup("IbidiEmulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {1: "R1", 2: "R2"},
+                    "special_names": {},
+                },
+            }
+        )
         tab = FluidTab(svc)
         tab.refresh()
         mux = svc.fluid_system.multiplexer
@@ -2318,13 +2310,13 @@ class TestFluidTabSchematic(unittest.TestCase):
         tab.schematic.channel_clicked.emit(7)
         self.assertTrue(mux.channel_states[6])
         # A pump click flips its syringe valve.
-        tab.schematic.pump_clicked.emit('pump_a')
-        self.assertEqual(svc.fluid_system.pump_a.valve_pos, 'in')
+        tab.schematic.pump_clicked.emit("pump_a")
+        self.assertEqual(svc.fluid_system.pump_a.valve_pos, "in")
 
         # While the orchestrator holds the run lock, clicks are ignored.
         tab.set_run_lock(True)
         tab.schematic.channel_clicked.emit(7)
-        self.assertTrue(mux.channel_states[6])   # unchanged
+        self.assertTrue(mux.channel_states[6])  # unchanged
 
 
 if __name__ == "__main__":

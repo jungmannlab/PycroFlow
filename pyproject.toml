@@ -76,6 +76,23 @@ gui = [
     "PyQt6",
 ]
 
+# WP-FLUIDICS-CAM: real webcam capture for the fluidics monitoring subsystem.
+# Only the *instrument* frame source needs OpenCV; the synthetic --emulator
+# source and the pure-Python AVI writer are wheel-only, so the emulator tests
+# run in headless CI with no camera and no extra deps (base stays wheel-only).
+# opencv-python-headless (no Qt/GTK deps) suits a background capture service and
+# won't clash with the [gui] PyQt6 binding. Kept <4.12 so its numpy floor stays
+# compatible with the base numpy<2 cap.
+monitoring = [
+    "opencv-python-headless>=4.8,<4.12",
+]
+
+# WP-FLUIDICS-CAM: best-effort indexing of monitoring clips onto the registry's
+# fluidics_round records. Optional — a rig can record clips with no registry.
+registry = [
+    "picasso-registry[client]",
+]
+
 # Test and dev tooling. Sufficient to run the unit tests under CI without
 # any hardware libs (tests/__init__.py + the top-level conftest.py mock
 # pycromanager, monet, pycobolt, and nidaqmx). The suite is unittest-style;
@@ -91,6 +108,7 @@ dev = [
 [project.scripts]
 pycroflow = "PycroFlow.frontend_cli:main"
 pycroflow-gui = "PycroFlow.gui.app:main"
+pycroflow-capture = "PycroFlow.monitoring.capture_service:main"
 
 [tool.setuptools_scm]
 # Version is derived from the latest reachable git tag (single source of
