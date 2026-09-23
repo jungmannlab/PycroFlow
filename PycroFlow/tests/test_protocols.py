@@ -339,22 +339,30 @@ class TestOptionalDarkframes(unittest.TestCase):
     """Leaving ``darkframes`` empty drops the dark-frame acquisitions."""
 
     @staticmethod
-    def _protocol(darkframes='omit'):
+    def _protocol(darkframes="omit"):
         from PycroFlow.schemas import validate_experiment_design
 
         design = {
-            'base_name': 'x', 'save_dir': TEST_OUTPUT_DIR,
-            'fluid': {'settings': {
-                'vol_wash': 200., 'vol_reagent': 100.,
-                'reservoir_names': {2: 'Buffer', 3: 'I1', 4: 'I2'},
-                'special_names': {},
-                'experiment': {'type': 'Exchange', 'wash_buffer': 'Buffer',
-                               'imagers': ['I1', 'I2']}}},
-            'img': {'settings': {'t_exp': 100., 'frames': 10}},
-            'illu': {'settings': {'laser': 560, 'power_acq': 35.}},
+            "base_name": "x",
+            "save_dir": TEST_OUTPUT_DIR,
+            "fluid": {
+                "settings": {
+                    "vol_wash": 200.0,
+                    "vol_reagent": 100.0,
+                    "reservoir_names": {2: "Buffer", 3: "I1", 4: "I2"},
+                    "special_names": {},
+                    "experiment": {
+                        "type": "Exchange",
+                        "wash_buffer": "Buffer",
+                        "imagers": ["I1", "I2"],
+                    },
+                }
+            },
+            "img": {"settings": {"t_exp": 100.0, "frames": 10}},
+            "illu": {"settings": {"laser": 560, "power_acq": 35.0}},
         }
-        if darkframes != 'omit':
-            design['img']['settings']['darkframes'] = darkframes
+        if darkframes != "omit":
+            design["img"]["settings"]["darkframes"] = darkframes
         design = validate_experiment_design(design).model_dump(by_alias=True)
         return pprot.ProtocolBuilder().build_protocol(design)
 
@@ -362,53 +370,63 @@ class TestOptionalDarkframes(unittest.TestCase):
     def _entries(protocol):
         for sub in protocol.values():
             if isinstance(sub, dict):
-                for entry in sub.get('protocol_entries', []):
+                for entry in sub.get("protocol_entries", []):
                     yield entry
 
     def _acquire_names(self, protocol):
-        return [e.get('name') for e in self._entries(protocol)
-                if e['$type'] == 'acquire']
+        return [
+            e.get("name")
+            for e in self._entries(protocol)
+            if e["$type"] == "acquire"
+        ]
 
     def _fluid_entries(self, protocol):
-        return [e['$type'] for e in protocol['fluid']['protocol_entries']]
+        return [e["$type"] for e in protocol["fluid"]["protocol_entries"]]
 
     def test_darkframes_set_keeps_the_acquisitions(self):
         names = self._acquire_names(self._protocol(darkframes=5))
-        self.assertIn('I1 (dark frames)', names)
+        self.assertIn("I1 (dark frames)", names)
 
     def test_omitted_darkframes_drops_the_acquisitions(self):
-        protocol = self._protocol()          # field absent entirely
+        protocol = self._protocol()  # field absent entirely
         names = self._acquire_names(protocol)
-        self.assertEqual(names, ['I1', 'I2'])
-        self.assertFalse([n for n in names if 'dark' in str(n)])
+        self.assertEqual(names, ["I1", "I2"])
+        self.assertFalse([n for n in names if "dark" in str(n)])
         # No acquire entry may carry a None frame count (which previously
         # failed protocol validation with a confusing pydantic error).
         for entry in self._entries(protocol):
-            if entry['$type'] == 'acquire':
-                self.assertIsInstance(entry['frames'], int)
+            if entry["$type"] == "acquire":
+                self.assertIsInstance(entry["frames"], int)
 
     def test_none_and_zero_behave_like_omitted(self):
         for value in (None, 0):
             names = self._acquire_names(self._protocol(darkframes=value))
-            self.assertEqual(names, ['I1', 'I2'], msg=repr(value))
+            self.assertEqual(names, ["I1", "I2"], msg=repr(value))
 
     def test_the_wash_is_still_performed(self):
         # Only the acquisition goes away — the wash it followed must stay,
         # or rounds would run into each other.
         with_dark = self._fluid_entries(self._protocol(darkframes=5))
         without = self._fluid_entries(self._protocol())
-        self.assertEqual(with_dark.count('inject'), without.count('inject'))
+        self.assertEqual(with_dark.count("inject"), without.count("inject"))
         self.assertEqual(
-            with_dark.count('pump_out'), without.count('pump_out'))
+            with_dark.count("pump_out"), without.count("pump_out")
+        )
 
     def test_no_orphaned_waits_without_darkframes(self):
         # Dropping steps must not leave a 'wait for signal' whose signal was
         # removed with them — that would deadlock the run.
         protocol = self._protocol()
-        signals = {e['value'] for e in self._entries(protocol)
-                   if e['$type'] == 'signal'}
-        waits = {e['value'] for e in self._entries(protocol)
-                 if e['$type'] == 'wait for signal'}
+        signals = {
+            e["value"]
+            for e in self._entries(protocol)
+            if e["$type"] == "signal"
+        }
+        waits = {
+            e["value"]
+            for e in self._entries(protocol)
+            if e["$type"] == "wait for signal"
+        }
         self.assertEqual(waits - signals, set())
 
 
@@ -420,65 +438,84 @@ class TestReagentVolumes(unittest.TestCase):
         from PycroFlow.schemas import validate_experiment_design
 
         design = {
-            'base_name': 'x', 'save_dir': TEST_OUTPUT_DIR,
-            'fluid': {'settings': {
-                'vol_wash': 200.,
-                'reservoir_names': {2: 'Buffer', 3: 'I1'},
-                'special_names': {},
-                'experiment': {'type': 'Exchange', 'wash_buffer': 'Buffer',
-                               'imagers': ['I1']},
-                **settings}},
-            'img': {'settings': {'t_exp': 100., 'frames': 10}},
+            "base_name": "x",
+            "save_dir": TEST_OUTPUT_DIR,
+            "fluid": {
+                "settings": {
+                    "vol_wash": 200.0,
+                    "reservoir_names": {2: "Buffer", 3: "I1"},
+                    "special_names": {},
+                    "experiment": {
+                        "type": "Exchange",
+                        "wash_buffer": "Buffer",
+                        "imagers": ["I1"],
+                    },
+                    **settings,
+                }
+            },
+            "img": {"settings": {"t_exp": 100.0, "frames": 10}},
         }
         design = validate_experiment_design(design).model_dump(by_alias=True)
         return pprot.ProtocolBuilder().build_protocol(design)
 
     @staticmethod
     def _injects(protocol):
-        return [e for e in protocol['fluid']['protocol_entries']
-                if e['$type'] == 'inject']
+        return [
+            e
+            for e in protocol["fluid"]["protocol_entries"]
+            if e["$type"] == "inject"
+        ]
 
     @staticmethod
     def _types(protocol):
-        return [e['$type'] for e in protocol['fluid']['protocol_entries']]
+        return [e["$type"] for e in protocol["fluid"]["protocol_entries"]]
 
     def test_vol_reagent_is_the_pre_imaging_inject(self):
-        protocol = self._exchange(vol_reagent=120.)
+        protocol = self._exchange(vol_reagent=120.0)
         # I1 is reservoir 3; its main pre-inject carries the vol_reagent volume.
-        vols = [e['volume'] for e in self._injects(protocol)
-                if e['reservoir_id'] == 3]
-        self.assertIn(120., vols)
+        vols = [
+            e["volume"]
+            for e in self._injects(protocol)
+            if e["reservoir_id"] == 3
+        ]
+        self.assertIn(120.0, vols)
 
     def test_vol_reagent_post_injects_after_acquisition(self):
         # With a post volume, an extra imager inject appears right after the
         # acquire (and not without it).
-        without = self._exchange(vol_reagent=120.)
-        with_post = self._exchange(vol_reagent=120., vol_reagent_post=15.)
+        without = self._exchange(vol_reagent=120.0)
+        with_post = self._exchange(vol_reagent=120.0, vol_reagent_post=15.0)
         self.assertEqual(
-            self._types(with_post).count('inject'),
-            self._types(without).count('inject') + 1,
+            self._types(with_post).count("inject"),
+            self._types(without).count("inject") + 1,
         )
-        entries = with_post['fluid']['protocol_entries']
-        types = [e['$type'] for e in entries]
+        entries = with_post["fluid"]["protocol_entries"]
+        types = [e["$type"] for e in entries]
         # The 15 µl top-up follows the imaging wait, i.e. after acquisition.
-        post = [i for i, e in enumerate(entries)
-                if e['$type'] == 'inject' and e.get('volume') == 15.]
+        post = [
+            i
+            for i, e in enumerate(entries)
+            if e["$type"] == "inject" and e.get("volume") == 15.0
+        ]
         self.assertEqual(len(post), 1)
-        self.assertIn('wait for signal', types[:post[0]])
+        self.assertIn("wait for signal", types[: post[0]])
 
     def test_back_compat_vol_imager_post_drives_the_pre_inject(self):
         # Designs predating the split set vol_imager_post; it still feeds the
         # pre-inject (via fallback) and adds no post-inject.
-        legacy = self._exchange(vol_imager_post=90.)
-        vols = [e['volume'] for e in self._injects(legacy)
-                if e['reservoir_id'] == 3]
-        self.assertIn(90., vols)
+        legacy = self._exchange(vol_imager_post=90.0)
+        vols = [
+            e["volume"]
+            for e in self._injects(legacy)
+            if e["reservoir_id"] == 3
+        ]
+        self.assertIn(90.0, vols)
         # No post-inject was introduced.
-        self.assertNotIn(0., vols)
-        modern = self._exchange(vol_reagent=90.)
+        self.assertNotIn(0.0, vols)
+        modern = self._exchange(vol_reagent=90.0)
         self.assertEqual(
-            self._types(legacy).count('inject'),
-            self._types(modern).count('inject'),
+            self._types(legacy).count("inject"),
+            self._types(modern).count("inject"),
         )
 
     def test_sph_resi_post_inject_after_each_acquisition(self):
@@ -489,18 +526,23 @@ class TestReagentVolumes(unittest.TestCase):
 
         path = os.path.join(
             os.path.dirname(PycroFlow.__file__),
-            'examples', 'sph_resi_6plex.yaml')
+            "examples",
+            "sph_resi_6plex.yaml",
+        )
         raw = yaml.safe_load(open(path))
         base = validate_experiment_design(raw).model_dump(by_alias=True)
         n_acq = sum(
-            e['$type'] == 'acquire'
-            for e in pprot.ProtocolBuilder().build_protocol(base)['img'][
-                'protocol_entries'])
-        raw['fluid']['settings']['vol_reagent_post'] = 25
+            e["$type"] == "acquire"
+            for e in pprot.ProtocolBuilder().build_protocol(base)["img"][
+                "protocol_entries"
+            ]
+        )
+        raw["fluid"]["settings"]["vol_reagent_post"] = 25
         withpost = validate_experiment_design(raw).model_dump(by_alias=True)
         proto = pprot.ProtocolBuilder().build_protocol(withpost)
         n_post = sum(
-            e['$type'] == 'inject' and e.get('volume') == 25
-            for e in proto['fluid']['protocol_entries'])
+            e["$type"] == "inject" and e.get("volume") == 25
+            for e in proto["fluid"]["protocol_entries"]
+        )
         # One top-up per acquisition.
         self.assertEqual(n_post, n_acq)

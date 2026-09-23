@@ -23,9 +23,9 @@ def _fake_monet(configs):
     import sys
     import types
 
-    fake = types.ModuleType('monet')
+    fake = types.ModuleType("monet")
     fake.CONFIGS = configs
-    return patch.dict(sys.modules, {'monet': fake})
+    return patch.dict(sys.modules, {"monet": fake})
 
 
 class TestHALAbcsRegisterConcrete(unittest.TestCase):
@@ -232,9 +232,14 @@ class TestSystemService(unittest.TestCase):
     def test_connect_illumination_builds_and_stores(self):
         sentinel = object()
         svc = SystemService()
-        svc.load_setup('Mercury')
-        with patch('PycroFlow.illumination.IlluminationSystem',
-                   return_value=sentinel), _fake_monet({'Mercury': {}}):
+        svc.load_setup("Mercury")
+        with (
+            patch(
+                "PycroFlow.illumination.IlluminationSystem",
+                return_value=sentinel,
+            ),
+            _fake_monet({"Mercury": {}}),
+        ):
             result = svc.connect_illumination()
         self.assertIs(result, sentinel)
         self.assertIs(svc.illumination_system, sentinel)
@@ -249,8 +254,8 @@ class TestSystemService(unittest.TestCase):
         # The setup names a monet config that monet does not know: fail at
         # connect (so the GUI shows "not connected") rather than mid-run.
         svc = SystemService()
-        svc.load_setup('Mercury')
-        with _fake_monet({'SomeOtherScope': {}}):
+        svc.load_setup("Mercury")
+        with _fake_monet({"SomeOtherScope": {}}):
             with self.assertRaises(KeyError):
                 svc.connect_illumination()
         self.assertIsNone(svc.illumination_system)
@@ -259,40 +264,40 @@ class TestSystemService(unittest.TestCase):
         # A fluidics setup (Ibidi) running on another microscope (Mercury)
         # illuminates with that microscope's monet config.
         svc = SystemService()
-        svc.load_setup('Ibidi')
-        self.assertEqual(svc.setup_name(), 'Ibidi')
-        self.assertEqual(svc.get_monet_setup(), 'Mercury')
-        with _fake_monet({'Mercury': {'lasers': {560: {}, 488: {}}}}):
+        svc.load_setup("Ibidi")
+        self.assertEqual(svc.setup_name(), "Ibidi")
+        self.assertEqual(svc.get_monet_setup(), "Mercury")
+        with _fake_monet({"Mercury": {"lasers": {560: {}, 488: {}}}}):
             self.assertEqual(svc.laser_options(), [488, 560])
-            with patch('PycroFlow.illumination.IlluminationSystem') as IS:
+            with patch("PycroFlow.illumination.IlluminationSystem") as IS:
                 svc.connect_illumination()
-        IS.assert_called_once_with(setup='Mercury')
+        IS.assert_called_once_with(setup="Mercury")
 
     def test_laser_options_from_monet_config(self):
         svc = SystemService()
-        svc.load_setup('Mercury')
-        with _fake_monet({'Mercury': {'lasers': {640: {}, 488: {}, 561: {}}}}):
+        svc.load_setup("Mercury")
+        with _fake_monet({"Mercury": {"lasers": {640: {}, 488: {}, 561: {}}}}):
             self.assertEqual(svc.laser_options(), [488, 561, 640])
 
     def test_laser_options_string_keys_become_ints(self):
         # monet config keys may be YAML strings; the design's laser is an int.
         svc = SystemService()
-        svc.load_setup('Mercury')
-        with _fake_monet({'Mercury': {'lasers': {'640': {}, '488': {}}}}):
+        svc.load_setup("Mercury")
+        with _fake_monet({"Mercury": {"lasers": {"640": {}, "488": {}}}}):
             self.assertEqual(svc.laser_options(), [488, 640])
 
     def test_laser_options_from_single_laser_config(self):
         # A single-laser monet config names its line in index[LASER_TAG]
         # rather than in a 'lasers' mapping.
         svc = SystemService()
-        svc.load_setup('Mercury')
-        with _fake_monet({'Mercury': {'index': {'wavelength [nm]': 561}}}):
+        svc.load_setup("Mercury")
+        with _fake_monet({"Mercury": {"index": {"wavelength [nm]": 561}}}):
             self.assertEqual(svc.laser_options(), [561])
 
     def test_laser_options_empty_when_config_names_no_laser(self):
         svc = SystemService()
-        svc.load_setup('Mercury')
-        with _fake_monet({'Mercury': {'powermeter': {}}}):
+        svc.load_setup("Mercury")
+        with _fake_monet({"Mercury": {"powermeter": {}}}):
             self.assertEqual(svc.laser_options(), [])
 
     def test_laser_options_empty_without_real_config(self):
@@ -306,44 +311,48 @@ class TestSystemService(unittest.TestCase):
     def test_connect_illumination_passes_monet_setup(self):
         # The monet config name is taken from the chosen microscope setup.
         svc = SystemService()
-        svc.load_setup('Mercury')   # non-emulated -> real illumination path
-        with patch('PycroFlow.illumination.IlluminationSystem') as IS, \
-                _fake_monet({'Mercury': {}}):
+        svc.load_setup("Mercury")  # non-emulated -> real illumination path
+        with (
+            patch("PycroFlow.illumination.IlluminationSystem") as IS,
+            _fake_monet({"Mercury": {}}),
+        ):
             svc.connect_illumination()
         IS.assert_called_once_with(setup="Mercury")
 
     def test_describe_route_names_the_valves_and_channels(self):
         # The manual controls show what routing to a reservoir will do.
         svc = SystemService()
-        setup = svc.load_setup('IbidiEmulator')
-        setup['fluid']['reservoirs'] = [
-            {'id': 8, 'valve_pos': {'ibidi': [1, 6, 7, 8], 1: 'in'}}]
+        setup = svc.load_setup("IbidiEmulator")
+        setup["fluid"]["reservoirs"] = [
+            {"id": 8, "valve_pos": {"ibidi": [1, 6, 7, 8], 1: "in"}}
+        ]
         text = svc.describe_reservoir_route(8)
-        self.assertIn('ibidi multiplexer opens channels 1, 6, 7, 8', text)
-        self.assertIn('all others closed', text)   # unlike a rotary valve
-        self.assertIn('pump_a', text)
+        self.assertIn("ibidi multiplexer opens channels 1, 6, 7, 8", text)
+        self.assertIn("all others closed", text)  # unlike a rotary valve
+        self.assertIn("pump_a", text)
         # Without a fluid system the design cannot be using it.
-        self.assertIn('not used by the design', text)
+        self.assertIn("not used by the design", text)
 
     def test_describe_route_for_hamilton_valves(self):
         svc = SystemService()
-        svc.load_setup('Mercury')
+        svc.load_setup("Mercury")
         text = svc.describe_reservoir_route(14)
-        self.assertIn('MVP valve 3', text)
-        self.assertIn('MVP valve 5', text)
+        self.assertIn("MVP valve 3", text)
+        self.assertIn("MVP valve 5", text)
 
     def test_describe_route_unwired_and_no_setup(self):
         svc = SystemService()
-        self.assertIn('No setup', svc.describe_reservoir_route(1))
-        svc.load_setup('Mercury')
-        self.assertIn('not wired', svc.describe_reservoir_route(999))
+        self.assertIn("No setup", svc.describe_reservoir_route(1))
+        svc.load_setup("Mercury")
+        self.assertIn("not wired", svc.describe_reservoir_route(999))
 
     def test_reservoir_route_returns_the_valve_map(self):
         svc = SystemService()
-        setup = svc.load_setup('IbidiEmulator')
-        setup['fluid']['reservoirs'] = [
-            {'id': 3, 'valve_pos': {'ibidi': [1, 3], 1: 'in'}}]
-        self.assertEqual(svc.reservoir_route(3)['ibidi'], [1, 3])
+        setup = svc.load_setup("IbidiEmulator")
+        setup["fluid"]["reservoirs"] = [
+            {"id": 3, "valve_pos": {"ibidi": [1, 3], 1: "in"}}
+        ]
+        self.assertEqual(svc.reservoir_route(3)["ibidi"], [1, 3])
         self.assertEqual(svc.reservoir_route(4), {})
 
     def test_connect_fluid_requires_setup(self):
@@ -379,20 +388,24 @@ class TestSystemService(unittest.TestCase):
 
     def test_has_multiplexer(self):
         svc = SystemService()
-        self.assertFalse(svc.has_multiplexer())   # no setup loaded
-        svc.load_setup('IbidiEmulator')
+        self.assertFalse(svc.has_multiplexer())  # no setup loaded
+        svc.load_setup("IbidiEmulator")
         self.assertTrue(svc.has_multiplexer())
-        svc.load_setup('Emulator')
+        svc.load_setup("Emulator")
         self.assertFalse(svc.has_multiplexer())
 
     def test_close_all_valves_closes_every_channel(self):
         svc = SystemService()
-        svc.load_setup('IbidiEmulator')
-        svc.connect_fluid({
-            'parameters': {'max_velocity': 200},
-            'settings': {'reservoir_names': {1: 'R1', 2: 'R2'},
-                         'special_names': {'flushbuffer_a': 7}},
-        })
+        svc.load_setup("IbidiEmulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {1: "R1", 2: "R2"},
+                    "special_names": {"flushbuffer_a": 7},
+                },
+            }
+        )
         mux = svc.fluid_system.multiplexer
         mux.select([1, 2, 3])
         self.assertTrue(any(mux.channel_states))
@@ -401,12 +414,16 @@ class TestSystemService(unittest.TestCase):
 
     def test_close_all_valves_without_multiplexer_raises(self):
         svc = SystemService()
-        svc.load_setup('Emulator')
-        svc.connect_fluid({
-            'parameters': {'max_velocity': 200},
-            'settings': {'reservoir_names': {1: 'R1'},
-                         'special_names': {'flushbuffer_a': 1}},
-        })
+        svc.load_setup("Emulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {1: "R1"},
+                    "special_names": {"flushbuffer_a": 1},
+                },
+            }
+        )
         with self.assertRaises(RuntimeError):
             svc.close_all_valves()
 
@@ -414,232 +431,278 @@ class TestSystemService(unittest.TestCase):
         # A raw manual override: toggling one channel does not disturb others
         # and ignores reservoir routing entirely.
         svc = SystemService()
-        svc.load_setup('IbidiEmulator')
-        svc.connect_fluid({
-            'parameters': {'max_velocity': 200},
-            'settings': {'reservoir_names': {1: 'R1', 2: 'R2'},
-                         'special_names': {}},
-        })
+        svc.load_setup("IbidiEmulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {1: "R1", 2: "R2"},
+                    "special_names": {},
+                },
+            }
+        )
         mux = svc.fluid_system.multiplexer
         self.assertFalse(mux.channel_states[4])
-        self.assertTrue(svc.toggle_multiplexer_channel(5))   # closed -> open
+        self.assertTrue(svc.toggle_multiplexer_channel(5))  # closed -> open
         self.assertTrue(mux.channel_states[4])
         self.assertFalse(svc.toggle_multiplexer_channel(5))  # open -> closed
         self.assertFalse(mux.channel_states[4])
 
     def test_toggle_multiplexer_without_mux_raises(self):
         svc = SystemService()
-        svc.load_setup('Emulator')
-        svc.connect_fluid({
-            'parameters': {'max_velocity': 200},
-            'settings': {'reservoir_names': {1: 'R1'},
-                         'special_names': {'flushbuffer_a': 1}},
-        })
+        svc.load_setup("Emulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {1: "R1"},
+                    "special_names": {"flushbuffer_a": 1},
+                },
+            }
+        )
         with self.assertRaises(RuntimeError):
             svc.toggle_multiplexer_channel(1)
 
     def test_toggle_pump_valve_flips_in_out(self):
         svc = SystemService()
-        svc.load_setup('IbidiEmulator')
-        svc.connect_fluid({
-            'parameters': {'max_velocity': 200},
-            'settings': {'reservoir_names': {1: 'R1'},
-                         'special_names': {}},
-        })
-        self.assertEqual(svc.toggle_pump_valve('pump_a'), 'in')   # None -> in
-        self.assertEqual(svc.fluid_system.pump_a.valve_pos, 'in')
-        self.assertEqual(svc.toggle_pump_valve('pump_a'), 'out')
-        self.assertEqual(svc.toggle_pump_valve('pump_a'), 'in')
+        svc.load_setup("IbidiEmulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {1: "R1"},
+                    "special_names": {},
+                },
+            }
+        )
+        self.assertEqual(svc.toggle_pump_valve("pump_a"), "in")  # None -> in
+        self.assertEqual(svc.fluid_system.pump_a.valve_pos, "in")
+        self.assertEqual(svc.toggle_pump_valve("pump_a"), "out")
+        self.assertEqual(svc.toggle_pump_valve("pump_a"), "in")
         with self.assertRaises(KeyError):
-            svc.toggle_pump_valve('pump_nope')
+            svc.toggle_pump_valve("pump_nope")
 
     def test_fluid_topology_reads_grid_and_taps(self):
         # The live-schematic topology is read straight from the setup: the
         # ibidi grid geometry, the pump-wired port, and each port's tap.
         svc = SystemService()
-        svc.load_setup('Ibidi')
+        svc.load_setup("Ibidi")
         topo = svc.fluid_topology()
-        mux = topo['multiplexer']
-        self.assertEqual((mux['cols'], mux['rows']), (6, 4))
-        self.assertEqual(mux['channels'], 24)
-        self.assertEqual(mux['pump_channel'], 1)
+        mux = topo["multiplexer"]
+        self.assertEqual((mux["cols"], mux["rows"]), (6, 4))
+        self.assertEqual(mux["channels"], 24)
+        self.assertEqual(mux["pump_channel"], 1)
         # R8 is tapped at its leaf channel (last in the route [1, 6, 12, 8]).
-        self.assertEqual(mux['ports'][8]['reservoir'], 8)
+        self.assertEqual(mux["ports"][8]["reservoir"], 8)
         # Ports 6/12 are shared bridges on the way to R8..R24.
-        self.assertIn(8, mux['ports'][6]['used_by'])
-        self.assertIn(8, mux['ports'][12]['used_by'])
+        self.assertIn(8, mux["ports"][6]["used_by"])
+        self.assertIn(8, mux["ports"][12]["used_by"])
         # The (meandered) tubing path to R8 is 1->6->12->8.
         for edge in [(1, 6), (6, 12), (12, 8)]:
-            self.assertIn(edge, mux['edges'])
+            self.assertIn(edge, mux["edges"])
         # Each reservoir's full ordered route is exposed for path highlight.
-        self.assertEqual(mux['routes'][8], [1, 6, 12, 8])
-        self.assertEqual(
-            mux['routes'][23], [1, 6, 12, 7, 13, 18, 24, 23])
+        self.assertEqual(mux["routes"][8], [1, 6, 12, 8])
+        self.assertEqual(mux["routes"][23], [1, 6, 12, 7, 13, 18, 24, 23])
         # The old meander-numbering leftover (a direct 6->7 link) is gone.
-        self.assertNotIn((6, 7), mux['edges'])
-        self.assertNotIn((7, 6), mux['edges'])
-        self.assertTrue(topo['pumps']['pump_a'])
-        self.assertTrue(topo['pumps']['pump_out'])
-        self.assertIsNone(topo['valves'])  # ibidi setup has no rotary valves
+        self.assertNotIn((6, 7), mux["edges"])
+        self.assertNotIn((7, 6), mux["edges"])
+        self.assertTrue(topo["pumps"]["pump_a"])
+        self.assertTrue(topo["pumps"]["pump_out"])
+        self.assertIsNone(topo["valves"])  # ibidi setup has no rotary valves
 
     def test_fluid_topology_describes_chained_mvp_valves(self):
         # A Hamilton MVP setup yields a `valves` topology (not `multiplexer`):
         # the root valve taps its own reservoirs and bridges to the next valve.
         svc = SystemService()
-        svc.load_setup('Mercury')
+        svc.load_setup("Mercury")
         topo = svc.fluid_topology()
-        self.assertIsNone(topo['multiplexer'])
-        vt = topo['valves']
-        v3, v5 = vt['valves']
-        self.assertEqual((v3['address'], v3['index'], v3['ports']), (3, 0, 8))
-        self.assertEqual((v5['address'], v5['index'], v5['ports']), (5, 1, 8))
+        self.assertIsNone(topo["multiplexer"])
+        vt = topo["valves"]
+        v3, v5 = vt["valves"]
+        self.assertEqual((v3["address"], v3["index"], v3["ports"]), (3, 0, 8))
+        self.assertEqual((v5["address"], v5["index"], v5["ports"]), (5, 1, 8))
         # V3 ports 2..8 tap reservoirs 1..7; port 1 bridges to valve 5.
-        self.assertEqual(v3['taps'][2], 1)
-        self.assertEqual(v3['taps'][8], 7)
-        self.assertEqual(v3['bridges'], {1: 5})
+        self.assertEqual(v3["taps"][2], 1)
+        self.assertEqual(v3["taps"][8], 7)
+        self.assertEqual(v3["bridges"], {1: 5})
         # V5 taps reservoirs 14..21 and bridges nowhere (it is the leaf valve).
-        self.assertEqual(v5['taps'][8], 21)
-        self.assertEqual(v5['bridges'], {})
+        self.assertEqual(v5["taps"][8], 21)
+        self.assertEqual(v5["bridges"], {})
         # Routes run root -> leaf as (valve, port) pairs.
-        self.assertEqual(vt['routes'][1], [(3, 2)])
-        self.assertEqual(vt['routes'][21], [(3, 1), (5, 8)])
+        self.assertEqual(vt["routes"][1], [(3, 2)])
+        self.assertEqual(vt["routes"][21], [(3, 1), (5, 8)])
         # Mercury wires a flush_waste sink (pump_a -> flush_waste).
-        self.assertTrue(topo['flush_waste'])
+        self.assertTrue(topo["flush_waste"])
 
     def test_fluid_waste_labels_track_extraction_and_flush(self):
         svc = SystemService()
-        svc.load_setup('IbidiEmulator')
-        svc.connect_fluid({
-            'parameters': {'max_velocity': 200, 'extractionfactor': 2},
-            'settings': {'reservoir_names': {1: 'Imager 1'},
-                         'special_names': {}},
-        })
-        svc.fluid_system._assign_protocol({
-            'parameters': {'max_velocity': 200, 'extractionfactor': 2},
-            'protocol_entries': [
-                {'$type': 'inject', 'reservoir_id': 1, 'volume': 300},
-                {'$type': 'pump_out', 'volume': 100},
-            ],
-        })
+        svc.load_setup("IbidiEmulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200, "extractionfactor": 2},
+                "settings": {
+                    "reservoir_names": {1: "Imager 1"},
+                    "special_names": {},
+                },
+            }
+        )
+        svc.fluid_system._assign_protocol(
+            {
+                "parameters": {"max_velocity": 200, "extractionfactor": 2},
+                "protocol_entries": [
+                    {"$type": "inject", "reservoir_id": 1, "volume": 300},
+                    {"$type": "pump_out", "volume": 100},
+                ],
+            }
+        )
         waste = svc.fluid_waste_labels()
         # Extraction waste planned = 2*(300+100) = 800 µl; flush_waste wired.
-        self.assertEqual(waste['waste']['total_vol'], 800.0)
-        self.assertEqual(waste['waste']['used_vol'], 0.0)
-        self.assertIn('flush_waste', waste)
+        self.assertEqual(waste["waste"]["total_vol"], 800.0)
+        self.assertEqual(waste["waste"]["used_vol"], 0.0)
+        self.assertIn("flush_waste", waste)
         # Recording flush volume backfills its total from the amount received.
-        svc.fluid_system._record_waste('flush_waste', 650)
+        svc.fluid_system._record_waste("flush_waste", 650)
         waste = svc.fluid_waste_labels()
-        self.assertEqual(waste['flush_waste']['used_vol'], 650.0)
-        self.assertEqual(waste['flush_waste']['total_vol'], 650.0)
+        self.assertEqual(waste["flush_waste"]["used_vol"], 650.0)
+        self.assertEqual(waste["flush_waste"]["total_vol"], 650.0)
 
     def test_fluid_reservoir_labels_names_and_usage(self):
         # After connecting, the labels expose the design's names and mark
         # which setup-wired reservoirs the design actually uses.
         svc = SystemService()
-        svc.load_setup('IbidiEmulator')
-        svc.connect_fluid({
-            'parameters': {'max_velocity': 200},
-            'settings': {'reservoir_names': {1: 'Imager 1', 3: 'Buffer'},
-                         'special_names': {}},
-        })
+        svc.load_setup("IbidiEmulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {1: "Imager 1", 3: "Buffer"},
+                    "special_names": {},
+                },
+            }
+        )
         labels = svc.fluid_reservoir_labels()
-        self.assertEqual(labels[1]['name'], 'Imager 1')
-        self.assertTrue(labels[1]['used'])
-        self.assertEqual(labels[3]['name'], 'Buffer')
-        self.assertTrue(labels[3]['used'])
+        self.assertEqual(labels[1]["name"], "Imager 1")
+        self.assertTrue(labels[1]["used"])
+        self.assertEqual(labels[3]["name"], "Buffer")
+        self.assertTrue(labels[3]["used"])
         # A wired-but-unused reservoir is present, named None, marked unused.
-        self.assertEqual(labels[2]['name'], None)
-        self.assertFalse(labels[2]['used'])
+        self.assertEqual(labels[2]["name"], None)
+        self.assertFalse(labels[2]["used"])
         # No protocol assigned yet -> zero planned/used volume.
-        self.assertEqual(labels[1]['used_vol'], 0.0)
-        self.assertEqual(labels[1]['total_vol'], 0.0)
+        self.assertEqual(labels[1]["used_vol"], 0.0)
+        self.assertEqual(labels[1]["total_vol"], 0.0)
         # Not connected -> empty (schematic then stays neutral).
         self.assertEqual(SystemService().fluid_reservoir_labels(), {})
 
     def test_reservoir_labels_track_planned_and_pumped_volume(self):
         svc = SystemService()
-        svc.load_setup('IbidiEmulator')
-        svc.connect_fluid({
-            'parameters': {'max_velocity': 200},
-            'settings': {'reservoir_names': {1: 'Imager 1', 2: 'Buffer'},
-                         'special_names': {}},
-        })
+        svc.load_setup("IbidiEmulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {1: "Imager 1", 2: "Buffer"},
+                    "special_names": {},
+                },
+            }
+        )
         # Assigning a protocol sets the per-reservoir planned totals.
-        svc.fluid_system._assign_protocol({
-            'parameters': {'max_velocity': 200},
-            'protocol_entries': [
-                {'$type': 'inject', 'reservoir_id': 1, 'volume': 300},
-                {'$type': 'inject', 'reservoir_id': 1, 'volume': 200},
-                {'$type': 'inject', 'reservoir_id': 2, 'volume': 1000},
-            ],
-        })
+        svc.fluid_system._assign_protocol(
+            {
+                "parameters": {"max_velocity": 200},
+                "protocol_entries": [
+                    {"$type": "inject", "reservoir_id": 1, "volume": 300},
+                    {"$type": "inject", "reservoir_id": 1, "volume": 200},
+                    {"$type": "inject", "reservoir_id": 2, "volume": 1000},
+                ],
+            }
+        )
         labels = svc.fluid_reservoir_labels()
-        self.assertEqual(labels[1]['total_vol'], 500.0)
-        self.assertEqual(labels[2]['total_vol'], 1000.0)
-        self.assertEqual(labels[1]['used_vol'], 0.0)
+        self.assertEqual(labels[1]["total_vol"], 500.0)
+        self.assertEqual(labels[2]["total_vol"], 1000.0)
+        self.assertEqual(labels[1]["used_vol"], 0.0)
         # Recording pumped volume shows up as used.
         svc.fluid_system._record_used(1, 300)
-        self.assertEqual(svc.fluid_reservoir_labels()[1]['used_vol'], 300.0)
+        self.assertEqual(svc.fluid_reservoir_labels()[1]["used_vol"], 300.0)
 
     def test_toggle_and_labels_survive_reservoir_resync(self):
         # sync_fluid_reservoirs re-applies a changed design live (no serial
         # reconnect) and refreshes the schematic's names/usage.
         svc = SystemService()
-        svc.load_setup('IbidiEmulator')
-        svc.connect_fluid({
-            'parameters': {'max_velocity': 200},
-            'settings': {'reservoir_names': {1: 'A'}, 'special_names': {}},
-        })
-        self.assertFalse(svc.fluid_reservoir_labels()[2]['used'])
+        svc.load_setup("IbidiEmulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {"reservoir_names": {1: "A"}, "special_names": {}},
+            }
+        )
+        self.assertFalse(svc.fluid_reservoir_labels()[2]["used"])
         # Edit the design to add reservoir 2, then re-sync (as Translate does).
-        svc.sync_fluid_reservoirs({'settings': {
-            'reservoir_names': {1: 'A', 2: 'B'}, 'special_names': {}}})
+        svc.sync_fluid_reservoirs(
+            {
+                "settings": {
+                    "reservoir_names": {1: "A", 2: "B"},
+                    "special_names": {},
+                }
+            }
+        )
         labels = svc.fluid_reservoir_labels()
-        self.assertTrue(labels[2]['used'])
-        self.assertEqual(labels[2]['name'], 'B')
+        self.assertTrue(labels[2]["used"])
+        self.assertEqual(labels[2]["name"], "B")
 
     def test_fluid_topology_none_without_setup_and_no_mux(self):
         svc = SystemService()
         self.assertIsNone(svc.fluid_topology())
-        svc.load_setup('Mercury')   # Hamilton MVP, no ibidi multiplexer
+        svc.load_setup("Mercury")  # Hamilton MVP, no ibidi multiplexer
         topo = svc.fluid_topology()
-        self.assertIsNone(topo['multiplexer'])
+        self.assertIsNone(topo["multiplexer"])
 
     def test_fluid_state_reflects_routing_without_serial_poll(self):
         # fluid_state() reads cached driver attributes only (no bus traffic),
         # so it is safe to poll live — here it mirrors a manual route.
         svc = SystemService()
-        svc.load_setup('IbidiEmulator')
-        svc.connect_fluid({
-            'parameters': {'max_velocity': 200},
-            'settings': {
-                'reservoir_names': {i: 'R%d' % i for i in range(1, 4)},
-                'special_names': {}},
-        })
-        self.assertIsNone(SystemService().fluid_state())   # not connected
+        svc.load_setup("IbidiEmulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {i: "R%d" % i for i in range(1, 4)},
+                    "special_names": {},
+                },
+            }
+        )
+        self.assertIsNone(SystemService().fluid_state())  # not connected
         svc.set_valves(3)
         state = svc.fluid_state()
-        opened = [i + 1 for i, v in enumerate(state['multiplexer']['open'])
-                  if v]
+        opened = [
+            i + 1 for i, v in enumerate(state["multiplexer"]["open"]) if v
+        ]
         self.assertEqual(opened, [3])
-        self.assertEqual(state['pump_a']['valve'], 'in')
-        self.assertEqual(state['pump_a']['capacity'], 500.0)
-        self.assertIsNotNone(state['pump_out'])
+        self.assertEqual(state["pump_a"]["valve"], "in")
+        self.assertEqual(state["pump_a"]["capacity"], 500.0)
+        self.assertIsNotNone(state["pump_out"])
 
     def test_fill_tubings_without_flushbuffer_skips_final_flush(self):
         # A design that defines no 'flushbuffer_a' must not crash fill: the
         # post-fill flushbuffer step is skipped rather than dead-ending in
         # the tubing lookup for an unrouted 'flushbuffer_a'.
         svc = SystemService()
-        svc.load_setup('IbidiEmulator')
-        svc.connect_fluid({
-            'parameters': {'max_velocity': 200, 'clean_velocity': 200,
-                           'clean_delay': 0},
-            'settings': {'reservoir_names': {1: 'R1', 2: 'R2'},
-                         'special_names': {}},
-        })
-        svc.fill_tubings()   # must not raise
+        svc.load_setup("IbidiEmulator")
+        svc.connect_fluid(
+            {
+                "parameters": {
+                    "max_velocity": 200,
+                    "clean_velocity": 200,
+                    "clean_delay": 0,
+                },
+                "settings": {
+                    "reservoir_names": {1: "R1", 2: "R2"},
+                    "special_names": {},
+                },
+            }
+        )
+        svc.fill_tubings()  # must not raise
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

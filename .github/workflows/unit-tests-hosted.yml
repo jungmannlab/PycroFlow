@@ -24,10 +24,14 @@ on:
     branches:
       - master
       - develop
+      # WP-FLUIDICS-CAM builds on this lab-directed integration base; run the
+      # gate here too so PRs into it are covered (see the work-order brief).
+      - feature/ibidimultiplexer
   pull_request:
     branches:
       - master
       - develop
+      - feature/ibidimultiplexer
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
