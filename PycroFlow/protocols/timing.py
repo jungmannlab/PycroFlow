@@ -35,7 +35,7 @@ _SYSTEMS = ("fluid", "img", "illu")
 #: a JSON object holding the measured and estimated duration of one step;
 #: :mod:`PycroFlow.protocols.timing_analysis` mines them to score and improve
 #: the estimates below.
-STEP_TIMING_TAG = 'STEP_TIMING'
+STEP_TIMING_TAG = "STEP_TIMING"
 
 # --- calibrated per-step overheads (seconds) -------------------------------
 # Measured from lab STEP_TIMING logs (ibidi multiplexer + Hamilton PSD/MVP).

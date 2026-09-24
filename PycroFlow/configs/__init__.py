@@ -32,8 +32,8 @@ _CONFIG_DIR = Path(__file__).resolve().parent
 _SETUP_DIR = _CONFIG_DIR / "setups"
 
 #: Multiplexer drivers a setup's ``fluid.multiplexer.driver`` may name.
-HAMILTON_MVP = 'hamilton-mvp'
-IBIDI_MULTIFLOW = 'ibidi-multiflow'
+HAMILTON_MVP = "hamilton-mvp"
+IBIDI_MULTIFLOW = "ibidi-multiflow"
 MULTIPLEXER_DRIVERS = (HAMILTON_MVP, IBIDI_MULTIFLOW)
 
 
@@ -104,6 +104,15 @@ def list_setups():
     return sorted(p.stem for p in _SETUP_DIR.glob("*.yaml"))
 
 
+def setup_path(name):
+    """Return the on-disk path to a setup's YAML file.
+
+    ``name`` is a setup basename in ``configs/setups`` or a path. Used by the
+    GUI to write edited values (e.g. camera device indices) back to the file.
+    """
+    return str(_resolve(name, ".yaml", base=_SETUP_DIR))
+
+
 def load_setup(name):
     """Load a per-microscope setup (hardware) config.
 
@@ -153,19 +162,19 @@ def _normalize_setup(setup, source=None):
         ``fluid['tubing']`` is a tuple-keyed dict.
     """
     setup = copy.deepcopy(setup)
-    if 'hamilton' in setup:
+    if "hamilton" in setup:
         setup = _translate_legacy_setup(setup, source=source)
 
-    fluid = setup.setdefault('fluid', {})
-    if isinstance(fluid.get('tubing'), list):
-        fluid['tubing'] = _records_to_tubing(fluid['tubing'])
+    fluid = setup.setdefault("fluid", {})
+    if isinstance(fluid.get("tubing"), list):
+        fluid["tubing"] = _records_to_tubing(fluid["tubing"])
 
-    illu = setup.setdefault('illumination', {})
-    illu.setdefault('backend', 'monet')
+    illu = setup.setdefault("illumination", {})
+    illu.setdefault("backend", "monet")
     # Before illumination had its own block the setup's own name doubled as
     # the monet config key. Keep that as the fallback.
-    if not illu.get('config'):
-        illu['config'] = setup.get('setup')
+    if not illu.get("config"):
+        illu["config"] = setup.get("setup")
     return setup
 
 
@@ -175,33 +184,36 @@ def _translate_legacy_setup(setup, source=None):
         "setup {} uses the deprecated vendor-grouped 'hamilton:' layout; "
         "please migrate it to the role-based 'fluid:' layout "
         "(see configs/setups/Mercury.yaml)".format(
-            source if source is not None else setup.get('setup')))
-    hamilton = setup.pop('hamilton')
-    fluid = {'system_type': hamilton.get('system_type', 'legacy')}
+            source if source is not None else setup.get("setup")
+        )
+    )
+    hamilton = setup.pop("hamilton")
+    fluid = {"system_type": hamilton.get("system_type", "legacy")}
 
-    pumps = {'driver': 'hamilton-psd', 'interface': hamilton['interface']}
-    for key in ('pump_a', 'pump_out'):
+    pumps = {"driver": "hamilton-psd", "interface": hamilton["interface"]}
+    for key in ("pump_a", "pump_out"):
         if key in hamilton:
             pumps[key] = hamilton[key]
-    fluid['pumps'] = pumps
+    fluid["pumps"] = pumps
 
-    if hamilton.get('ibidi'):
-        mux = dict(hamilton['ibidi'])
-        mux['driver'] = IBIDI_MULTIFLOW
+    if hamilton.get("ibidi"):
+        mux = dict(hamilton["ibidi"])
+        mux["driver"] = IBIDI_MULTIFLOW
     else:
-        mux = {'driver': HAMILTON_MVP,
-               'valves': hamilton.get('valve_a', [])}
-    fluid['multiplexer'] = mux
+        mux = {"driver": HAMILTON_MVP, "valves": hamilton.get("valve_a", [])}
+    fluid["multiplexer"] = mux
 
-    for src, dst in (('flush_pos', 'flush_pos'),
-                     ('valve_flush', 'valve_flush'),
-                     ('reservoir_a_manifold', 'reservoirs')):
+    for src, dst in (
+        ("flush_pos", "flush_pos"),
+        ("valve_flush", "valve_flush"),
+        ("reservoir_a_manifold", "reservoirs"),
+    ):
         if src in hamilton:
             fluid[dst] = hamilton[src]
-    if 'tubing' in setup:
-        fluid['tubing'] = setup.pop('tubing')
+    if "tubing" in setup:
+        fluid["tubing"] = setup.pop("tubing")
 
-    setup['fluid'] = fluid
+    setup["fluid"] = fluid
     return setup
 
 
@@ -225,15 +237,15 @@ def monet_config(setup):
     """
     if not setup:
         return None
-    illu = setup.get('illumination') or {}
-    return illu.get('config') or setup.get('setup')
+    illu = setup.get("illumination") or {}
+    return illu.get("config") or setup.get("setup")
 
 
 def setup_reservoirs(setup):
     """Return a setup's reservoir manifold entries (empty list if none)."""
     if not setup:
         return []
-    return (setup.get('fluid') or {}).get('reservoirs', []) or []
+    return (setup.get("fluid") or {}).get("reservoirs", []) or []
 
 
 def _flatten_fluid_config(fluid):
@@ -243,31 +255,32 @@ def _flatten_fluid_config(fluid):
     (``interface`` / ``valve_a`` / ``ibidi`` / ``pump_a`` / ...); the setup
     files describe roles. This is the single translation point between them.
     """
-    pumps = fluid.get('pumps', {})
+    pumps = fluid.get("pumps", {})
     config = {
-        'system_type': fluid.get('system_type', 'legacy'),
-        'interface': pumps['interface'],
+        "system_type": fluid.get("system_type", "legacy"),
+        "interface": pumps["interface"],
     }
-    for key in ('pump_a', 'pump_out'):
+    for key in ("pump_a", "pump_out"):
         if key in pumps:
             config[key] = pumps[key]
-    for key in ('flush_pos', 'valve_flush'):
+    for key in ("flush_pos", "valve_flush"):
         if key in fluid:
             config[key] = fluid[key]
 
-    mux = dict(fluid.get('multiplexer') or {})
-    driver = mux.pop('driver', HAMILTON_MVP)
+    mux = dict(fluid.get("multiplexer") or {})
+    driver = mux.pop("driver", HAMILTON_MVP)
     if driver == HAMILTON_MVP:
-        config['valve_a'] = mux.pop('valves', [])
+        config["valve_a"] = mux.pop("valves", [])
     elif driver == IBIDI_MULTIFLOW:
         # No Hamilton rotary valves: the ibidi unit multiplexes. Its remaining
         # keys (port/baud/channels/address) configure IbidiMultiplexer.
-        config['valve_a'] = []
-        config['ibidi'] = mux
+        config["valve_a"] = []
+        config["ibidi"] = mux
     else:
         raise ValueError(
             "unknown fluid.multiplexer.driver {!r}; expected one of "
-            "{}".format(driver, list(MULTIPLEXER_DRIVERS)))
+            "{}".format(driver, list(MULTIPLEXER_DRIVERS))
+        )
     return config
 
 
@@ -296,15 +309,15 @@ def assemble_hamilton_config(setup, fluid_settings):
         ``(hamilton_config, tubing_config)`` ready for
         ``LegacyArchitecture(hamilton_config, tubing_config)``.
     """
-    fluid = copy.deepcopy(setup['fluid'])
+    fluid = copy.deepcopy(setup["fluid"])
     hamilton = _flatten_fluid_config(fluid)
-    manifold = fluid.get('reservoirs', []) or []
-    by_id = {entry['id']: entry for entry in manifold}
+    manifold = fluid.get("reservoirs", []) or []
+    by_id = {entry["id"]: entry for entry in manifold}
 
     special_names = dict(fluid_settings.get("special_names", {}))
     cleaning = fluid_settings.get("cleaning_reservoirs", []) or []
 
-    used_ids = list(fluid_settings.get('reservoir_names', {}).keys())
+    used_ids = list(fluid_settings.get("reservoir_names", {}).keys())
     # Reservoirs named only in special_names (e.g. flushbuffer_a) are routed
     # to just like any other — _flush() and fill_tubings() call
     # _set_valves(special_names['flushbuffer_a']) — so they must be wired in
@@ -331,13 +344,15 @@ def assemble_hamilton_config(setup, fluid_settings):
             raise KeyError(
                 "Reservoir id {!r} is not wired in setup {!r}'s "
                 "fluid.reservoirs (which wires {})".format(
-                    rid, setup.get('setup'), sorted(by_id)))
+                    rid, setup.get("setup"), sorted(by_id)
+                )
+            )
         reservoir_a.append(by_id[rid])
 
-    hamilton['reservoir_a'] = reservoir_a
-    hamilton['special_names'] = special_names
-    hamilton['cleaning_reservoirs'] = cleaning
-    return hamilton, fluid.get('tubing', {})
+    hamilton["reservoir_a"] = reservoir_a
+    hamilton["special_names"] = special_names
+    hamilton["cleaning_reservoirs"] = cleaning
+    return hamilton, fluid.get("tubing", {})
 
 
 def assemble_imaging_config(setup, design):

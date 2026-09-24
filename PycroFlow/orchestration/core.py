@@ -238,8 +238,11 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
                 # estimated to take, so the estimates can be improved by
                 # mining a few run logs (protocols.timing_analysis).
                 self._log_step_timing(
-                    step, self.protocol_iter, nsteps,
-                    time.perf_counter() - started)
+                    step,
+                    self.protocol_iter,
+                    nsteps,
+                    time.perf_counter() - started,
+                )
 
             self.protocol_iter += 1
 
@@ -263,26 +266,38 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         """
         try:
             from PycroFlow.protocols.timing import (
-                STEP_TIMING_TAG, estimate_entry_duration)
+                STEP_TIMING_TAG,
+                estimate_entry_duration,
+            )
 
             entry = step if isinstance(step, dict) else {}
             record = {
-                'system': self.target,
-                'step': index + 1,
-                'nsteps': nsteps,
-                'type': entry.get('$type'),
-                'actual_s': round(float(elapsed), 3),
-                'estimate_s': round(
+                "system": self.target,
+                "step": index + 1,
+                "nsteps": nsteps,
+                "type": entry.get("$type"),
+                "actual_s": round(float(elapsed), 3),
+                "estimate_s": round(
                     estimate_entry_duration(
-                        entry, self.protocol.get('parameters')), 3),
+                        entry, self.protocol.get("parameters")
+                    ),
+                    3,
+                ),
             }
             # The fields the estimator models, so a log alone explains a miss.
-            for key in ('volume', 'velocity', 'frames', 't_exp', 'duration',
-                        'reservoir_id', 'delay'):
+            for key in (
+                "volume",
+                "velocity",
+                "frames",
+                "t_exp",
+                "duration",
+                "reservoir_id",
+                "delay",
+            ):
                 if entry.get(key) is not None:
                     record[key] = entry[key]
             logger.info("{} {}", STEP_TIMING_TAG, json.dumps(record))
-        except Exception as exc:   # timing must never break a run
+        except Exception as exc:  # timing must never break a run
             logger.debug("could not log step timing: {!r}", exc)
 
     def get_current_protocol_iter(self, arg=None):

@@ -542,7 +542,8 @@ class FluidSchematic(QWidget):
                     track.width(),
                     fill_h,
                 ),
-                2, 2,
+                2,
+                2,
             )
 
     # -- MVP rotary valves --------------------------------------------------
@@ -630,7 +631,7 @@ class FluidSchematic(QWidget):
         to read. Returns the hub centre and radius.
         """
         addr = valve["address"]
-        taps = valve.get("taps") or {}   # port -> reservoir id
+        taps = valve.get("taps") or {}  # port -> reservoir id
         cur = positions.get(addr)
 
         hub_r = max(13.0, min(min(band.width(), band.height()) * 0.09, 26.0))
@@ -643,7 +644,7 @@ class FluidSchematic(QWidget):
 
         # Up to two columns; boxes fill each column top-to-bottom.
         ncol = 1 if m <= 4 else 2
-        nrow = -(-m // ncol)   # ceil
+        nrow = -(-m // ncol)  # ceil
         col_w = band.width() / ncol
         grid_top = hub.y() + hub_r + 12
         gap_y = 6.0
@@ -654,7 +655,7 @@ class FluidSchematic(QWidget):
 
         # Geometry per tap; draw tubes first (idle, then active, then hover on
         # top) so the highlighted path reads cleanly over the shared rails.
-        legs = []   # (priority, [points], active, on_route, box, port, rid)
+        legs = []  # (priority, [points], active, on_route, box, port, rid)
         for idx, port in enumerate(tap_ports):
             rid = taps[port]
             col = 0 if idx < nrow else 1
@@ -667,11 +668,11 @@ class FluidSchematic(QWidget):
             if ncol == 2 and col == 0:
                 rail_x = col_left + col_w - 6
                 box_left = col_left + 6
-                box_entry_x = rail_x - 8   # branch into the box's right edge
+                box_entry_x = rail_x - 8  # branch into the box's right edge
             else:
                 rail_x = col_left + 6
                 box_left = rail_x + 8
-                box_entry_x = box_left     # branch into the box's left edge
+                box_entry_x = box_left  # branch into the box's left edge
             box_w = (col_left + col_w - 6) - (col_left + 6) - 8
             box = QRectF(box_left, box_top, box_w, box_h)
             self._res_rects[rid] = box
@@ -870,8 +871,10 @@ class FluidSchematic(QWidget):
                 for v in self._waste_labels.values()
             )
             self._draw_waste(
-                painter, waste_rect,
-                {"used_vol": used, "total_vol": total}, "waste",
+                painter,
+                waste_rect,
+                {"used_vol": used, "total_vol": total},
+                "waste",
             )
 
     def _draw_link(self, painter, p1, p2, active):
@@ -1001,7 +1004,8 @@ class FluidSchematic(QWidget):
                     QRectF(
                         r.left() + 2, r.bottom() - 2 - fh, r.width() - 4, fh
                     ),
-                    3, 3,
+                    3,
+                    3,
                 )
         painter.setPen(QPen(_TEXT))
         f = painter.font()
@@ -1019,9 +1023,7 @@ class FluidSchematic(QWidget):
             painter.setFont(f)
             painter.setPen(QPen(_MUTED))
             painter.drawText(
-                QRectF(
-                    r.left(), r.center().y(), r.width(), r.height() * 0.45
-                ),
+                QRectF(r.left(), r.center().y(), r.width(), r.height() * 0.45),
                 Qt.AlignmentFlag.AlignCenter,
                 "{} / {}".format(format_volume(used), format_volume(total)),
             )

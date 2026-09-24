@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Fluidics monitoring: clips now land **with the run** and carry their step.
+  The `monitoring.output_dir` is optional — when omitted, clips default to
+  `<experiment save_dir>/fluidics_cam/` (resolved at run start), so they sit
+  beside the run's other outputs; an explicit `output_dir:` still overrides.
+  Each clip's filename encodes the fluid run-sequence step the exchange started
+  on (`run_<id>_round<NNN>_step<SSS>_<UTC>.avi`), and that `protocol_step` is
+  written onto the `fluidics_round` registry row, so a clip maps to the exact
+  Run Sequence entry.
+- GUI **Webcams tab**: verify the monitoring cameras and set device indices
+  without leaving the app. A live low-fps tiled preview (emulator source for an
+  emulated setup, real webcams otherwise; auto-stopped while a run owns the
+  cameras) confirms the right camera is on the right index; per-camera device
+  spinboxes with Apply (in-session, rebuilds the controller for the next run)
+  and Save (writes the indices back to the setup YAML).
+- Fluidics monitoring webcams (WP-FLUIDICS-CAM, Phase 1): record one short
+  movie per Exchange round of the fluid-exchange leg (the least-observable,
+  most failure-prone part of a run — dry reservoir, mis-primed pump, bubble,
+  leak). New `PycroFlow.monitoring` package: a camera-capture service
+  (`pycroflow-capture`) that runs in its **own OS process** and, driven by the
+  fluidics round lifecycle, writes one tiled `.avi` per round to a configured
+  pool dir. Two frame sources record identically and differ only in the source:
+  `--emulator` (synthetic numpy frames; the default, used by CI) and
+  `--instrument` (real UVC/USB webcams via OpenCV, the optional `[monitoring]`
+  extra). The clip writer is a wheel-only pure-Python uncompressed-AVI muxer, so
+  the emulator path needs no camera and no camera library. Declare a rig's
+  cameras with an optional `monitoring:` block in its setup YAML (see the new
+  `EmulatorCam` setup and `docs/WP-FLUIDICS-CAM-RUNBOOK.md`); a setup with no
+  such block leaves the subsystem inert. **Isolation invariant:** capture runs
+  in a separate process behind a bounded, drop-oldest command queue, so a slow,
+  saturated, or unplugged camera degrades to a logged gap (a black tile panel)
+  and can never stall or perturb acquisition or the fluidics orchestration.
+  Each clip's pool URI is best-effort indexed onto the matching
+  `fluidics_round` registry record via `monitoring_video_uri` (the optional
+  `[registry]` extra; a down/slow/absent registry never blocks the run). The
+  Qt GUI auto-records per round when a camera setup is selected. Read-only, no
+  actuation. `SignalRegistry` gained a best-effort observer hook and
+  `ExperimentService` a symmetric `remove_state_observer`, both used by the
+  monitoring controller without otherwise changing orchestration behaviour.
+
 ### Changed
 
 - Run Sequence duration estimates are far more accurate. The per-step model

@@ -450,11 +450,8 @@ class ExperimentTab(YamlDropMixin, QWidget):
         ]
         design = self._service.experiment_design or {}
         self._reservoir_names = (
-            ((design.get("fluid") or {}).get("settings") or {}).get(
-                "reservoir_names"
-            )
-            or {}
-        )
+            (design.get("fluid") or {}).get("settings") or {}
+        ).get("reservoir_names") or {}
         self._durations = estimate_durations(protocol)
         self._total_duration = estimate_total_duration(protocol)
         self._overall_sw.reset()

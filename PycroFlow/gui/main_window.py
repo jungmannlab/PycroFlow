@@ -27,6 +27,8 @@ from PyQt6.QtWidgets import (
 # Qt6 moved QAction out of QtWidgets into QtGui.
 from PyQt6.QtGui import QAction
 
+from loguru import logger
+
 from PycroFlow import configs
 from PycroFlow.services.experiment_service import ExperimentState
 from PycroFlow.gui.qt_bridge import QtBridge
@@ -36,6 +38,7 @@ from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
 from PycroFlow.gui.tabs.fluid_tab import FluidTab
 from PycroFlow.gui.tabs.imaging_tab import ImagingTab
 from PycroFlow.gui.tabs.monet_tab import MonetTab
+from PycroFlow.gui.tabs.webcams_tab import WebcamsTab
 
 # Experiment states during which hardware must not be touched manually (the
 # orchestrator owns the instruments).
@@ -54,6 +57,10 @@ class PycroFlowMainWindow(QMainWindow):
         self._bridge = QtBridge(experiment_service, parent=self)
         # Keys of subsystems whose connect is currently in flight.
         self._connecting = set()
+        # Fluidics monitoring controller for the current setup
+        # (WP-FLUIDICS-CAM). None when the setup declares no cameras;
+        # (re)built per setup change.
+        self._monitoring = None
 
         from PycroFlow import __version__
 
@@ -107,12 +114,16 @@ class PycroFlowMainWindow(QMainWindow):
             self._system_service,
             on_connect=lambda: self._connect_system("imaging"),
         )
+        self.webcams_tab = WebcamsTab(
+            self._system_service, on_config_changed=self._attach_monitoring
+        )
         self.monet_tab = MonetTab()
 
         self.tabs.addTab(self.design_tab, "Experiment Design")
         self.tabs.addTab(self.run_sequence_tab, "Run Sequence")
         self.tabs.addTab(self.fluid_tab, "Fluid")
         self.tabs.addTab(self.imaging_tab, "Imaging")
+        self.tabs.addTab(self.webcams_tab, "Webcams")
         self.tabs.addTab(self.monet_tab, "Monet")
         self.setCentralWidget(self.tabs)
 
@@ -153,6 +164,8 @@ class PycroFlowMainWindow(QMainWindow):
         # The setup supplies the design editor's reservoir-id and laser
         # dropdown options; refresh them for the setup just loaded.
         self.design_tab.refresh_setup_options()
+        self._attach_monitoring()
+        self.webcams_tab.refresh()
         self._refresh_status()
         # If a design is already loaded, connect for the new setup.
         if self._experiment_service.experiment_design:
@@ -174,6 +187,7 @@ class PycroFlowMainWindow(QMainWindow):
         self.act_disconnect.setEnabled(not locked)
         self.fluid_tab.set_run_lock(locked)
         self.imaging_tab.set_run_lock(locked)
+        self.webcams_tab.set_run_lock(locked)
         self.monet_tab.set_run_lock(locked)
         if not locked:
             # Restore real connection statuses after the run lock lifts.
@@ -354,17 +368,38 @@ class PycroFlowMainWindow(QMainWindow):
     def _sync_fluid_design(self):
         """Push the current design's reservoirs into the connected system."""
         design = self._experiment_service.experiment_design or {}
-        fluid = design.get('fluid')
+        fluid = design.get("fluid")
         if not fluid:
             return
         try:
             self._system_service.sync_fluid_reservoirs(fluid)
         except Exception as exc:
             QMessageBox.warning(
-                self, "Reservoirs not applied",
+                self,
+                "Reservoirs not applied",
                 "The design's reservoirs could not be applied to the "
                 "connected fluid system:\n\n{!r}\n\nReconnect the fluid "
-                "system before starting.".format(exc))
+                "system before starting.".format(exc),
+            )
+
+    def _attach_monitoring(self):
+        """(Re)attach the fluidics monitoring controller for the current setup.
+
+        Best-effort: inert when the setup declares no cameras, and a failure
+        here must never block a setup change. Records one clip per exchange
+        round while an experiment runs (WP-FLUIDICS-CAM).
+        """
+        from PycroFlow.monitoring import attach_monitoring
+
+        if self._monitoring is not None:
+            self._monitoring.detach()
+            self._monitoring = None
+        try:
+            self._monitoring = attach_monitoring(
+                self._experiment_service, self._system_service.setup
+            )
+        except Exception as exc:
+            logger.warning("could not attach fluidics monitoring: {!r}", exc)
 
     def closeEvent(self, event):
         """Clean shutdown: abort any running experiment, run monet's cleanup,
@@ -373,6 +408,10 @@ class PycroFlowMainWindow(QMainWindow):
             self._experiment_service.abort()
         except Exception:
             pass
+        if self._monitoring is not None:
+            self._monitoring.detach()
+            self._monitoring = None
+        self.webcams_tab.stop_preview()
         self.monet_tab.shutdown()
         try:
             self._system_service.close()

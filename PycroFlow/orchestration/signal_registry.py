@@ -26,7 +26,14 @@ lock guards the dict membership check + insertion that ``register`` and
 from __future__ import annotations
 
 import threading
-from typing import Dict, Optional
+from typing import Callable, Dict, List, Optional
+
+from loguru import logger
+
+# An observer is notified of every fired signal as ``fn(target, value)``. Used
+# by the fluidics monitoring subsystem to bind camera-record windows to the
+# round lifecycle without the orchestration knowing anything about it.
+SignalObserver = Callable[[str, str], None]
 
 
 def _key(target: str, value: str) -> str:
@@ -45,6 +52,28 @@ class SignalRegistry:
     def __init__(self):
         self._events: Dict[str, threading.Event] = {}
         self._lock = threading.Lock()
+        self._observers: List[SignalObserver] = []
+
+    def add_observer(self, fn: SignalObserver) -> None:
+        """Register a callback fired on every :meth:`fire`, as ``fn(target,
+        value)``.
+
+        Observers run inline on the firing (orchestration) thread, so a
+        callback **must not block** -- it should hand off and return at once.
+        Exceptions are caught and logged: an observer can never break signal
+        delivery or the run. Used by the monitoring subsystem to detect round
+        boundaries; see :class:`PycroFlow.monitoring.controller.
+        MonitoringController`.
+        """
+        self._observers.append(fn)
+
+    def remove_observer(self, fn: SignalObserver) -> None:
+        """Deregister an observer added by :meth:`add_observer` (no-op if
+        absent)."""
+        try:
+            self._observers.remove(fn)
+        except ValueError:
+            pass
 
     def _get_or_create(self, target: str, value: str) -> threading.Event:
         k = _key(target, value)
@@ -64,6 +93,15 @@ class SignalRegistry:
         """Mark ``(target, value)`` observed. Idempotent — re-firing is a
         no-op once the event is set."""
         self._get_or_create(target, value).set()
+        # Notify observers best-effort: never let a monitoring hook (or any
+        # other subscriber) break signal delivery to the waiting handlers.
+        # Iterate a snapshot (like ExperimentService._set_state) so concurrent
+        # add/remove_observer can't skip a callback mid-iteration.
+        for fn in list(self._observers):
+            try:
+                fn(target, value)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("signal observer raised: {!r}", exc)
 
     def wait(
         self, target: str, value: str, timeout: Optional[float] = None
