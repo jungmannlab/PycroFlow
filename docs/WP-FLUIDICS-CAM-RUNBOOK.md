@@ -40,7 +40,10 @@ Add a `monitoring:` block to the microscope's setup YAML in
 
 ```yaml
 monitoring:
-  output_dir: /data/fluidics_cam      # pool/archive dir clips land in (never git)
+  # output_dir is OPTIONAL. Omit it (recommended) and clips land in
+  #   <experiment save_dir>/fluidics_cam/  -> they travel with the run's data.
+  # Set it to pin all clips to a fixed pool/archive dir instead (never git):
+  # output_dir: /data/fluidics_cam
   fps: 5                              # tile frame rate written to each clip
   retention_days: 14                 # prune clips older than this (0 disables)
   # source: instrument               # optional; inferred from the setup's
@@ -54,18 +57,42 @@ monitoring:
 - `role` — advisory label (`reservoir` / `pump` / `sample`); names the tile
   panel.
 - `device` — the OpenCV `VideoCapture` index or device path/URL for that camera.
+  You can also set/verify these indices from the GUI **Webcams** tab (§3) — no
+  need to hand-edit the YAML for a re-plugged camera.
+- `output_dir` — omit to save clips **with the experiment** (under
+  `<save_dir>/fluidics_cam/`, resolved per run); set it to override with a fixed
+  pool path.
 - One tiled clip is written per round combining all cameras into a grid; a
   downed camera renders as a black panel (a visible gap), never a stall.
 
-Find camera indices on the acquisition PC with any UVC tool, or by trial with
-the smoke test below.
-
 ---
 
-## 3. Verify the cameras (smoke test, no orchestration)
+## 3. Verify the cameras and set device indices (GUI Webcams tab)
 
-Grab a short clip from every camera and exit — confirms the cameras open and
-frames flow before wiring monitoring into a real run:
+The **Webcams** tab in `pycroflow-gui` is the primary way to confirm the cameras
+are set up right — especially after plugging one in, since USB `VideoCapture`
+indices can shift on a re-plug.
+
+1. Launch `pycroflow-gui` and select the camera-equipped **setup** in the
+   toolbar. Open the **Webcams** tab — it lists one row per camera (`role` +
+   a **device** index spinbox + resolution).
+2. Click **Start preview** for a live low-fps tiled view. Confirm each panel
+   shows the expected camera, live. A black panel = that index didn't open.
+3. If a camera is on the wrong index, change its spinbox and:
+   - **Apply** — uses the new indices immediately, for this session's next run
+     (in-memory; also restarts the preview).
+   - **Save to setup file** — writes the indices back to the setup YAML so they
+     persist across restarts (this rewrites that file and does **not** preserve
+     its comments; you'll be asked to confirm).
+
+The preview uses the same capture pipeline the recorder uses, so what you see is
+what will be recorded. It is disabled while an experiment is running (the capture
+process owns the cameras then). For an emulated setup the preview shows synthetic
+frames, so you can exercise the tab with no hardware.
+
+### CLI alternative (no GUI)
+
+Grab a short clip from every camera and exit — same verification, headless:
 
 ```bash
 # Write a cameras config the service can read (or hand-author the JSON):
@@ -88,24 +115,34 @@ launch the capture service by hand for a run. In the GUI (`pycroflow-gui`):
    controller attaches automatically (nothing visible changes; the plain
    `Emulator`/non-camera setups stay inert).
 2. Load the experiment design and run the experiment as usual.
-3. As each Exchange round flushes, one tiled `.avi` is written to `output_dir`.
+3. As each Exchange round flushes, one tiled `.avi` is written to the output dir.
 
 Under the hood the controller spawns `pycroflow-capture` in a **separate OS
 process** and drives its record windows from the orchestration's round signals;
 the capture process is torn down when the run finishes/aborts or the setup
 changes.
 
-### Clips
+### Where clips land
 
-One file per round in `output_dir`, named:
+Unless the setup pins an explicit `output_dir`, clips are written to
+**`<experiment save_dir>/fluidics_cam/`** — i.e. beside the run's design, Run
+Sequence, logs, and acquisition data. (`save_dir` comes from the loaded
+experiment design; the app already `chdir`s there on load.)
+
+### Clip names
+
+One file per Exchange round, named with the run id, round index, the **fluid
+run-sequence step** the exchange started on, and the UTC start time:
 
 ```
-run_<run_id>_round<NNN>_<UTC-start>.avi
-# e.g. run_20260923T141500Z_ab12cd_round003_20260923T141530Z.avi
+run_<run_id>_round<NNN>_step<SSS>_<UTC-start>.avi
+# e.g. run_20260924T141500Z_ab12cd_round003_step037_20260924T141530Z.avi
 ```
 
-Only the fluid-exchange leg of each round is recorded (not the long imaging
-leg), bounding disk use; `retention_days` prunes old clips before each run.
+`step<SSS>` is the fluid Run Sequence entry index that began the exchange, so a
+clip maps directly to the step you see in the GUI **Run Sequence** tab. Only the
+fluid-exchange leg of each round is recorded (not the long imaging leg), bounding
+disk use; `retention_days` prunes old clips before each run.
 
 ---
 
@@ -120,14 +157,16 @@ export PAINT_REGISTRY_URL="http://registry.lab:8000"
 export PAINT_REGISTRY_TOKEN="<write-scope token>"   # omit on a loopback dev registry
 ```
 
-The URI is written as a top-level `monitoring_video_uri` field (the registry
-folds it into the row's `extra` JSON). Confirm it round-tripped:
+Each clip's URI is written as a top-level `monitoring_video_uri` field, alongside
+`round_index` and the `protocol_step` the exchange started on (the registry folds
+these unknown fields into the row's `extra` JSON). Confirm it round-tripped:
 
 ```bash
 python -c "from picasso_registry.client import RegistryClient; import os; \
 r=RegistryClient(os.environ['PAINT_REGISTRY_URL'], token=os.environ.get('PAINT_REGISTRY_TOKEN')); \
 rows=r.list('fluidics_round', limit=20); \
-print([ (x.get('round_index'), (x.get('extra') or {}).get('monitoring_video_uri')) for x in rows ])"
+print([ (x.get('round_index'), (x.get('extra') or {}).get('protocol_step'), \
+        (x.get('extra') or {}).get('monitoring_video_uri')) for x in rows ])"
 ```
 
 Indexing is best-effort: with `PAINT_REGISTRY_URL` unset, or the registry down
@@ -156,10 +195,11 @@ no-camera baseline and still yields gap clips).
 
 ## 7. Confirmation evidence (round-trip leg)
 
-Commit under `results/` on the branch: a couple of the per-round clips (or their
-paths + sizes), the registry read-back showing `monitoring_video_uri` on the
-right rounds, and a note on the unplug-a-camera observation. Claude verifies
-this evidence back in the dev container and ticks the gate.
+Commit under `results/` on the branch: a couple of the per-round clips from
+`<save_dir>/fluidics_cam/` (or their `round<NNN>_step<SSS>` names + sizes), the
+registry read-back showing `monitoring_video_uri` (and `protocol_step`) on the
+right rounds, and a note on the unplug-a-camera observation. Claude verifies this
+evidence back in the dev container and ticks the gate.
 
 ---
 
@@ -168,7 +208,8 @@ this evidence back in the dev container and ticks the gate.
 - **No clips written** — the setup has no `monitoring:` block or no `cameras`;
   or every camera failed to open (check the log for `did not open`).
 - **All panels black** — cameras did not open (wrong `device` index) or are all
-  unplugged; the smoke test (§3) isolates this.
+  unplugged; the **Webcams** tab preview or the smoke test (§3) isolates this,
+  and the tab lets you correct the index on the spot.
 - **`instrument capture needs OpenCV`** — install the `[monitoring]` extra.
 - **Clips not indexed** — `PAINT_REGISTRY_URL` unset, registry unreachable, or
   `[registry]` extra not installed; recording is unaffected.
