@@ -95,7 +95,9 @@ class SignalRegistry:
         self._get_or_create(target, value).set()
         # Notify observers best-effort: never let a monitoring hook (or any
         # other subscriber) break signal delivery to the waiting handlers.
-        for fn in self._observers:
+        # Iterate a snapshot (like ExperimentService._set_state) so concurrent
+        # add/remove_observer can't skip a callback mid-iteration.
+        for fn in list(self._observers):
             try:
                 fn(target, value)
             except Exception as exc:  # pragma: no cover - defensive

@@ -17,7 +17,6 @@ from __future__ import annotations
 from typing import Optional
 
 import yaml
-from loguru import logger
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
@@ -32,15 +31,21 @@ from PyQt6.QtWidgets import (
 )
 
 from PycroFlow import configs
+from PycroFlow.monitoring.capture_service import CaptureThread
 from PycroFlow.monitoring.config import CameraConfig, load_monitoring_config
-from PycroFlow.monitoring.sources import make_source
 from PycroFlow.monitoring.tiling import compose, plan_layout
 
 _PREVIEW_FPS = 8
 
 
 class _PreviewWorker(QThread):
-    """Grab + composite frames off the GUI thread; emit the tile as an image."""
+    """Grab + composite frames off the GUI thread; emit the tile as an image.
+
+    Uses the same :class:`~PycroFlow.monitoring.capture_service.CaptureThread`
+    the recorder uses, so the preview shows exactly what would be recorded and a
+    slow/hung camera can't block the loop (``get_latest`` is non-blocking, so
+    ``requestInterruption`` is honoured promptly).
+    """
 
     frame_ready = pyqtSignal(QImage)
 
@@ -51,37 +56,28 @@ class _PreviewWorker(QThread):
         self._layout = plan_layout(cameras, tile_cols)
 
     def run(self) -> None:
-        sources = [make_source(c, self._mode) for c in self._cameras]
-        for s in sources:
-            try:
-                s.open()
-            except (
-                Exception
-            ) as exc:  # a down camera -> black panel, not a stop
-                logger.info(
-                    "monitoring preview: {} did not open ({!r})",
-                    s.camera.role,
-                    exc,
-                )
+        threads = [
+            CaptureThread(c, self._mode, queue_size=2, fps=_PREVIEW_FPS)
+            for c in self._cameras
+        ]
+        for t in threads:
+            t.start()
         interval = int(1000 / max(1, _PREVIEW_FPS))
         try:
             while not self.isInterruptionRequested():
-                frames = []
-                for s in sources:
-                    try:
-                        frames.append(s.read())
-                    except Exception:
-                        frames.append(None)
-                tile = compose(frames, self._layout)
+                tile = compose([t.get_latest() for t in threads], self._layout)
                 h, w, _ = tile.shape
                 img = QImage(
                     tile.tobytes(), w, h, 3 * w, QImage.Format.Format_RGB888
-                )
+                ).copy()  # own the pixels across the thread/signal boundary
                 self.frame_ready.emit(img)
                 self.msleep(interval)
         finally:
-            for s in sources:
-                s.close()
+            for t in threads:
+                t.stop()
+            for t in threads:
+                t.join(timeout=1.0)
+                t.close()
 
 
 class WebcamsTab(QWidget):

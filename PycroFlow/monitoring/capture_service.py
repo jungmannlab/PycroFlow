@@ -175,6 +175,10 @@ class CaptureService:
         self._clip_name: Optional[str] = None
         self._clip_step: Optional[int] = None
         self._last_frame = 0.0
+        # Create the pool dir before opening the registry buffer sqlite in it:
+        # output_dir defaults to a fresh <save_dir>/fluidics_cam, so without
+        # this the buffer connect fails and indexing is silently disabled.
+        os.makedirs(config.output_dir, exist_ok=True)
         self._index = RegistryIndexWriter.from_env(
             run_id,
             buffer_path=os.path.join(

@@ -190,17 +190,21 @@ class MonitoringController:
             )
             return
 
-        # Subscribe to round-boundary signals, then open round 0.
+        # Subscribe to round-boundary signals and open round 0 atomically under
+        # the lock, so a signal firing between the two can't run _on_signal
+        # before round 0 is open. Round 0 opens now only if the run flushes
+        # before it first waits for imaging; otherwise it opens on the first
+        # "done imaging" (so we don't record that leading imaging leg).
         orch = getattr(self._svc, "orchestrator", None)
         tx = getattr(orch, "threadexchange", None)
-        self._registry = tx.get("signal_registry") if tx is not None else None
-        if self._registry is not None:
-            self._registry.add_observer(self._on_signal)
-        # Round 0 opens now only if the run flushes before it first waits for
-        # imaging; otherwise it opens on the first "done imaging" (so we don't
-        # record that leading imaging leg).
-        if self._open_at_start:
-            self._open()
+        with self._lock:
+            self._registry = (
+                tx.get("signal_registry") if tx is not None else None
+            )
+            if self._registry is not None:
+                self._registry.add_observer(self._on_signal)
+            if self._open_at_start:
+                self._open()
         logger.info(
             "monitoring: recording {} exchange leg(s), run {}",
             len(self._follows),
@@ -257,21 +261,29 @@ class MonitoringController:
         # exchange on its "done flushing"; reopen immediately for a back-to-back
         # flush, else wait for the next "done imaging" (imaging leg not
         # recorded). This single rule handles fluid-only, dark rounds, and
-        # initial-imager layouts alike.
-        if target == "fluid" and "done flushing" in value:
-            if self._active:
-                self._close()
-            follows = (
-                self._follows[self._df_seen]
-                if self._df_seen < len(self._follows)
-                else True
-            )
-            self._df_seen += 1
-            if not follows:
-                self._open()  # next flush runs back-to-back
-        elif target == "img" and "done imaging" in value:
-            if not self._active:
-                self._open()  # imaging done -> fluid resumes flushing
+        # initial-imager layouts alike. Runs on the (possibly several)
+        # orchestration handler threads, so the shared round state is guarded by
+        # the same lock stop()/_start use.
+        with self._lock:
+            if not self._started:
+                return  # a signal in flight past stop()'s observer removal
+            if target == "fluid" and "done flushing" in value:
+                if self._active:
+                    self._close()
+                follows = (
+                    self._follows[self._df_seen]
+                    if self._df_seen < len(self._follows)
+                    else True
+                )
+                self._df_seen += 1
+                if not follows:
+                    self._open()  # next flush runs back-to-back
+            elif target == "img" and "done imaging" in value:
+                # Open the next exchange only while flushes remain; a trailing
+                # imaging round after the last flush must not open a spurious
+                # window that records a non-exchange leg.
+                if not self._active and self._df_seen < len(self._follows):
+                    self._open()  # imaging done -> fluid resumes flushing
 
     # -- command emission (bounded, drop-oldest, never blocks) -----------
     def _open(self) -> None:
@@ -351,20 +363,26 @@ class MonitoringController:
 
         Never raises -- teardown problems are logged, not propagated.
         """
-        if not self._started:
-            return
-        try:
+        with self._lock:
+            if not self._started:
+                return
+            # Under the lock: mark stopped (a signal in flight now no-ops),
+            # unsubscribe, and close the open window -- atomically, so nothing
+            # reopens a window after we stop.
+            self._started = False
             if self._registry is not None:
                 self._registry.remove_observer(self._on_signal)
             if self._active:
                 self._close()
-            if self._spawned:
+            spawned = self._spawned
+        # Outside the lock: tell the child to stop and reap it (may block).
+        try:
+            if spawned:
                 self._emit({"cmd": "stop"})
                 self._drain_and_wait()
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("monitoring: stop failed ({!r})", exc)
         finally:
-            self._started = False
             self._spawned = False
             self._active = False
             self._registry = None
@@ -392,6 +410,19 @@ class MonitoringController:
             self._control_dir = None
 
 
+def _entry_kind(entry) -> Optional[str]:
+    """Classify a compiled protocol entry as ``'wait'`` / ``'signal'`` /
+    ``'activity'`` (fluid work), or ``None`` for a non-dict entry to skip."""
+    if not isinstance(entry, dict):
+        return None
+    t = entry.get("$type")
+    if t == "wait for signal":
+        return "wait"
+    if t == "signal":
+        return "signal"
+    return "activity"
+
+
 def _imaging_follows_flags(entries: list) -> list:
     """For each fluid ``"done flushing"`` signal, does an imaging wait follow it?
 
@@ -414,16 +445,10 @@ def _imaging_follows_flags(entries: list) -> list:
             continue
         follows = True
         for j in range(i + 1, n):
-            nxt = entries[j]
-            if not isinstance(nxt, dict):
+            kind = _entry_kind(entries[j])
+            if kind is None or kind == "signal":
                 continue
-            t = nxt.get("$type")
-            if t == "wait for signal":
-                follows = True
-                break
-            if t == "signal":
-                continue
-            follows = False  # any other entry is fluid activity
+            follows = kind == "wait"  # wait -> imaging leg; activity -> flush
             break
         flags.append(follows)
     return flags
@@ -437,14 +462,10 @@ def _first_activity_is_flush(entries: list) -> bool:
     before the first flush and shouldn't be recorded).
     """
     for e in entries:
-        if not isinstance(e, dict):
+        kind = _entry_kind(e)
+        if kind is None or kind == "signal":
             continue
-        t = e.get("$type")
-        if t == "wait for signal":
-            return False
-        if t == "signal":
-            continue
-        return True
+        return kind == "activity"
     return False
 
 
