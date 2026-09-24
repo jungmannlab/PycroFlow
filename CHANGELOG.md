@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Fluidics monitoring: clips now land **with the run** and carry their step.
+  The `monitoring.output_dir` is optional — when omitted, clips default to
+  `<experiment save_dir>/fluidics_cam/` (resolved at run start), so they sit
+  beside the run's other outputs; an explicit `output_dir:` still overrides.
+  Each clip's filename encodes the fluid run-sequence step the exchange started
+  on (`run_<id>_round<NNN>_step<SSS>_<UTC>.avi`), and that `protocol_step` is
+  written onto the `fluidics_round` registry row, so a clip maps to the exact
+  Run Sequence entry.
+- GUI **Webcams tab**: verify the monitoring cameras and set device indices
+  without leaving the app. A live low-fps tiled preview (emulator source for an
+  emulated setup, real webcams otherwise; auto-stopped while a run owns the
+  cameras) confirms the right camera is on the right index; per-camera device
+  spinboxes with Apply (in-session, rebuilds the controller for the next run)
+  and Save (writes the indices back to the setup YAML).
 - Fluidics monitoring webcams (WP-FLUIDICS-CAM, Phase 1): record one short
   movie per Exchange round of the fluid-exchange leg (the least-observable,
   most failure-prone part of a run — dry reservoir, mis-primed pump, bubble,

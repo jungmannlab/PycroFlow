@@ -173,6 +173,7 @@ class CaptureService:
         self._clip_round: Optional[int] = None
         self._clip_path: Optional[str] = None
         self._clip_name: Optional[str] = None
+        self._clip_step: Optional[int] = None
         self._last_frame = 0.0
         self._index = RegistryIndexWriter.from_env(
             run_id,
@@ -241,6 +242,7 @@ class CaptureService:
                 int(cmd.get("round_index", 0)),
                 cmd.get("unique_name"),
                 cmd.get("t_utc"),
+                cmd.get("protocol_step"),
             )
         elif kind == "round_end":
             self._close_clip()
@@ -255,14 +257,20 @@ class CaptureService:
         round_index: int,
         unique_name: Optional[str],
         t_utc: Optional[str],
+        protocol_step: Optional[int] = None,
     ) -> None:
         if self._writer is not None:
             # A begin without an intervening end (dropped end command): finalize
             # the current clip first so we never leak an open writer.
             self._close_clip()
         stamp = t_utc or _utc_stamp()
-        name = "run_{}_round{:03d}_{}.avi".format(
-            _sanitize(self.run_id), round_index, stamp
+        step_tag = (
+            ""
+            if protocol_step is None
+            else "_step{:03d}".format(protocol_step)
+        )
+        name = "run_{}_round{:03d}{}_{}.avi".format(
+            _sanitize(self.run_id), round_index, step_tag, stamp
         )
         path = os.path.join(self.config.output_dir, name)
         try:
@@ -283,6 +291,7 @@ class CaptureService:
             return
         self._clip_round = round_index
         self._clip_name = unique_name
+        self._clip_step = protocol_step
         self._clip_path = path
         self._last_frame = 0.0
         logger.info("monitoring: recording round {} -> {}", round_index, name)
@@ -308,6 +317,7 @@ class CaptureService:
         path, self._clip_path = self._clip_path, None
         rnd, self._clip_round = self._clip_round, None
         name, self._clip_name = self._clip_name, None
+        step, self._clip_step = self._clip_step, None
         try:
             writer.close()
         except Exception as exc:  # pragma: no cover
@@ -316,7 +326,7 @@ class CaptureService:
         logger.info("monitoring: finished round {} clip {}", rnd, path)
         if path is not None and rnd is not None:
             uri = Path(path).resolve().as_uri()
-            self._index.index(rnd, uri, round_name=name)
+            self._index.index(rnd, uri, round_name=name, protocol_step=step)
 
     def _shutdown(self) -> None:
         self._close_clip()

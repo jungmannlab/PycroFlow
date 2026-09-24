@@ -60,9 +60,12 @@ class MonitoringConfig:
     cameras : list of CameraConfig
         The cameras to record. Never empty for a live config (an empty list
         makes :func:`load_monitoring_config` return ``None`` instead).
-    output_dir : str
-        Pool/archive directory the per-round clips are written to. Bulk data
-        stays on the pool, never in git.
+    output_dir : str or None
+        Pool/archive directory the per-round clips are written to. ``None``
+        (the default when the setup omits it) means "resolve at run start to
+        ``<experiment save_dir>/fluidics_cam``" so clips travel with the run's
+        other outputs; the controller fills it in. An explicit value overrides
+        that. Bulk data stays on the pool, never in git.
     fps : int
         Tile frame rate written to each clip.
     codec : str
@@ -84,7 +87,7 @@ class MonitoringConfig:
     """
 
     cameras: list[CameraConfig]
-    output_dir: str
+    output_dir: Optional[str] = None
     fps: int = 5
     codec: str = "raw"
     retention_days: int = 14
@@ -127,9 +130,10 @@ class MonitoringConfig:
             )
             for i, c in enumerate(data.get("cameras", []))
         ]
+        out = data.get("output_dir")
         return cls(
             cameras=cams,
-            output_dir=str(data["output_dir"]),
+            output_dir=str(out) if out else None,
             fps=int(data.get("fps", 5)),
             codec=str(data.get("codec", "raw")),
             retention_days=int(data.get("retention_days", 14)),
@@ -153,13 +157,9 @@ def load_monitoring_config(setup: dict) -> Optional[MonitoringConfig]:
     MonitoringConfig or None
         ``None`` when there is no ``monitoring`` block, monitoring is disabled
         (``enabled: false``), or no cameras are declared -- in which case the
-        subsystem is inert. Otherwise the resolved config.
-
-    Raises
-    ------
-    ValueError
-        When a ``monitoring`` block is present with cameras but no
-        ``output_dir`` (there would be nowhere to write clips).
+        subsystem is inert. Otherwise the resolved config. ``output_dir`` may be
+    omitted -- clips then default to ``<experiment save_dir>/fluidics_cam`` at
+    run start (the controller resolves it).
     """
     block = (setup or {}).get("monitoring")
     if not block:
@@ -169,11 +169,4 @@ def load_monitoring_config(setup: dict) -> Optional[MonitoringConfig]:
     cams_raw = block.get("cameras") or []
     if not cams_raw:
         return None
-    output_dir = block.get("output_dir")
-    if not output_dir:
-        raise ValueError(
-            "monitoring: block has cameras but no 'output_dir' to write "
-            "clips to"
-        )
-    data = dict(block)
-    return MonitoringConfig.from_dict(data)
+    return MonitoringConfig.from_dict(dict(block))

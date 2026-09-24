@@ -179,11 +179,14 @@ class TestMonitoringConfig(unittest.TestCase):
             )
         )
 
-    def test_cameras_without_output_dir_raise(self):
-        with self.assertRaises(ValueError):
-            load_monitoring_config(
-                {"monitoring": {"cameras": [{"role": "pump"}]}}
-            )
+    def test_cameras_without_output_dir_defer_resolution(self):
+        # No output_dir is allowed now: the controller resolves it to
+        # <experiment save_dir>/fluidics_cam at run start.
+        cfg = load_monitoring_config(
+            {"monitoring": {"cameras": [{"role": "pump"}]}}
+        )
+        self.assertIsNotNone(cfg)
+        self.assertIsNone(cfg.output_dir)
 
     def test_parse_and_roundtrip(self):
         cfg = load_monitoring_config(
@@ -385,7 +388,12 @@ class TestRegistryIndex(unittest.TestCase):
     def test_index_writes_uri_and_reads_back(self):
         fake = _FakeRegistryClient()
         w = RegistryIndexWriter("RUN42", fake)
-        rec = w.index(2, "file:///pool/run42_round002.avi", round_name="img-2")
+        rec = w.index(
+            2,
+            "file:///pool/run42_round002.avi",
+            round_name="img-2",
+            protocol_step=37,
+        )
         self.assertIsNotNone(rec)
         stored = fake.rows[rec["id"]]
         self.assertEqual(stored["_resource"], "fluidics_round")
@@ -395,6 +403,7 @@ class TestRegistryIndex(unittest.TestCase):
             stored["monitoring_video_uri"],
             "file:///pool/run42_round002.avi",
         )
+        self.assertEqual(stored["protocol_step"], 37)
 
     def test_disabled_writer_is_noop(self):
         w = RegistryIndexWriter("RUN", None)
@@ -479,6 +488,36 @@ class TestControllerRoundBinding(unittest.TestCase):
         proto = _build_proto(_small_config(n_imagers=2, initial=None))
         svc = _emulated_service(proto)
         self.assertIsNone(attach_monitoring(svc, {"emulated": True}))
+
+
+class TestOutputDirResolution(unittest.TestCase):
+    def _controller(self, output_dir, design):
+        import types
+
+        svc = types.SimpleNamespace(experiment_design=design)
+        cfg = MonitoringConfig(
+            cameras=[CameraConfig("pump", 0)], output_dir=output_dir
+        )
+        return MonitoringController(svc, cfg, mode="emulator")
+
+    def test_defaults_under_experiment_save_dir(self):
+        ctrl = self._controller(None, {"save_dir": "/data/run7"})
+        self.assertEqual(
+            ctrl._resolve_output_dir(),
+            os.path.join("/data/run7", "fluidics_cam"),
+        )
+
+    def test_explicit_output_dir_overrides(self):
+        ctrl = self._controller("/pool/cam", {"save_dir": "/data/run7"})
+        self.assertEqual(ctrl._resolve_output_dir(), "/pool/cam")
+
+    def test_no_design_falls_back_to_cwd(self):
+        ctrl = self._controller(None, None)
+        self.assertTrue(
+            ctrl._resolve_output_dir().endswith(
+                os.path.join("", "fluidics_cam")
+            )
+        )
 
 
 # --------------------------------------------------------------------------

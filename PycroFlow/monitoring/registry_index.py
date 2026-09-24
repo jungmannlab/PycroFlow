@@ -106,6 +106,7 @@ class RegistryIndexWriter:
         uri: str,
         *,
         round_name: Optional[str] = None,
+        protocol_step: Optional[int] = None,
     ) -> Optional[dict]:
         """Post one clip URI onto its ``fluidics_round``. Never raises.
 
@@ -121,6 +122,8 @@ class RegistryIndexWriter:
         }
         if round_name is not None:
             fields["round_name"] = round_name  # unknown key -> extra JSON
+        if protocol_step is not None:
+            fields["protocol_step"] = protocol_step  # unknown key -> extra
         try:
             return self._client.create(RESOURCE, **fields)
         except Exception as exc:  # best-effort: a bad registry never blocks

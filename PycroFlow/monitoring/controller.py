@@ -179,6 +179,7 @@ class MonitoringController:
                 datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
                 uuid.uuid4().hex[:6],
             )
+        self._resolved_output_dir = self._resolve_output_dir()
         try:
             self._spawn()
         except Exception as exc:  # a spawn failure must not stop the run
@@ -206,11 +207,23 @@ class MonitoringController:
             self.run_id,
         )
 
+    def _resolve_output_dir(self) -> str:
+        """Where clips land: the setup's ``output_dir`` if set, else
+        ``<experiment save_dir>/fluidics_cam`` so clips travel with the run's
+        outputs (the design load has already chdir'd there)."""
+        if self._config.output_dir:
+            return self._config.output_dir
+        design = getattr(self._svc, "experiment_design", None) or {}
+        base = os.path.abspath(design.get("save_dir") or ".")
+        return os.path.join(base, "fluidics_cam")
+
     def _spawn(self) -> None:
         self._control_dir = tempfile.mkdtemp(prefix="pycroflow-cam-")
         cfg_path = os.path.join(self._control_dir, "cameras.json")
+        cfg = self._config.to_dict()
+        cfg["output_dir"] = self._resolved_output_dir
         with open(cfg_path, "w") as f:
-            json.dump(self._config.to_dict(), f)
+            json.dump(cfg, f)
         cmd = [
             self._python,
             "-m",
@@ -269,9 +282,22 @@ class MonitoringController:
                 "cmd": "round_begin",
                 "round_index": self._round,
                 "unique_name": None,
+                "protocol_step": self._current_fluid_step(),
                 "t_utc": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
             }
         )
+
+    def _current_fluid_step(self) -> Optional[int]:
+        """The fluid handler's current run-sequence step, so the clip can be
+        tied to the exact Run Sequence entry the exchange started on. ``None``
+        if unavailable (never raises on the hot path)."""
+        try:
+            orch = getattr(self._svc, "orchestrator", None)
+            handler = getattr(orch, "fluid_handler", None)
+            getter = getattr(handler, "get_current_protocol_iter", None)
+            return getter() if getter is not None else None
+        except Exception:  # pragma: no cover - defensive
+            return None
 
     def _close(self) -> None:
         self._active = False

@@ -104,6 +104,15 @@ def list_setups():
     return sorted(p.stem for p in _SETUP_DIR.glob("*.yaml"))
 
 
+def setup_path(name):
+    """Return the on-disk path to a setup's YAML file.
+
+    ``name`` is a setup basename in ``configs/setups`` or a path. Used by the
+    GUI to write edited values (e.g. camera device indices) back to the file.
+    """
+    return str(_resolve(name, ".yaml", base=_SETUP_DIR))
+
+
 def load_setup(name):
     """Load a per-microscope setup (hardware) config.
 

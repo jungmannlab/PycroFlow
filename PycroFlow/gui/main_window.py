@@ -38,6 +38,7 @@ from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
 from PycroFlow.gui.tabs.fluid_tab import FluidTab
 from PycroFlow.gui.tabs.imaging_tab import ImagingTab
 from PycroFlow.gui.tabs.monet_tab import MonetTab
+from PycroFlow.gui.tabs.webcams_tab import WebcamsTab
 
 # Experiment states during which hardware must not be touched manually (the
 # orchestrator owns the instruments).
@@ -113,12 +114,16 @@ class PycroFlowMainWindow(QMainWindow):
             self._system_service,
             on_connect=lambda: self._connect_system("imaging"),
         )
+        self.webcams_tab = WebcamsTab(
+            self._system_service, on_config_changed=self._attach_monitoring
+        )
         self.monet_tab = MonetTab()
 
         self.tabs.addTab(self.design_tab, "Experiment Design")
         self.tabs.addTab(self.run_sequence_tab, "Run Sequence")
         self.tabs.addTab(self.fluid_tab, "Fluid")
         self.tabs.addTab(self.imaging_tab, "Imaging")
+        self.tabs.addTab(self.webcams_tab, "Webcams")
         self.tabs.addTab(self.monet_tab, "Monet")
         self.setCentralWidget(self.tabs)
 
@@ -160,6 +165,7 @@ class PycroFlowMainWindow(QMainWindow):
         # dropdown options; refresh them for the setup just loaded.
         self.design_tab.refresh_setup_options()
         self._attach_monitoring()
+        self.webcams_tab.refresh()
         self._refresh_status()
         # If a design is already loaded, connect for the new setup.
         if self._experiment_service.experiment_design:
@@ -181,6 +187,7 @@ class PycroFlowMainWindow(QMainWindow):
         self.act_disconnect.setEnabled(not locked)
         self.fluid_tab.set_run_lock(locked)
         self.imaging_tab.set_run_lock(locked)
+        self.webcams_tab.set_run_lock(locked)
         self.monet_tab.set_run_lock(locked)
         if not locked:
             # Restore real connection statuses after the run lock lifts.
@@ -404,6 +411,7 @@ class PycroFlowMainWindow(QMainWindow):
         if self._monitoring is not None:
             self._monitoring.detach()
             self._monitoring = None
+        self.webcams_tab.stop_preview()
         self.monet_tab.shutdown()
         try:
             self._system_service.close()

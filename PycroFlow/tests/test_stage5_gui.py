@@ -19,6 +19,8 @@ import sys
 import types
 import unittest
 
+from PycroFlow import configs
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
@@ -116,10 +118,17 @@ class TestMainWindow(unittest.TestCase):
 
     def test_builds_tabs(self):
         w = self._build()
-        self.assertEqual(w.tabs.count(), 5)
+        self.assertEqual(w.tabs.count(), 6)
         self.assertEqual(
-            [w.tabs.tabText(i) for i in range(5)],
-            ["Experiment Design", "Run Sequence", "Fluid", "Imaging", "Monet"],
+            [w.tabs.tabText(i) for i in range(6)],
+            [
+                "Experiment Design",
+                "Run Sequence",
+                "Fluid",
+                "Imaging",
+                "Webcams",
+                "Monet",
+            ],
         )
 
     def test_window_title_has_version(self):
@@ -2317,6 +2326,91 @@ class TestFluidTabSchematic(unittest.TestCase):
         tab.set_run_lock(True)
         tab.schematic.channel_clicked.emit(7)
         self.assertTrue(mux.channel_states[6])  # unchanged
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestWebcamsTab(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _tab(self, setup_name="EmulatorCam"):
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.tabs.webcams_tab import WebcamsTab
+
+        svc = SystemService()
+        svc.load_setup(setup_name)
+        self._changed = 0
+
+        def on_changed():
+            self._changed += 1
+
+        return WebcamsTab(svc, on_config_changed=on_changed), svc
+
+    def test_rows_apply_and_placeholder(self):
+        tab, svc = self._tab()
+        self.assertEqual(len(tab._spins), 3)  # EmulatorCam has 3 cameras
+        tab._spins[1].setValue(5)
+        tab._apply()
+        self.assertEqual(svc.setup["monitoring"]["cameras"][1]["device"], 5)
+        self.assertGreaterEqual(self._changed, 1)
+        # A setup with no cameras -> placeholder, no rows.
+        svc.load_setup("Emulator")
+        tab.refresh()
+        self.assertEqual(len(tab._spins), 0)
+
+    def test_emulated_preview_yields_a_frame(self):
+        import time
+
+        tab, _ = self._tab()
+        received = []
+        tab.start_preview()
+        tab._worker.frame_ready.connect(lambda img: received.append(img))
+        t0 = time.time()
+        while not received and time.time() - t0 < 5:
+            self.app.processEvents()
+            time.sleep(0.02)
+        tab.stop_preview()
+        self.assertTrue(received, "no preview frame from the emulator source")
+        self.assertGreater(received[0].width(), 0)
+
+    def test_run_lock_disables_and_stops(self):
+        tab, _ = self._tab()
+        tab.start_preview()
+        tab.set_run_lock(True)
+        self.assertIsNone(tab._worker)  # preview stopped
+        self.assertFalse(tab.apply_btn.isEnabled())
+        self.assertFalse(tab._spins[0].isEnabled())
+
+    def test_save_writes_devices_to_yaml(self):
+        import shutil
+        import tempfile
+        import unittest.mock as mock
+
+        import yaml as _yaml
+        from PyQt6.QtWidgets import QMessageBox
+
+        tab, svc = self._tab()
+        tab._spins[0].setValue(4)
+        # Copy the shipped setup so we never overwrite the real file.
+        src = configs.setup_path("EmulatorCam")
+        tmp = os.path.join(tempfile.mkdtemp(), "EmulatorCam.yaml")
+        shutil.copy(src, tmp)
+        with (
+            mock.patch.object(configs, "setup_path", return_value=tmp),
+            mock.patch.object(
+                QMessageBox,
+                "question",
+                return_value=QMessageBox.StandardButton.Yes,
+            ),
+        ):
+            tab._save()
+        with open(tmp) as f:
+            written = _yaml.safe_load(f)
+        self.assertEqual(written["monitoring"]["cameras"][0]["device"], 4)
 
 
 if __name__ == "__main__":
