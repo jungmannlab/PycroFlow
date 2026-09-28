@@ -66,8 +66,12 @@ class Finding:
     source: Optional[str] = None
 
     def __post_init__(self) -> None:
+        # Fail LOUD, not silent: an unrecognised severity (e.g. a future
+        # qc_advisor tier like "critical"/"fatal") must NOT degrade to "info" —
+        # that would rank a critical finding LEAST severe and stop it lighting
+        # the sidebar. Unknown -> "error" so it surfaces, not hides.
         if self.severity not in _SEVERITY_RANK:
-            self.severity = "info"
+            self.severity = "error"
 
 
 @runtime_checkable

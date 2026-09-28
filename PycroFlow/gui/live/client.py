@@ -74,6 +74,10 @@ class LiveClientBridge(QObject):
         self._service = service
         self._hub = getattr(service, "hub", None)
         self.seam_client = CallbackClient(self._on_update)
+        # NOTE: WP-4's UpdateHub.add/remove is UNLOCKED. Safe today because
+        # every add/remove/push runs in one process under the GIL; if the
+        # transport ever goes off-process (the future remote-client WO), the
+        # hub's client list needs a lock.
         if self._hub is not None:
             self._hub.add(self.seam_client)
 

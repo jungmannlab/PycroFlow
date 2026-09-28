@@ -90,11 +90,17 @@ class LiveShell(QWidget):
         self._consumers: list = []
         self._run_id: Optional[str] = None
 
-        # Ensure the operator module is available as a contributor.
-        register_contributor(OperatorContributor())
-        self._contributors = (
-            contributors if contributors is not None else iter_contributors()
-        )
+        # Contributor resolution — NO global side effect when explicit.
+        #   explicit contributors= -> use exactly those, leave the global
+        #     registry untouched (so two shells can show different module
+        #     sets in one process, and one shell never pollutes another);
+        #   contributors=None -> fall back to the process-global registry,
+        #     ensuring the default operator module is present in it.
+        if contributors is not None:
+            self._contributors = list(contributors)
+        else:
+            register_contributor(OperatorContributor())
+            self._contributors = iter_contributors()
 
         self._build_ui()
         self._bridge.update.connect(self._dispatch)

@@ -160,6 +160,34 @@ class TestAdvisorAdapter(unittest.TestCase):
         self.assertEqual(w.severity, "warning")
         self.assertEqual(w.suggestion, "lower power")
 
+    def test_unknown_severity_fails_loud_not_silent(self):
+        # An unrecognised tier (e.g. a future qc_advisor "critical"/"fatal")
+        # must escalate to "error", NOT degrade to "info" — otherwise a
+        # critical finding would rank least severe and never light the sidebar.
+        from PycroFlow.gui.live.advisor import (
+            FindingsAdapter,
+            worst_severity,
+        )
+
+        f = FindingsAdapter.coerce(
+            {"severity": "critical", "message": "meltdown"}
+        )
+        self.assertEqual(f.severity, "error")
+        g = FindingsAdapter.coerce({"severity": "fatal", "message": "x"})
+        self.assertEqual(g.severity, "error")
+        # And it dominates the sidebar light over a mere warning.
+        self.assertEqual(
+            worst_severity(
+                [
+                    FindingsAdapter.coerce(
+                        {"severity": "warn", "message": "w"}
+                    ),
+                    f,
+                ]
+            ),
+            "error",
+        )
+
     def test_wrap_real_advisor_coerces_output(self):
         from PycroFlow.gui.live.advisor import Finding, FindingsAdapter
 
@@ -232,7 +260,10 @@ class TestShellMockStream(_QtTestCase):
         self.assertEqual(
             self.shell.sidebar._value_labels["nena_nm"].text(), "6.5"
         )
-        self.assertIn("100", self.shell.frame_label.text())
+        # Exact rendered text (the loose "100" substring hid formatting bugs).
+        self.assertEqual(
+            self.shell.frame_label.text(), "frames: 100  ·  locs: 500"
+        )
         self.assertEqual(self.shell.status_label.text(), "state: fov_started")
 
     def test_early_abort_control_call(self):
@@ -247,11 +278,30 @@ class TestShellMockStream(_QtTestCase):
         self.assertIn("nm/px", self.shell.overview.scale_bar.text())
 
     def test_advisor_light_reflects_findings(self):
-        # A bad NeNA -> the mock advisor emits an error -> the light isn't green.
+        # A bad NeNA -> the mock advisor emits an error -> the light goes RED
+        # (the actual severity signal, not just the text).
+        from PycroFlow.gui.live.advisor import SEVERITY_COLOR
+
         self.svc.hub.push_kind(
             "metrics", "run1", metrics={"nena_nm": 25.0}, backend={}
         )
         self.assertIn("NeNA", self.shell.sidebar.advisor_text.text())
+        self.assertIn(
+            SEVERITY_COLOR["error"],
+            self.shell.sidebar.advisor_light.styleSheet(),
+        )
+
+    def test_advisor_light_green_when_clear(self):
+        from PycroFlow.gui.live.advisor import SEVERITY_COLOR
+
+        self.svc.hub.push_kind(
+            "metrics", "run1", metrics={"nena_nm": 3.0}, backend={}
+        )
+        self.assertEqual(self.shell.sidebar.advisor_text.text(), "all clear")
+        self.assertIn(
+            SEVERITY_COLOR["ok"],
+            self.shell.sidebar.advisor_light.styleSheet(),
+        )
 
     def test_abort_disabled_when_idle(self):
         self.svc.hub.push_kind("state", "run1", state="fov_done")
@@ -265,14 +315,19 @@ class TestMultiClient(_QtTestCase):
         s1 = self._make_shell(service=svc)
         s2 = self._make_shell(service=svc)
 
+        # Both bridges are registered with the one hub.
+        self.assertEqual(len(svc.hub._clients), 2)
+
         svc.hub.push_kind(
             "metrics", "r", metrics={"nena_nm": 10.0}, backend={}
         )
         self.assertEqual(s1.sidebar._value_labels["nena_nm"].text(), "10")
         self.assertEqual(s2.sidebar._value_labels["nena_nm"].text(), "10")
 
-        # Detaching s2 must not affect s1 (per-shell subscription).
+        # Detaching s2 must not affect s1 (per-shell subscription) and must
+        # release s2's slot back to baseline (no leak).
         s2.close_client()
+        self.assertEqual(len(svc.hub._clients), 1)
         svc.hub.push_kind("metrics", "r", metrics={"nena_nm": 4.0}, backend={})
         self.assertEqual(s1.sidebar._value_labels["nena_nm"].text(), "4")
         self.assertEqual(s2.sidebar._value_labels["nena_nm"].text(), "10")
@@ -311,6 +366,168 @@ class TestCustomContributor(_QtTestCase):
         self.assertEqual(
             titles, ["Setup", "Live QC", "Analysis", "Assistant", "Dashboard"]
         )
+
+    def _titles(self, shell):
+        return [
+            shell.tab_groups.tabText(i)
+            for i in range(shell.tab_groups.count())
+        ]
+
+    def test_explicit_contributors_are_isolated(self):
+        # Two shells with DIFFERENT explicit contributor sets in one process
+        # must show different tab groups (no shared global state), and an
+        # explicit-contributors shell must NOT register into the global
+        # registry (so a later default shell isn't polluted by it).
+        from PycroFlow.gui.live.contribution import (
+            PanelSpec,
+            clear_contributors,
+            iter_contributors,
+        )
+        from PycroFlow.gui.live.operator import OperatorContributor
+        from PyQt6.QtWidgets import QLabel
+
+        clear_contributors()
+        self.addCleanup(clear_contributors)
+
+        class Dash:
+            module_id = "dashboard"
+
+            def panels(self):
+                return [
+                    PanelSpec(
+                        "fleet",
+                        "Fleet",
+                        "Dashboard",
+                        lambda ctx: QLabel("fleet"),
+                        0,
+                    )
+                ]
+
+        s_full = self._make_shell(
+            service=FakeService(),
+            contributors=[OperatorContributor(), Dash()],
+        )
+        s_op = self._make_shell(
+            service=FakeService(), contributors=[OperatorContributor()]
+        )
+
+        self.assertIn("Dashboard", self._titles(s_full))
+        self.assertNotIn("Dashboard", self._titles(s_op))
+        # Neither explicit shell polluted the process-global registry.
+        self.assertEqual(iter_contributors(), [])
+
+        # A default (contributors=None) shell falls back to the global registry
+        # (with the operator module ensured) and is unpolluted by the above.
+        s_default = self._make_shell(service=FakeService())
+        self.assertEqual(
+            self._titles(s_default),
+            ["Setup", "Live QC", "Analysis", "Assistant"],
+        )
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestOperatorPanels(_QtTestCase):
+    def _mk(self, cls, *args):
+        # Keep a reference for the class lifetime so the widget isn't GC'd
+        # mid-run (aborts under offscreen Qt). tearDownClass's close_client()
+        # call is wrapped in try/except, so a plain widget is fine here.
+        w = cls(*args)
+        self._alive.append(w)
+        return w
+
+    def test_live_signal_panel_renders_and_guards_zero_queue(self):
+        from PycroFlow.gui.live.client import LiveUpdate
+        from PycroFlow.gui.live.operator import LiveSignalPanel
+
+        p = self._mk(LiveSignalPanel)
+        # queue_size 0 must not ZeroDivisionError (the guard).
+        p.on_update(
+            LiveUpdate(
+                "metrics",
+                "r",
+                {
+                    "metrics": {
+                        "nena_nm": 5.0,
+                        "spots_per_frame": 0.02,
+                        "background": 88.0,
+                        "n_locs": 300,
+                        "n_frames": 120,
+                    },
+                    "backend": {"queue_depth": 0, "queue_size": 0},
+                },
+            )
+        )
+        self.assertIn("5.0", p.nena.text())
+        self.assertEqual(p.lag_bar.value(), 0)
+        # A non-empty queue fills the bar.
+        p.on_update(
+            LiveUpdate(
+                "metrics",
+                "r",
+                {
+                    "metrics": {"nena_nm": 5.0},
+                    "backend": {"queue_depth": 4, "queue_size": 8},
+                },
+            )
+        )
+        self.assertEqual(p.lag_bar.value(), 50)
+
+    def test_log_panel_appends_lines(self):
+        from PycroFlow.gui.live.client import LiveUpdate
+        from PycroFlow.gui.live.operator import LogPanel
+
+        p = self._mk(LogPanel)
+        p.on_update(LiveUpdate("log", "r", {"message": "hello"}))
+        p.on_update(LiveUpdate("state", "r", {"state": "fov_done"}))
+        p.on_update(LiveUpdate("record", "r", {"posted": True}))
+        text = p.view.toPlainText()
+        self.assertIn("hello", text)
+        self.assertIn("fov_done", text)
+        self.assertIn("record posted: True", text)
+
+    def test_advisor_panel_lists_findings(self):
+        from PycroFlow.gui.live.advisor import MockAdvisor
+        from PycroFlow.gui.live.client import LiveUpdate
+        from PycroFlow.gui.live.operator import AdvisorPanel
+
+        p = self._mk(AdvisorPanel, MockAdvisor())
+        p.on_update(LiveUpdate("metrics", "r", {"metrics": {"nena_nm": 25.0}}))
+        self.assertIn("NeNA", p.list.toPlainText())
+        # Clear metrics -> "all clear".
+        p.on_update(LiveUpdate("metrics", "r", {"metrics": {"nena_nm": 3.0}}))
+        self.assertEqual(p.list.toPlainText(), "all clear")
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestCrossThreadMarshalling(_QtTestCase):
+    def test_update_from_worker_thread_is_queued_not_synchronous(self):
+        # The bridge's whole purpose: an update pushed from a NON-GUI thread
+        # must be QUEUED onto the GUI event loop, not applied synchronously off
+        # the GUI thread. So the widget stays unchanged until processEvents().
+        import threading
+
+        svc = FakeService()
+        shell = self._make_shell(service=svc)
+        label = shell.sidebar._value_labels["nena_nm"]
+        self.assertEqual(label.text(), "—")
+
+        done = threading.Event()
+
+        def worker():
+            svc.hub.push_kind(
+                "metrics", "r", metrics={"nena_nm": 7.0}, backend={}
+            )
+            done.set()
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+        self.assertTrue(done.wait(2.0))
+        # Queued, not applied: still the placeholder before we pump events.
+        self.assertEqual(label.text(), "—")
+        # Pump the GUI event loop -> the queued signal is delivered.
+        self.app.processEvents()
+        self.assertEqual(label.text(), "7")
 
 
 if __name__ == "__main__":
