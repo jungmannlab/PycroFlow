@@ -112,7 +112,10 @@ class TestEmulatorEndToEnd(unittest.TestCase):
 
 class TestIndividualChecks(unittest.TestCase):
     def test_laser_interlock_all_three_paths_safe(self):
-        chk = g2.check_laser_interlock(_emulator_args())
+        # check_laser_interlock now takes the shared illumination instance
+        # (a single instance per run — a 2nd would double-open the laser COM
+        # ports on real hardware); in emulator mode that's a FakeIllumination.
+        chk = g2.check_laser_interlock(_emulator_args(), g2.FakeIllumination())
         self.assertTrue(chk.passed)
         self.assertEqual(
             set(chk.values["paths"]),

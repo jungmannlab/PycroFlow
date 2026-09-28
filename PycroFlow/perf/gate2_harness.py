@@ -933,7 +933,7 @@ def _interlock_safe(illu: FakeIllumination) -> bool:
     return illu.lasers_all_off and not illu.shutter_open
 
 
-def check_laser_interlock(args) -> Check:
+def check_laser_interlock(args, illu) -> Check:
     """Criterion 5 (SAFETY-CRITICAL) — the T3 interlock on ALL THREE exits.
 
     Forces (a) normal end, (b) early-abort, and (c) an injected mid-run
@@ -943,10 +943,13 @@ def check_laser_interlock(args) -> Check:
     over the real :class:`LaserInterlock` + :class:`LiveAnalysisService`
     ``finally`` path. On the acq PC (instrument mode) the same paths run against
     the real monet illumination system.
+
+    Reuses the SINGLE illumination instance built for the run (do NOT construct a
+    second one): on real hardware each `IlluminationSystem` opens the laser COM
+    ports, so a second instance collides with the first's still-open handles
+    ("PermissionError: Access is denied" on COM7).
     """
     paths: dict = {}
-
-    illu = _make_illumination(args)
 
     def _reset(i):
         if isinstance(i, FakeIllumination):
@@ -1289,7 +1292,7 @@ def run_gate2(args) -> dict:
     runner.run(
         "laser_interlock",
         "5: T3 laser interlock — all three exit paths (safety)",
-        lambda: check_laser_interlock(args),
+        lambda: check_laser_interlock(args, illu),  # reuse the single instance
     )
     # Criterion 6 (instrument-only; skipped-pass in emulator).
     runner.run(
