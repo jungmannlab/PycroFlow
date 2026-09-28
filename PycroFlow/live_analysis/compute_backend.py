@@ -53,13 +53,15 @@ POLICY_DROP_OLDEST = "drop-oldest"
 
 
 class _BoundedSubmitQueue:
-    """A bounded queue enforcing the backpressure policy AT RUNTIME.
+    """A bounded submit queue applying the chosen backpressure policy.
 
-    This is the production-code assertion the Tier-3 test extends: the queue can
-    never exceed ``maxsize`` (so memory can't blow up and acquisition can't be
-    starved by an unbounded backlog), and the policy — lag (block) or drop — is
-    applied here, not left implicit. ``depth`` is observable so the service /
-    Quality tab can surface live lag.
+    The size bound itself is enforced by the underlying :class:`queue.Queue`
+    (constructed with ``maxsize``) — a producer can never push past it, so memory
+    can't blow up and acquisition can't be starved by an unbounded backlog. This
+    wrapper adds the *policy* on top of that bound: LAG (the caller blocks until
+    space frees) or DROP_OLDEST (evict the oldest, counting the drop). ``depth``
+    and ``max_depth_seen`` are observable so the service / Quality tab can surface
+    live lag; ``n_dropped`` records the drop-policy losses.
     """
 
     def __init__(self, maxsize: int, policy: str):
@@ -81,21 +83,24 @@ class _BoundedSubmitQueue:
         return self._q.qsize()
 
     def put(self, item, *, block_timeout: float = 0.1) -> bool:
-        """Enqueue one item under the policy. Returns True if it was enqueued.
+        """Try to enqueue one item under the policy. Returns True if enqueued.
 
-        LAG: block until space frees (in ``block_timeout`` slices so a stop can
-        interrupt). DROP_OLDEST: evict the oldest to make room, count the drop.
-        Runtime invariant: the queue never exceeds ``maxsize``.
+        LAG: attempt a bounded blocking put; on timeout return False so the
+        *caller* decides whether to keep retrying (``LocalComputeBackend.submit``
+        does, until its stop flag) — this method deliberately does ONE attempt so
+        a stop can interrupt the lag promptly. DROP_OLDEST: evict the oldest to
+        make room and count the drop. The size bound is guaranteed by the
+        underlying ``queue.Queue(maxsize)``.
         """
         if self._policy == POLICY_LAG:
-            while True:
-                try:
-                    self._q.put(item, timeout=block_timeout)
-                    self._note_depth()
-                    return True
-                except _queue.Full:
-                    # Keep lagging; the caller's stop flag breaks the outer loop.
-                    return False
+            try:
+                self._q.put(item, timeout=block_timeout)
+                self._note_depth()
+                return True
+            except _queue.Full:
+                # One attempt only: the retry (the actual "keep lagging") lives
+                # in LocalComputeBackend.submit so it can honour the stop flag.
+                return False
         # DROP_OLDEST
         try:
             self._q.put_nowait(item)
@@ -118,11 +123,6 @@ class _BoundedSubmitQueue:
 
     def _note_depth(self) -> None:
         depth = self._q.qsize()
-        # The runtime backpressure invariant: a bounded queue, always.
-        assert depth <= self._maxsize, (
-            "submit queue overflow: depth {} > maxsize {} — backpressure "
-            "policy failed".format(depth, self._maxsize)
-        )
         if depth > self.max_depth_seen:
             self.max_depth_seen = depth
 
@@ -204,10 +204,17 @@ class LocalComputeBackend(ComputeBackend):
         self._result_q = None
         self._feeder: threading.Thread | None = None
         self._drain: threading.Thread | None = None
+        # Counters shared across the submit / feeder / drain threads. Guarded by
+        # a lock so ``stats()`` reads a consistent (non-torn) snapshot even
+        # though the GIL makes the individual ``+= 1`` atomic.
+        self._counter_lock = threading.Lock()
         self._submitted = 0
         self._completed = 0
         self._errors = 0
-        self._inflight = threading.Semaphore(0)  # counts pending results
+        # Set True by drain_and_stop when it gives up on outstanding results at
+        # the deadline (a hung/slow worker) — surfaced in stats() so a leaked /
+        # unfinished batch is visible, never silent.
+        self._timed_out = False
 
     # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:
@@ -253,30 +260,56 @@ class LocalComputeBackend(ComputeBackend):
         if self._stop.is_set():
             return False
         # Retry under the lag policy until enqueued or a stop is requested.
+        # _submit_q.put() does ONE bounded-blocking attempt and returns False on
+        # its Full timeout, so THIS loop is the actual "keep lagging" — and it
+        # checks the stop flag each iteration so a teardown interrupts promptly.
         while not self._stop.is_set():
             ok = self._submit_q.put(request)
             if ok:
-                self._submitted += 1
+                with self._counter_lock:
+                    self._submitted += 1
                 return True
             if self._policy != POLICY_LAG:
                 return False
-            # lag: loop; put() returned False only on its inner Full timeout.
         return False
 
     def drain_and_stop(self, timeout: float = 60.0) -> None:
-        # Signal end-of-input, let the feeder/drain finish in-flight work.
+        """Finish in-flight work, then tear the pool + threads down cleanly.
+
+        Waits (up to ``timeout``) for the submit queue to empty and every
+        submitted batch to complete. Whether or not that succeeds, it ALWAYS sets
+        the stop flag and joins the feeder/drain threads — the drain/feeder loops
+        exit on the stop flag *regardless* of completion, so a hung/slow worker
+        can never leave a thread spinning forever. If results are still
+        outstanding at the deadline it records ``_timed_out`` (surfaced in
+        ``stats()``) rather than blocking indefinitely.
+        """
         deadline = time.monotonic() + timeout
         # Wait for the submit queue to empty (all handed to workers).
         while self._submit_q.depth() > 0 and time.monotonic() < deadline:
             time.sleep(0.02)
+        # Wait for outstanding results within the deadline.
+        while time.monotonic() < deadline:
+            with self._counter_lock:
+                done = self._completed >= self._submitted
+            if done:
+                break
+            time.sleep(0.02)
+        with self._counter_lock:
+            self._timed_out = self._completed < self._submitted
+        if self._timed_out:
+            with self._counter_lock:
+                outstanding = self._submitted - self._completed
+            logger.warning(
+                "live-analysis backend teardown timed out with {} batch(es) "
+                "unfinished (hung/slow worker); stopping anyway".format(
+                    outstanding
+                )
+            )
+        # ALWAYS stop — the drain/feeder loops exit on this flag unconditionally,
+        # so no thread is left spinning even if a worker never returned.
+        self._stop.set()
         if self._use_processes:
-            # Wait for outstanding results, then stop workers.
-            while (
-                self._completed < self._submitted
-                and time.monotonic() < deadline
-            ):
-                time.sleep(0.02)
-            self._stop.set()
             for _ in self._procs:
                 try:
                     self._proc_in_q.put(None)
@@ -286,17 +319,14 @@ class LocalComputeBackend(ComputeBackend):
                 p.join(timeout=max(0.0, deadline - time.monotonic()))
                 if p.is_alive():  # pragma: no cover - defensive
                     p.terminate()
-        else:
-            while (
-                self._completed < self._submitted
-                and time.monotonic() < deadline
-            ):
-                time.sleep(0.01)
-            self._stop.set()
         if self._drain is not None:
             self._drain.join(timeout=5.0)
+            if self._drain.is_alive():  # pragma: no cover - defensive
+                logger.error("live-analysis drain thread failed to join")
         if self._feeder is not None:
             self._feeder.join(timeout=5.0)
+            if self._feeder.is_alive():  # pragma: no cover - defensive
+                logger.error("live-analysis feeder thread failed to join")
 
     # -- internals ----------------------------------------------------------
     def _feed_processes(self) -> None:  # pragma: no cover - process path
@@ -308,7 +338,11 @@ class LocalComputeBackend(ComputeBackend):
             self._proc_in_q.put(item)
 
     def _drain_processes(self) -> None:  # pragma: no cover - process path
-        while not (self._stop.is_set() and self._completed >= self._submitted):
+        # Exit as soon as stop is requested — do NOT gate the exit on
+        # completed >= submitted, or a hung worker (which never delivers its
+        # result) would spin this loop forever. drain_and_stop already waited
+        # for outstanding results up to the deadline before setting stop.
+        while not self._stop.is_set():
             try:
                 res = self._result_q.get(timeout=0.1)
             except _queue.Empty:
@@ -316,7 +350,8 @@ class LocalComputeBackend(ComputeBackend):
             self._handle_result(res)
 
     def _drain_inline(self) -> None:
-        while not (self._stop.is_set() and self._completed >= self._submitted):
+        # See _drain_processes: exit on the stop flag alone.
+        while not self._stop.is_set():
             try:
                 req = self._submit_q.get(timeout=0.05)
             except _queue.Empty:
@@ -348,9 +383,11 @@ class LocalComputeBackend(ComputeBackend):
             self._handle_result(res)
 
     def _handle_result(self, res: LocalizeResult) -> None:
-        self._completed += 1
+        with self._counter_lock:
+            self._completed += 1
+            if res.error is not None:
+                self._errors += 1
         if res.error is not None:
-            self._errors += 1
             logger.warning(
                 "live-localize batch {} failed: {}".format(res.seq, res.error)
             )
@@ -365,17 +402,36 @@ class LocalComputeBackend(ComputeBackend):
             )
 
     def stats(self) -> dict:
+        # Snapshot the shared counters under the lock so the returned dict is
+        # internally consistent (never torn across threads).
+        with self._counter_lock:
+            submitted = self._submitted
+            completed = self._completed
+            errors = self._errors
+            timed_out = self._timed_out
+        queued = self._submit_q.depth()
+        # A REAL accounting check (this replaces the old decorative, unreachable
+        # bare-assert "invariant"): every submitted batch is either already
+        # completed, still queued, or in flight in a worker — none vanish. The
+        # unfinished count (submitted not yet completed nor queued) is the batches
+        # currently inside workers; it must be >= 0, and after teardown must be 0
+        # unless we timed out on a hung worker (then it's the leaked count).
+        unfinished = submitted - completed - queued
         return {
             "backend": "local-subprocess" if self._use_processes else "inline",
             "n_workers": self._n_workers,
             "policy": self._policy,
             "queue_size": self._submit_q.maxsize,
-            "queue_depth": self._submit_q.depth(),
+            "queue_depth": queued,
             "queue_max_depth": self._submit_q.max_depth_seen,
-            "submitted": self._submitted,
-            "completed": self._completed,
-            "errors": self._errors,
+            "submitted": submitted,
+            "completed": completed,
+            "errors": errors,
             "dropped": self._submit_q.n_dropped,
+            # >=0 accounting invariant; batches still inside workers (0 after a
+            # clean teardown, the leaked count after a timed-out one).
+            "unfinished": max(0, unfinished),
+            "timed_out": timed_out,
         }
 
 

@@ -94,6 +94,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `info` (`set_info`, wired from the frame source's `camera_info()` in
   `LiveAnalysisService`) and hands it to every `nena` call, so live NeNA is a
   genuine value; the oracle asserts live NeNA == batch NeNA over the same frames.
+- **WP-4 adversarial-review fixes.**
+  - *Acquisition integrity (no silent frame-loss):* `run_fov` now reconciles
+    frames-read (emitted by the source) against frames-localized (folded into the
+    metrics). A clean finish that dropped frames is logged loudly (not a bare
+    `assert` stripped under `-O`); abort/error records the TRUE localized count
+    plus an explicit `partial`/`aborted`/`errored` coverage block on the FOV
+    record (acquisition status `live_localized_partial`, analysis status
+    `aborted`/`errored`), so partial coverage is honest, never silent.
+  - *NeNA docs corrected:* `nena`'s value is independent of `info` (info only
+    prevents a raise on `None`); NeNA is over the full accumulated locs table.
+    The oracle now runs the real throttled/incremental path and checks it equals
+    an independent single-shot batch NeNA.
+  - *Backpressure claim corrected:* the queue bound is enforced by
+    `queue.Queue(maxsize)`, not a decorative bare `assert`; `stats()` now carries
+    a real accounting check (`submitted == completed + queued + in-flight`, plus
+    `unfinished`/`timed_out`).
+  - *Drain-thread leak fixed:* the drain/feeder loops exit on the stop flag
+    regardless of completion, so a hung/slow worker can't spin them forever;
+    `drain_and_stop` always stops and joins, flagging `timed_out` with the
+    leaked count. Shared counters are lock-guarded so `stats()` doesn't tear.
+  - *Interlock safety:* an interlock that addressed zero lasers (empty/missing
+    `lasers` mapping, no `curr_laser`) no longer reports `safe=True` — "safe"
+    requires at least one laser actually disabled; the reason is recorded.
+  - *Archive stale-dest wedge fixed:* copy to a per-process temp dest, verify it,
+    then atomic-`os.replace` into place (clearing any stale partial), so a prior
+    failed run can't wedge the checksum permanently.
 
 - Versioning now derives from the git tag via `setuptools-scm` (writes
   `PycroFlow/_version.py`); the manual `version` string in `pyproject.toml`

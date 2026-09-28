@@ -27,6 +27,7 @@ def build_fov_payload(
     fov: dict | None = None,
     acquisition: dict | None = None,
     analysis: dict | None = None,
+    coverage: dict | None = None,
 ) -> dict:
     """Assemble the per-FOV registry record as nested plain dicts.
 
@@ -39,10 +40,21 @@ def build_fov_payload(
     fov, acquisition, analysis : dict or None
         Optional extra fields merged into the respective rows (e.g. ``pos_x``,
         ``frame_rate_hz``, ``compute_location``).
+    coverage : dict or None
+        Coverage provenance from the run (``frames_read`` / ``frames_localized``
+        / ``frames_missing`` / ``partial`` / ``aborted`` / ``errored``). When it
+        marks the run partial, the acquisition status becomes
+        ``live_localized_partial`` and the analysis status ``aborted`` /
+        ``errored`` (else ``done``); the full coverage dict is stored on the
+        ``fov`` and ``analysis_run`` ``extra`` columns so partial coverage is
+        explicit and queryable, never silent.
     """
+    coverage = coverage or {}
+    partial = bool(coverage.get("partial", False))
+
     acq = {
         "id": run_id,
-        "status": "live_localized",
+        "status": "live_localized_partial" if partial else "live_localized",
         "raw_retained": True,
     }
     acq.update(acquisition or {})
@@ -51,14 +63,24 @@ def build_fov_payload(
         "acquisition_run_id": run_id,
         "frame_count": metrics.get("n_frames"),
     }
+    if coverage:
+        fov_row["extra"] = {"coverage": coverage}
     fov_row.update(fov or {})
 
+    if coverage.get("aborted"):
+        analysis_status = "aborted"
+    elif coverage.get("errored"):
+        analysis_status = "errored"
+    else:
+        analysis_status = "done"
     analysis_row = {
         "acquisition_run_id": run_id,
         "kind": "live_localize",
-        "status": "done",
+        "status": analysis_status,
         "compute_location": "local-subprocess",
     }
+    if coverage:
+        analysis_row["extra"] = {"coverage": coverage}
     analysis_row.update(analysis or {})
 
     metrics_row = {

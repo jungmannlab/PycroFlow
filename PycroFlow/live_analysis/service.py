@@ -101,6 +101,14 @@ class FovResult:
     registry_ids: dict | None
     aborted: bool
     error: str | None
+    # Coverage provenance: frames_read vs frames_localized + partial flags, so
+    # partial coverage (abort/error/dropped) is explicit, never silent.
+    coverage: dict = field(default_factory=dict)
+
+    @property
+    def partial(self) -> bool:
+        """True when the FOV did not localize every frame it read."""
+        return bool(self.coverage.get("partial", False))
 
 
 class LiveAnalysisService:
@@ -272,6 +280,28 @@ class LiveAnalysisService:
             frames_read = source.frames_read()
             backend_stats = backend.stats() if backend is not None else {}
             final_metrics = metrics.snapshot(force_nena=True)
+
+            # --- No-subsample reconciliation (acquisition integrity) ---
+            # frames_read = frames the source EMITTED (and were counted read);
+            # localized = frames actually folded into the authoritative metrics.
+            # On a CLEAN finish every read frame must have been localized — the
+            # "no subsampling" guarantee, enforced here at runtime (not just in
+            # tests, and not a bare ``assert`` that ``python -O`` would strip).
+            # On abort/error partial coverage is expected and recorded honestly.
+            localized = final_metrics.get("n_frames", 0)
+            partial = bool(aborted or error) or (localized != frames_read)
+            missing = frames_read - localized
+            if not (aborted or error) and missing != 0:
+                # A clean run that dropped frames is a real defect: surface it
+                # loudly and mark the record partial rather than lying about
+                # coverage. (Raising here would bypass the record write; we log
+                # + flag so the partial FOV is still recorded, honestly.)
+                logger.error(
+                    "live-analysis no-subsample invariant VIOLATED: read {} "
+                    "frames but localized {} ({} missing) on a clean finish".format(
+                        frames_read, localized, missing
+                    )
+                )
             self.hub.push_kind(
                 "metrics", run_id, metrics=final_metrics, backend=backend_stats
             )
@@ -287,12 +317,24 @@ class LiveAnalysisService:
                 logger.warning("archive step raised: {!r}".format(exc))
 
             # Post the per-FOV registry record (best-effort; never blocks).
+            # Coverage provenance rides on the record so partial coverage is
+            # explicit, never silent: frames_read vs frames_localized, a
+            # partial/aborted flag, and the missing count.
+            coverage = {
+                "frames_read": frames_read,
+                "frames_localized": localized,
+                "frames_missing": missing,
+                "partial": partial,
+                "aborted": bool(aborted),
+                "errored": bool(error),
+            }
             payload = build_fov_payload(
                 run_id=run_id,
                 metrics=final_metrics,
                 fov=cfg.fov_fields,
                 acquisition=cfg.acquisition_fields,
                 analysis=cfg.analysis_fields,
+                coverage=coverage,
             )
             registry_ids = self._post_record(run_id, payload)
 
@@ -313,6 +355,7 @@ class LiveAnalysisService:
             registry_ids=registry_ids,
             aborted=aborted,
             error=error,
+            coverage=coverage,
         )
 
     # -- internals ----------------------------------------------------------
