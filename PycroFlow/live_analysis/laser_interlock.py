@@ -33,9 +33,18 @@ class InterlockResult:
 
     @property
     def safe(self) -> bool:
-        """True if every laser reached is off and the shutter is closed."""
+        """True only if the interlock actually darkened the hardware.
+
+        Requires: it was attempted, it disabled **at least one** laser (so
+        "safe" never means "did nothing" — an empty/missing ``lasers`` mapping
+        that addressed zero lasers is NOT safe), none it addressed failed, and
+        the shutter is closed.
+        """
         return (
-            self.attempted and not self.lasers_failed and self.shutter_closed
+            self.attempted
+            and bool(self.lasers_disabled)
+            and not self.lasers_failed
+            and self.shutter_closed
         )
 
 
@@ -132,14 +141,23 @@ class LaserInterlock:
         lasers = getattr(instrument, "lasers", None)
         if lasers is not None:
             try:
-                return list(lasers.keys())
+                keys = list(lasers.keys())
             except Exception as exc:  # noqa: BLE001
                 errors.append("enumerating lasers: {!r}".format(exc))
+            else:
+                if keys:
+                    return keys
+                # Present but empty: nothing to address. Fall through to the
+                # curr_laser fallback, and record why if that's empty too so a
+                # zero-laser interlock is never reported as a clean success.
         # Fall back to the single currently-active laser if that's all we can see.
         curr = getattr(instrument, "curr_laser", None)
         if curr is not None:
             return [curr]
-        errors.append("no laser instrument available to enumerate")
+        errors.append(
+            "no lasers to disable (empty/missing lasers mapping and no "
+            "curr_laser); interlock addressed zero lasers"
+        )
         return []
 
     def _disable_one(self, laser) -> None:

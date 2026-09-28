@@ -158,13 +158,12 @@ class TestMockFrameSource(unittest.TestCase):
 
 
 class TestRunningMetricsOracle(unittest.TestCase):
-    def _batch_metrics(self, frames, info):
-        """Compute metrics the batch (offline) way over ALL frames at once.
+    def _independent_batch_metrics(self, frames, info):
+        """Independent single-shot batch metrics over ALL frames at once.
 
-        NeNA is computed the same way ``RunningMetrics`` does — via
-        ``postprocess.nena(locs, info)`` with a proper picasso info list-of-dicts
-        (passing ``None`` raises ``ValueError: info must be a dict or a list of
-        dicts``, since nena reads ``Pixelsize`` from it).
+        Deliberately does NOT reuse RunningMetrics: localize the whole stack in
+        one call and compute NeNA once (``postprocess.nena``) — the offline
+        ground truth the live throttled/incremental path must reproduce.
         """
         locs = localize_batch(frames, info, _LOC_PARAMS, start_frame=0)
         n_frames = frames.shape[0]
@@ -176,34 +175,56 @@ class TestRunningMetricsOracle(unittest.TestCase):
         _r, s = postprocess.nena(locs, info_list)
         return spf, bg, float(s), len(locs)
 
-    def test_live_equals_batch_over_same_frames(self):
-        # tolerance for the live==batch NeNA comparison (px). Both paths run the
-        # identical picasso nena() over the identical accumulated locs table, so
-        # they agree to fit precision; a small tolerance guards float noise.
+    def test_live_throttled_equals_independent_batch(self):
+        """T2 oracle: the THROTTLED/incremental live NeNA == single-shot batch.
+
+        This exercises the *real* throttled path (realistic
+        ``nena_min_new_locs`` / ``nena_min_interval_s``, no force during the
+        stream), snapshotting after every batch as a client would. The point is
+        that incremental accumulation + throttling do not change the
+        authoritative NeNA: the final live value must equal an INDEPENDENT
+        single-shot batch NeNA over the same frames. (Previously this compared
+        two identical forced computations with 0/0 throttle — vacuous.)
+        """
         nena_tol_px = 1e-6
-        src = MockFrameSource(n_frames=250, height=64, width=64, seed=7)
+        n = 400
+        src = MockFrameSource(n_frames=n, height=64, width=64, seed=7)
         info = src.camera_info()
-        all_frames = np.stack([src._make_frame() for _ in range(250)])
-        # Reseed a fresh source so the live path sees the *same* frames.
-        src2 = MockFrameSource(n_frames=250, height=64, width=64, seed=7)
-        rm = RunningMetrics(nena_min_new_locs=0, nena_min_interval_s=0.0)
+        all_frames = np.stack([src._make_frame() for _ in range(n)])
+        # Fresh source → the live path sees the SAME frames (same seed).
+        src2 = MockFrameSource(n_frames=n, height=64, width=64, seed=7)
+        # Realistic throttle: recompute at most every ~1500 new locs. With ~8
+        # locs/frame over 400 frames this fires a handful of times mid-stream —
+        # the actual incremental code path, not a forced single shot.
+        rm = RunningMetrics(nena_min_new_locs=1500, nena_min_interval_s=0.0)
         rm.set_info(info)
         rm.set_pixelsize_nm(1.0)  # NeNA nm == px so we compare directly
+        recomputes = 0
+        prev = None
         for b in src2.batches(50):
             locs = localize_batch(
                 b.frames, info, _LOC_PARAMS, start_frame=b.start_frame
             )
             rm.update(locs, b.n_frames)
+            snap = rm.snapshot()  # throttled: may or may not recompute NeNA
+            if snap["nena_px"] is not None and snap["nena_px"] != prev:
+                recomputes += 1
+                prev = snap["nena_px"]
+        # The final snapshot (force so the last batch is always included).
         live = rm.snapshot(force_nena=True)
 
-        b_spf, b_bg, b_nena, b_nlocs = self._batch_metrics(all_frames, info)
-        self.assertEqual(live["n_frames"], 250)
+        b_spf, b_bg, b_nena, b_nlocs = self._independent_batch_metrics(
+            all_frames, info
+        )
+        self.assertEqual(live["n_frames"], n)
         self.assertEqual(live["n_locs"], b_nlocs)
         self.assertAlmostEqual(live["spots_per_frame"], b_spf, places=4)
         self.assertAlmostEqual(live["background"], round(b_bg, 4), places=3)
-        # The T2 oracle, now a REAL check under numpy 2: the live incremental
-        # NeNA equals the batch NeNA over the same frames. Neither is None (the
-        # whole point — it passed vacuously before when both were None).
+        # The throttle actually recomputed mid-stream (real incremental path),
+        # and the final throttled value equals the independent single-shot batch.
+        self.assertGreaterEqual(
+            recomputes, 1, "throttled NeNA never recomputed mid-stream"
+        )
         self.assertIsNotNone(live["nena_px"], "live NeNA must not be None")
         self.assertGreater(b_nena, 0.0)
         self.assertAlmostEqual(live["nena_px"], b_nena, delta=nena_tol_px)
@@ -272,10 +293,60 @@ class TestEndToEndSlice(unittest.TestCase):
             self.assertEqual(res.metrics["n_frames"], 200)
 
     def test_property_no_subsampling(self):
-        # The authoritative reduction covers EVERY frame.
+        # The authoritative reduction covers EVERY frame, and a clean finish is
+        # reconciled: frames_read == frames_localized, not partial.
         svc, run_id, res = self._run(use_processes=False, n_frames=173)
         self.assertEqual(res.frames_read, 173)
         self.assertEqual(res.metrics["n_frames"], 173)
+        self.assertFalse(res.partial)
+        self.assertEqual(res.coverage["frames_read"], 173)
+        self.assertEqual(res.coverage["frames_localized"], 173)
+        self.assertEqual(res.coverage["frames_missing"], 0)
+
+    def test_abort_records_partial_coverage_no_silent_drop(self):
+        """On abort, coverage is recorded honestly (partial flag), not silent.
+
+        A batch may be read (frames_read incremented) but not localized once the
+        stop is set. The FOV must then be flagged partial with the TRUE localized
+        count, and the read/localized/missing counts must reconcile exactly —
+        no frames vanish silently from the accounting.
+        """
+        illu = FakeIllumination()
+        svc = LiveAnalysisService(illumination_system=illu)
+        svc.start_experiment()
+
+        # Abort as soon as the first batch's metrics land, so later batches are
+        # read-but-not-localized — the exact partial-coverage window.
+        def abort_after_first(update):
+            if (
+                update.kind == "metrics"
+                and (update.payload.get("metrics") or {}).get("n_frames", 0)
+                > 0
+            ):
+                svc.request_abort()
+
+        from PycroFlow.live_analysis.client_seam import CallbackClient
+
+        svc.hub.add(CallbackClient(abort_after_first))
+        cfg = FovConfig(
+            source_kind="mock",
+            source_kwargs={"n_frames": 600, "height": 32, "width": 32},
+            localize_params=_LOC_PARAMS,
+            batch_size=30,
+            use_processes=False,
+            metrics_push_interval_s=0.0,  # push after every batch
+        )
+        res = svc.run_fov(cfg)
+        cov = res.coverage
+        # The accounting reconciles exactly — nothing is dropped silently.
+        self.assertEqual(
+            cov["frames_localized"] + cov["frames_missing"], cov["frames_read"]
+        )
+        self.assertEqual(cov["frames_localized"], res.metrics["n_frames"])
+        self.assertTrue(res.aborted)
+        # Partial coverage is explicit when fewer frames were localized than read.
+        if cov["frames_missing"] > 0:
+            self.assertTrue(res.partial)
 
     def test_separate_process_pool(self):
         # The design-intended path: real worker processes.
@@ -361,11 +432,82 @@ class TestBackpressure(unittest.TestCase):
 
         self.assertTrue(producer_done.is_set())
         self.assertEqual(produced, n)
-        # The runtime backpressure invariant held throughout.
+        # The queue bound (guaranteed by queue.Queue(maxsize)) held throughout.
         self.assertEqual(overflow, [])
         self.assertLessEqual(
             backend.stats()["queue_max_depth"], backend.stats()["queue_size"]
         )
+
+    def test_accounting_reconciles_no_batch_vanishes(self):
+        """Real accounting check: submitted == completed + queued + in-flight.
+
+        After a clean teardown every submitted batch is accounted for and none
+        remain unfinished (the replacement for the old decorative bare-assert).
+        """
+        seen = []
+        info = MockFrameSource(n_frames=1, height=20, width=20).camera_info()
+        backend = LocalComputeBackend(
+            info=info,
+            params=_LOC_PARAMS,
+            on_result=lambda r: seen.append(r.seq),
+            n_workers=1,
+            queue_size=4,
+            policy=POLICY_LAG,
+            use_processes=False,
+        )
+        backend.start()
+        rng = np.random.default_rng(1)
+        n = 10
+        for i in range(n):
+            frames = rng.integers(90, 110, size=(4, 20, 20)).astype(np.uint16)
+            self.assertTrue(
+                backend.submit(LocalizeRequest(i, frames, i * 4, None))
+            )
+        backend.drain_and_stop(timeout=30.0)
+        st = backend.stats()
+        # Every submitted batch is accounted for; none unfinished; none errored.
+        self.assertEqual(st["submitted"], n)
+        self.assertEqual(st["completed"], n)
+        self.assertEqual(st["unfinished"], 0)
+        self.assertEqual(st["errors"], 0)
+        self.assertFalse(st["timed_out"])
+        self.assertEqual(len(seen), n)
+
+    def test_hung_worker_teardown_no_leaked_thread(self):
+        """A worker that never returns its result must not leak the drain thread.
+
+        The drain loop must exit on the stop flag REGARDLESS of completion, so a
+        hung/slow worker (result never arrives → completed < submitted) can't
+        spin it forever. We simulate the hang by inflating the submitted count
+        beyond what any result will satisfy, then assert drain_and_stop returns
+        promptly, flags timed_out with the leaked count, and joins the thread.
+        """
+        backend = LocalComputeBackend(
+            info=None,
+            params=_LOC_PARAMS,
+            on_result=lambda r: None,
+            n_workers=1,
+            queue_size=4,
+            policy=POLICY_LAG,
+            use_processes=False,
+        )
+        backend.start()
+        drain_thread = backend._drain
+        # Pretend two batches were submitted whose results will never arrive
+        # (the "hung worker": completed stays < submitted).
+        with backend._counter_lock:
+            backend._submitted = 2  # no matching results will be produced
+        t0 = time.monotonic()
+        backend.drain_and_stop(timeout=1.0)
+        elapsed = time.monotonic() - t0
+        # Returned promptly (didn't hang on the missing results indefinitely).
+        self.assertLess(elapsed, 10.0)
+        st = backend.stats()
+        self.assertTrue(st["timed_out"])
+        self.assertEqual(st["unfinished"], 2)
+        # No leaked drain thread — it exited on the stop flag and was joined.
+        self.assertIsNotNone(drain_thread)
+        self.assertFalse(drain_thread.is_alive())
 
 
 # ── laser interlock (T3, full) ───────────────────────────────────────────
@@ -398,6 +540,37 @@ class TestLaserInterlock(unittest.TestCase):
         self.assertIn(488, result.lasers_failed)
         self.assertFalse(illu.shutter_open)
         self.assertFalse(result.safe)  # honest: not fully successful
+
+    def test_empty_lasers_addresses_nothing_is_not_safe(self):
+        """ "Safe" must not mean "did nothing": zero lasers addressed -> not safe.
+
+        An empty/missing ``lasers`` mapping with no ``curr_laser`` means the
+        interlock disables ZERO lasers. Even though it closes the shutter, it
+        must NOT report ``safe`` (and must record why).
+        """
+
+        class _EmptyInstrument:
+            lasers = {}
+            curr_laser = None
+
+        class _EmptyIllu:
+            def __init__(self):
+                self.instrument = _EmptyInstrument()
+                self.shutter_open = True
+
+            def set_laser_enabled(self, laser, enabled):  # pragma: no cover
+                raise AssertionError("no laser should be addressed")
+
+            def beampath_close(self):
+                self.shutter_open = False
+
+        illu = _EmptyIllu()
+        result = LaserInterlock(illu).engage()
+        self.assertEqual(result.lasers_disabled, [])
+        self.assertFalse(illu.shutter_open)  # shutter did close
+        self.assertTrue(result.attempted)
+        self.assertFalse(result.safe)  # but did nothing -> not safe
+        self.assertTrue(result.errors)  # recorded why zero were addressed
 
     def test_interlock_on_early_abort(self):
         illu = FakeIllumination()
@@ -499,41 +672,54 @@ class TestArchive(unittest.TestCase):
 
 
 class TestGoldenPayload(unittest.TestCase):
-    def test_payload_shape_is_stable(self):
-        metrics = {
-            "n_locs": 1234,
-            "n_frames": 500,
-            "spots_per_frame": 2.468,
-            "background": 101.5,
-            "nena_nm": 3.2,
+    _RID = "01TESTRUNID000000000000000"
+    _METRICS = {
+        "n_locs": 1234,
+        "n_frames": 500,
+        "spots_per_frame": 2.468,
+        "background": 101.5,
+        "nena_nm": 3.2,
+    }
+
+    def test_clean_payload_shape_is_stable(self):
+        coverage = {
+            "frames_read": 500,
+            "frames_localized": 500,
+            "frames_missing": 0,
+            "partial": False,
+            "aborted": False,
+            "errored": False,
         }
         payload = build_fov_payload(
-            run_id="01TESTRUNID000000000000000",
-            metrics=metrics,
+            run_id=self._RID,
+            metrics=self._METRICS,
             fov={"pos_x": 10.0, "pos_y": 20.0, "frame_rate_hz": 10.0},
             acquisition={"microscope_id": "Mercury"},
             analysis={"picasso_version": "0.11.2"},
+            coverage=coverage,
         )
         expected = {
-            "run_id": "01TESTRUNID000000000000000",
+            "run_id": self._RID,
             "acquisition_run": {
-                "id": "01TESTRUNID000000000000000",
+                "id": self._RID,
                 "status": "live_localized",
                 "raw_retained": True,
                 "microscope_id": "Mercury",
             },
             "fov": {
-                "acquisition_run_id": "01TESTRUNID000000000000000",
+                "acquisition_run_id": self._RID,
                 "frame_count": 500,
+                "extra": {"coverage": coverage},
                 "pos_x": 10.0,
                 "pos_y": 20.0,
                 "frame_rate_hz": 10.0,
             },
             "analysis_run": {
-                "acquisition_run_id": "01TESTRUNID000000000000000",
+                "acquisition_run_id": self._RID,
                 "kind": "live_localize",
                 "status": "done",
                 "compute_location": "local-subprocess",
+                "extra": {"coverage": coverage},
                 "picasso_version": "0.11.2",
             },
             "metrics": {
@@ -545,6 +731,30 @@ class TestGoldenPayload(unittest.TestCase):
             },
         }
         self.assertEqual(payload, expected)
+
+    def test_partial_payload_marks_aborted_status(self):
+        """An aborted/partial run is flagged in status + coverage, not silent."""
+        coverage = {
+            "frames_read": 500,
+            "frames_localized": 450,
+            "frames_missing": 50,
+            "partial": True,
+            "aborted": True,
+            "errored": False,
+        }
+        payload = build_fov_payload(
+            run_id=self._RID, metrics=self._METRICS, coverage=coverage
+        )
+        self.assertEqual(
+            payload["acquisition_run"]["status"], "live_localized_partial"
+        )
+        self.assertEqual(payload["analysis_run"]["status"], "aborted")
+        self.assertEqual(
+            payload["fov"]["extra"]["coverage"]["frames_missing"], 50
+        )
+        self.assertTrue(
+            payload["analysis_run"]["extra"]["coverage"]["partial"]
+        )
 
 
 # ── Quality tab: the first client over the streaming seam (headless Qt) ───

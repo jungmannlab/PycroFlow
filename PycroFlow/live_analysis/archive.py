@@ -39,6 +39,17 @@ class ArchiveResult:
     verified: bool
 
 
+def _remove_path(path: str) -> None:
+    """Remove a file or directory tree if it exists (best-effort)."""
+    try:
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        elif os.path.exists(path):
+            os.remove(path)
+    except OSError as exc:  # pragma: no cover - FS-timing dependent
+        logger.warning("could not remove {}: {!r}".format(path, exc))
+
+
 def _sha256(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -91,19 +102,28 @@ def archive_movie(
     is_dir = os.path.isdir(source)
     os.makedirs(archive_dir, exist_ok=True)
     dest = os.path.join(archive_dir, os.path.basename(source.rstrip("/")))
+    # Copy into a per-process temp dest first, verify THAT, then atomically move
+    # it into place. This avoids the stale-partial wedge: copying straight to
+    # ``dest`` with ``copytree(dirs_exist_ok=True)`` would merge into leftovers
+    # from a prior failed run, so the dest-tree hash would include foreign files
+    # and never match the source — a permanent (though safe) checksum mismatch.
+    tmp_dest = "{}.partial-{}".format(dest, os.getpid())
 
     try:
+        # Clear any leftover temp from a previously crashed run.
+        _remove_path(tmp_dest)
         src_sum = _tree_sha256(source) if is_dir else _sha256(source)
         if is_dir:
-            shutil.copytree(source, dest, dirs_exist_ok=True)
-            dst_sum = _tree_sha256(dest)
+            shutil.copytree(source, tmp_dest)
+            dst_sum = _tree_sha256(tmp_dest)
         else:
-            shutil.copy2(source, dest)
-            dst_sum = _sha256(dest)
+            shutil.copy2(source, tmp_dest)
+            dst_sum = _sha256(tmp_dest)
     except Exception as exc:  # noqa: BLE001 - never lose the original
         logger.error(
             "archive copy failed ({!r}); keeping local copy".format(exc)
         )
+        _remove_path(tmp_dest)
         return ArchiveResult(False, repr(exc), source, dest, None, False)
 
     if dst_sum != src_sum:
@@ -111,9 +131,23 @@ def archive_movie(
             "archive checksum mismatch (src {} != dst {}); keeping local "
             "copy".format(src_sum, dst_sum)
         )
+        _remove_path(tmp_dest)
         return ArchiveResult(
             False, "checksum mismatch", source, dest, src_sum, False
         )
+
+    # Verified temp copy — replace any stale final dest, then atomic-rename in.
+    try:
+        _remove_path(dest)
+        os.replace(tmp_dest, dest)
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - keep the verified temp + original
+        logger.error(
+            "archive rename into place failed ({!r}); keeping local copy and "
+            "the verified temp {}".format(exc, tmp_dest)
+        )
+        return ArchiveResult(False, repr(exc), source, dest, src_sum, False)
 
     # Verified — safe to remove the local original.
     try:

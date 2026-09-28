@@ -58,10 +58,15 @@ class RunningMetrics:
         self._last_nena_at = 0.0
         self._locs_at_last_nena = 0
         self._pixelsize_nm: float | None = None
-        # picasso metadata (list-of-dicts). NeNA needs a dict / list-of-dicts —
-        # ``postprocess.nena`` looks up ``Pixelsize`` from it (passing ``None``
-        # raises ``ValueError: info must be a dict or a list of dicts``), so we
-        # keep the camera info here and hand it to every NeNA call.
+        # picasso metadata (list-of-dicts). NOTE: ``postprocess.nena`` returns
+        # the SAME precision regardless of ``info`` — the fitted NeNA value does
+        # not depend on it. ``info`` only affects whether the call *raises*: the
+        # result dict looks up ``Pixelsize`` from ``info`` via
+        # ``lib.get_from_metadata``, which rejects ``None`` with
+        # ``ValueError: info must be a dict or a list of dicts``. ``_maybe_nena``
+        # already substitutes ``{}`` to avoid that, so this stored ``info`` is
+        # only a convenience source for the pixel size (nm reporting), not part
+        # of the NeNA computation.
         self._info: list | None = None
 
     def set_pixelsize_nm(self, pixelsize_nm: float | None) -> None:
@@ -70,11 +75,12 @@ class RunningMetrics:
             self._pixelsize_nm = pixelsize_nm
 
     def set_info(self, info) -> None:
-        """Set the picasso metadata used by NeNA (a dict or list-of-dicts).
+        """Provide the picasso metadata (a dict or list-of-dicts).
 
-        Normalised to a list-of-dicts (picasso's convention). If it carries a
-        ``Pixelsize`` and no explicit pixel size was set, that is adopted so
-        NeNA can be reported in nm.
+        Normalised to a list-of-dicts (picasso's convention). Its only effect is
+        to source the pixel size for nm reporting (if it carries ``Pixelsize``
+        and none was set explicitly): the NeNA *value* is independent of it (see
+        the note in ``__init__``).
         """
         with self._lock:
             if info is None:
@@ -117,7 +123,13 @@ class RunningMetrics:
         return self._locs
 
     def _maybe_nena(self, force: bool) -> None:
-        """(Re)compute NeNA under the throttle, or unconditionally if ``force``."""
+        """(Re)compute NeNA under the throttle, or unconditionally if ``force``.
+
+        Always computes over the FULL accumulated locs table (all batches so
+        far), so the throttle only decides *when* to recompute — the value it
+        produces is the authoritative single-shot NeNA over every frame seen,
+        independent of how the batches were chunked or when it last ran.
+        """
         if self._n_locs < 100:
             return
         new = self._n_locs - self._locs_at_last_nena
@@ -134,9 +146,9 @@ class RunningMetrics:
         try:
             from picasso import postprocess
 
-            # nena requires info to be a dict / list-of-dicts (it reads
-            # Pixelsize from it); fall back to an empty dict when we have none
-            # so the call never raises just for lack of metadata.
+            # nena's *value* is independent of info; info only prevents a raise
+            # (its result dict looks up Pixelsize from info, which rejects None).
+            # Substitute {} when we have no metadata so the call never raises.
             info = self._info if self._info is not None else {}
             _result, s_px = postprocess.nena(locs, info)
         except Exception:
