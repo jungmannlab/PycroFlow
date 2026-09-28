@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **WP-GUI — composable operator frontend** (`PycroFlow.gui.live`): the
+  V0.8-modelled operator UI rebuilt as a **composable shell** (C31 layout + C32
+  shell + A13/C23 thin client) over WP-4's live-analysis seam. A **thin
+  subscribing client** (`LiveClientBridge`) turns
+  `live_analysis.client_seam.LiveUpdate`s into Qt signals and holds the
+  early-abort control call — the single transport-swap point, shaped so a
+  WebSocket/SSE+REST client is a later drop-in (no remote transport built now).
+  The shell mounts per-module **contributions** discovered via a declared panel
+  registry (`contribution.py`); the first contributor is the **operator module**
+  (four tab groups: Setup · Live QC · Analysis · Assistant) plus the fixed
+  **QC-at-a-glance sidebar** (~15 colour-coded metrics + advisor traffic-light +
+  core controls) and the always-visible **Overview/Zoom** panel. **Multi-client
+  capable**: several shells subscribe to one service hub independently. Advisor
+  findings are consumed behind a **local adapter/Protocol** (`advisor.py`, fed by
+  a `MockAdvisor` in tests) so the GUI does not hard-depend on picasso-workflow's
+  `qc_advisor` — a marked TODO wires the real findings type via
+  `FindingsAdapter.wrap` when WP-ADVISOR lands. Run standalone with
+  `python -m PycroFlow.gui.live`. Fully **mock-stream testable**
+  (`tests/test_live_gui.py`); headless-importable (offscreen Qt), no WP-4 core
+  files modified.
+
 ### Changed
 
 - **PycroFlow is now a picasso consumer** (WP-4 live localization). Added base

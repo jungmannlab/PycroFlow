@@ -1,0 +1,286 @@
+"""Headless mock-stream tests for WP-GUI (the composable operator frontend).
+
+Everything here runs with no instrument and no real acquisition: a fake service
+exposes WP-4's seam surface (``hub`` + ``request_abort``) and we drive the shell
+by pushing :class:`~PycroFlow.live_analysis.client_seam.LiveUpdate`\\ s through the
+real :class:`UpdateHub`. Covered:
+
+* headless import safety (``PycroFlow.gui`` must not import PyQt6 at package load);
+* the shell builds with the four operator tab groups + the fixed sidebar/overview;
+* metric / thumbnail / state updates render (the thin subscribing client);
+* the early-abort control call reaches the service;
+* multi-client attach (two shells, one run) — both update; detach isolates;
+* the advisor-findings adapter renders against a mock advisor, and the adapter
+  coerces an arbitrary duck-typed finding object (the WP-ADVISOR drop-in seam);
+* the C32 contribution registry mounts a custom contributor's group.
+
+Skipped entirely when PyQt6 is absent (a minimal CI job without the [gui] extra).
+"""
+
+from __future__ import annotations
+
+import os
+import unittest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+try:
+    import PyQt6  # noqa: F401
+
+    _HAVE_PYQT6 = True
+except ImportError:
+    _HAVE_PYQT6 = False
+
+from PycroFlow.live_analysis.client_seam import UpdateHub  # noqa: E402
+
+
+class FakeService:
+    """Duck-typed WP-4 service: just the seam surface the GUI depends on."""
+
+    def __init__(self):
+        self.hub = UpdateHub()
+        self.aborted = False
+
+    def request_abort(self):
+        self.aborted = True
+
+
+def _app():
+    from PyQt6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
+class _QtTestCase(unittest.TestCase):
+    """Base for Qt tests: one shared QApplication, keep widgets alive.
+
+    Widgets are appended to :attr:`_alive` and only released at class teardown —
+    letting a top-level Qt widget get garbage-collected *between* tests aborts
+    under the offscreen platform, so we keep references for the class lifetime.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = _app()
+        cls._alive = []
+
+    @classmethod
+    def tearDownClass(cls):
+        for w in getattr(cls, "_alive", []):
+            try:
+                w.close_client()
+            except Exception:
+                pass
+        cls._alive = []
+        cls.app.processEvents()
+
+    def _make_shell(self, **kwargs):
+        from PycroFlow.gui.live.shell import LiveShell
+
+        shell = LiveShell(**kwargs)
+        self._alive.append(shell)
+        return shell
+
+
+# ── import safety (no PyQt6 needed) ─────────────────────────────────────────
+
+
+class TestImportSafety(unittest.TestCase):
+    def test_gui_package_import_does_not_require_pyqt6(self):
+        import importlib
+        import sys
+
+        before = "PyQt6" in sys.modules
+        importlib.import_module("PycroFlow.gui")
+        if not before:
+            self.assertNotIn("PyQt6", sys.modules)
+
+    def test_advisor_adapter_imports_without_qt(self):
+        # The adapter is pure-Python and must be usable off the GUI thread.
+        from PycroFlow.gui.live.advisor import Finding, worst_severity
+
+        fs = [Finding("info", "a"), Finding("error", "b")]
+        self.assertEqual(worst_severity(fs), "error")
+        self.assertEqual(worst_severity([]), "ok")
+
+
+# ── advisor adapter (WP-ADVISOR drop-in seam) ───────────────────────────────
+
+
+class TestAdvisorAdapter(unittest.TestCase):
+    def test_coerce_duck_typed_finding(self):
+        from PycroFlow.gui.live.advisor import FindingsAdapter
+
+        class Raw:  # what a real qc_advisor finding might look like
+            severity = "warning"
+            message = "high background"
+            suggestion = "lower laser"
+            source = "bg"
+
+        f = FindingsAdapter.coerce(Raw())
+        self.assertEqual(f.severity, "warning")
+        self.assertEqual(f.message, "high background")
+        self.assertEqual(f.suggestion, "lower laser")
+
+    def test_coerce_dict_finding(self):
+        from PycroFlow.gui.live.advisor import FindingsAdapter
+
+        f = FindingsAdapter.coerce({"severity": "error", "message": "drift"})
+        self.assertEqual(f.severity, "error")
+        self.assertIsNone(f.suggestion)
+
+    def test_wrap_real_advisor_coerces_output(self):
+        from PycroFlow.gui.live.advisor import Finding, FindingsAdapter
+
+        class RealAdvisor:
+            def findings_for(self, metrics):
+                return [{"severity": "info", "message": "ok-ish"}]
+
+        wrapped = FindingsAdapter.wrap(RealAdvisor())
+        out = wrapped.findings_for({})
+        self.assertIsInstance(out[0], Finding)
+
+    def test_mock_advisor_thresholds(self):
+        from PycroFlow.gui.live.advisor import MockAdvisor
+
+        adv = MockAdvisor()
+        self.assertTrue(adv.findings_for({"nena_nm": 20.0}))
+        self.assertFalse(adv.findings_for({"nena_nm": 3.0}))
+
+
+# ── contribution registry (C32) ─────────────────────────────────────────────
+
+
+class TestContribution(unittest.TestCase):
+    def test_collect_panels_sorted_by_group(self):
+        from PycroFlow.gui.live.contribution import (
+            PanelSpec,
+            collect_panels,
+        )
+
+        class C:
+            module_id = "x"
+
+            def panels(self):
+                return [
+                    PanelSpec("b", "B", "Analysis", lambda ctx: None, 0),
+                    PanelSpec("a", "A", "Setup", lambda ctx: None, 0),
+                ]
+
+        specs = collect_panels([C()])
+        self.assertEqual([s.group for s in specs], ["Setup", "Analysis"])
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestShellMockStream(_QtTestCase):
+    def setUp(self):
+        self.svc = FakeService()
+        self.shell = self._make_shell(service=self.svc)
+
+    def test_builds_four_operator_groups(self):
+        titles = [
+            self.shell.tab_groups.tabText(i)
+            for i in range(self.shell.tab_groups.count())
+        ]
+        self.assertEqual(titles, ["Setup", "Live QC", "Analysis", "Assistant"])
+
+    def test_metrics_update_renders(self):
+        self.svc.hub.push_kind("state", "run1", state="fov_started")
+        self.svc.hub.push_kind(
+            "metrics",
+            "run1",
+            metrics={
+                "nena_nm": 6.5,
+                "spots_per_frame": 0.03,
+                "n_locs": 500,
+                "n_frames": 100,
+                "background": 90.0,
+            },
+            backend={"queue_depth": 2, "queue_size": 8},
+        )
+        self.assertEqual(
+            self.shell.sidebar._value_labels["nena_nm"].text(), "6.5"
+        )
+        self.assertIn("100", self.shell.frame_label.text())
+        self.assertEqual(self.shell.status_label.text(), "state: fov_started")
+
+    def test_early_abort_control_call(self):
+        self.svc.hub.push_kind("state", "run1", state="fov_started")
+        self.shell.sidebar.abort_requested.emit()
+        self.assertTrue(self.svc.aborted)
+
+    def test_thumbnail_update_reaches_overview(self):
+        self.svc.hub.push_kind(
+            "thumbnail", "run1", shape=(64, 64), pixelsize_nm=130.0
+        )
+        self.assertIn("nm/px", self.shell.overview.scale_bar.text())
+
+    def test_advisor_light_reflects_findings(self):
+        # A bad NeNA -> the mock advisor emits an error -> the light isn't green.
+        self.svc.hub.push_kind(
+            "metrics", "run1", metrics={"nena_nm": 25.0}, backend={}
+        )
+        self.assertIn("NeNA", self.shell.sidebar.advisor_text.text())
+
+    def test_abort_disabled_when_idle(self):
+        self.svc.hub.push_kind("state", "run1", state="fov_done")
+        self.assertFalse(self.shell.sidebar.abort_btn.isEnabled())
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestMultiClient(_QtTestCase):
+    def test_two_shells_one_run_then_detach(self):
+        svc = FakeService()
+        s1 = self._make_shell(service=svc)
+        s2 = self._make_shell(service=svc)
+
+        svc.hub.push_kind(
+            "metrics", "r", metrics={"nena_nm": 10.0}, backend={}
+        )
+        self.assertEqual(s1.sidebar._value_labels["nena_nm"].text(), "10")
+        self.assertEqual(s2.sidebar._value_labels["nena_nm"].text(), "10")
+
+        # Detaching s2 must not affect s1 (per-shell subscription).
+        s2.close_client()
+        svc.hub.push_kind("metrics", "r", metrics={"nena_nm": 4.0}, backend={})
+        self.assertEqual(s1.sidebar._value_labels["nena_nm"].text(), "4")
+        self.assertEqual(s2.sidebar._value_labels["nena_nm"].text(), "10")
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestCustomContributor(_QtTestCase):
+    def test_custom_group_mounts(self):
+        from PycroFlow.gui.live.contribution import PanelSpec
+        from PycroFlow.gui.live.operator import OperatorContributor
+        from PyQt6.QtWidgets import QLabel
+
+        class Dash:
+            module_id = "dashboard"
+
+            def panels(self):
+                return [
+                    PanelSpec(
+                        "fleet",
+                        "Fleet",
+                        "Dashboard",
+                        lambda ctx: QLabel("fleet"),
+                        0,
+                    )
+                ]
+
+        shell = self._make_shell(
+            service=FakeService(),
+            contributors=[OperatorContributor(), Dash()],
+        )
+        titles = [
+            shell.tab_groups.tabText(i)
+            for i in range(shell.tab_groups.count())
+        ]
+        # Operator groups first (canonical order), then the custom group.
+        self.assertEqual(
+            titles, ["Setup", "Live QC", "Analysis", "Assistant", "Dashboard"]
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
