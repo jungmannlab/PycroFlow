@@ -177,6 +177,72 @@ class FakeIllumination:
         return all(not la.enabled for la in self.instrument.lasers.values())
 
 
+# ── in-memory registry stub (fastapi-free) ───────────────────────────────────
+
+
+class InMemoryRegistryStub:
+    """Self-contained in-memory stand-in for a picasso-registry client.
+
+    Implements exactly the surface :func:`PycroFlow.live_analysis.
+    registry_payload.post_fov_record` drives (``log_acquisition`` /
+    ``log_fov`` / ``log_analysis`` / ``log_metrics``, each returning a dict with
+    an ``id``) plus the ``get(resource, item_id)`` read-back the Gate-2
+    ``registry_record`` check uses. Records are just kept in per-resource dicts.
+
+    Deliberately dependency-free: NO ``picasso_registry.testing`` /
+    ``picasso_registry.app`` / FastAPI import. The real ``MockRegistryClient``
+    spins up the FastAPI app in-process, which drags in the server stack that a
+    client-only install (``picasso-registry[client]`` = requests + python-ulid,
+    no fastapi) does not have — so the mock path used to crash on the acq PC.
+    This stub keeps the mock path importable there with the client extra alone.
+    """
+
+    def __init__(self) -> None:
+        self._store: dict[str, dict[str, dict]] = {
+            "acquisition_run": {},
+            "fov": {},
+            "analysis_run": {},
+            "metrics": {},
+        }
+        self._counter = 0
+
+    def _next_id(self, prefix: str) -> str:
+        self._counter += 1
+        return "{}-{}".format(prefix, self._counter)
+
+    def _record(self, resource: str, fields: dict, *, id_key: str) -> dict:
+        # Honour a caller-supplied id (the acquisition_run id IS the run_id, so
+        # the check's get("acquisition_run", run_id) resolves); otherwise assign.
+        row = dict(fields)
+        if not row.get("id"):
+            row["id"] = self._next_id(id_key)
+        self._store[resource][row["id"]] = row
+        return row
+
+    def log_acquisition(self, **fields):
+        return self._record("acquisition_run", fields, id_key="acq")
+
+    def log_fov(self, **fields):
+        return self._record("fov", fields, id_key="fov")
+
+    def log_analysis(self, **fields):
+        return self._record("analysis_run", fields, id_key="an")
+
+    def log_metrics(self, **fields):
+        return self._record("metrics", fields, id_key="met")
+
+    def get(self, resource: str, item_id: str) -> dict:
+        """Return the stored record, or raise ``KeyError`` if absent."""
+        return self._store[resource][item_id]
+
+    def records(self, resource: str) -> list:
+        """All recorded rows for a resource (for assertions / debugging)."""
+        return list(self._store[resource].values())
+
+    def close(self) -> None:  # symmetry with the real clients
+        pass
+
+
 # ── version block ────────────────────────────────────────────────────────────
 
 
@@ -746,9 +812,11 @@ def _make_illumination(args):
 def _make_registry(args):
     """Return the registry client for the active mode + a cleanup callable.
 
-    Emulator: the picasso-registry in-memory mock. Instrument: the real client
-    if ``--registry-url`` is set, else the same mock (records still get built +
-    verified). Returns ``(client, close_fn)``.
+    Emulator: a self-contained :class:`InMemoryRegistryStub` (fastapi-free — see
+    its docstring). Instrument: the real ``RegistryClient`` if ``--registry-url``
+    is set (requests-based, works on a ``[client]``-only install), else the same
+    in-memory stub (records still get built + verified). Returns
+    ``(client, close_fn)``.
     """
     if args.mode == MODE_INSTRUMENT and args.registry_url:  # pragma: no cover
         from picasso_registry.client import RegistryClient
@@ -757,9 +825,9 @@ def _make_registry(args):
             base_url=args.registry_url, token=args.registry_token
         )
         return client, getattr(client, "close", lambda: None)
-    from picasso_registry.testing import MockRegistryClient
-
-    client = MockRegistryClient()
+    # Fastapi-free mock path: a local stub, NOT picasso_registry.testing (which
+    # imports the FastAPI server app, absent on a client-only acq-PC install).
+    client = InMemoryRegistryStub()
     return client, client.close
 
 

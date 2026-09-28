@@ -10,8 +10,10 @@ and the verdict serialises to the documented JSON shape.
 from __future__ import annotations
 
 import argparse
+import builtins
 import json
 import os
+import sys
 import tempfile
 import unittest
 
@@ -161,6 +163,91 @@ class TestVerdictIO(unittest.TestCase):
             self.assertEqual(rc, 0)
             written = [f for f in os.listdir(tmp) if f.endswith(".json")]
             self.assertEqual(len(written), 1)
+
+
+class TestInMemoryRegistryStub(unittest.TestCase):
+    def test_implements_post_fov_record_surface_and_readback(self):
+        from PycroFlow.live_analysis.registry_payload import (
+            build_fov_payload,
+            post_fov_record,
+        )
+
+        stub = g2.InMemoryRegistryStub()
+        run_id = "01STUBRUNID0000000000000000"
+        payload = build_fov_payload(
+            run_id=run_id,
+            metrics={
+                "n_locs": 10,
+                "n_frames": 100,
+                "spots_per_frame": 0.1,
+                "background": 100.0,
+                "nena_nm": 3.0,
+            },
+        )
+        ids = post_fov_record(stub, payload)
+        # The acquisition_run id IS the run_id (the check reads it back by run_id).
+        self.assertEqual(ids["acquisition_run_id"], run_id)
+        acq = stub.get("acquisition_run", run_id)
+        self.assertEqual(acq["status"], "live_localized")
+        self.assertTrue(acq["raw_retained"])
+        fov = stub.get("fov", ids["fov_id"])
+        self.assertEqual(fov["frame_count"], 100)
+        an = stub.get("analysis_run", ids["analysis_run_id"])
+        self.assertEqual(an["kind"], "live_localize")
+        # Exactly one record per resource.
+        self.assertEqual(len(stub.records("acquisition_run")), 1)
+
+    def test_get_missing_raises(self):
+        stub = g2.InMemoryRegistryStub()
+        with self.assertRaises(KeyError):
+            stub.get("fov", "nope")
+
+
+class TestMockPathIsFastapiFree(unittest.TestCase):
+    """The emulator / no-URL registry path must not import fastapi or the
+    picasso_registry server app — the acq PC has only ``[client]`` installed.
+    """
+
+    def test_make_registry_does_not_import_fastapi_or_registry_app(self):
+        # Make fastapi + the registry server modules un-importable, so any
+        # attempt to reach them on the mock path raises rather than silently
+        # succeeding because they happen to be installed in this container.
+        blocked = (
+            "fastapi",
+            "picasso_registry.testing",
+            "picasso_registry.app",
+        )
+        real_import = builtins.__import__
+
+        def guarded_import(name, *a, **kw):
+            if name in blocked or any(
+                name.startswith(b + ".") for b in blocked
+            ):
+                raise ImportError("blocked in test: {}".format(name))
+            return real_import(name, *a, **kw)
+
+        # Drop any cached copies so a re-import would actually run.
+        saved = {
+            k: sys.modules.pop(k)
+            for k in list(sys.modules)
+            if k in blocked or any(k.startswith(b + ".") for b in blocked)
+        }
+        builtins.__import__ = guarded_import
+        try:
+            args = _emulator_args()
+            client, close = g2._make_registry(args)
+            self.assertIsInstance(client, g2.InMemoryRegistryStub)
+            close()
+            # A full emulator run must still be green with fastapi blocked.
+            verdict = g2.run_gate2(args)
+            self.assertTrue(verdict["gate2_pass"], verdict["failures"])
+            rec = next(
+                c for c in verdict["checks"] if c["name"] == "registry_record"
+            )
+            self.assertTrue(rec["passed"])
+        finally:
+            builtins.__import__ = real_import
+            sys.modules.update(saved)
 
 
 if __name__ == "__main__":

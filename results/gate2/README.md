@@ -29,7 +29,9 @@ python -m PycroFlow.perf.gate2_harness --mode instrument ^
 ```
 
 Add `--registry-url http://<host>:<port> --registry-token <tok>` to post the
-per-FOV record to the **real** picasso-registry instead of the in-memory mock.
+per-FOV record to the **real** picasso-registry (requests-based `RegistryClient`,
+works on a `[client]`-only install) instead of the harness's built-in
+fastapi-free in-memory stub.
 Every knob has a default and is documented in `--help`; the run is fully
 non-interactive.
 
