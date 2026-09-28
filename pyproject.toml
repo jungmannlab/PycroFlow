@@ -43,8 +43,14 @@ dependencies = [
     # not the case — the registry client is a separate install.)
     "picassosr @ git+https://github.com/jungmannlab/picasso.git@e5c91196",
     # WP-4: append-only provenance/metrics DB client (per-FOV record sink).
-    "picasso-registry",
-    # WP-4: sortable run_id minting (matches the registry's ULID convention).
+    # picasso-registry is NOT on PyPI (like monet's dep, C39/C40) -- pin the
+    # released tag with the [client] extra (requests + python-ulid). A bare
+    # name fails a fresh install (only worked in the dev container because the
+    # registry is editable-installed there). Bump the tag as new registry
+    # releases land; move to a PyPI version spec if it's ever published.
+    "picasso-registry[client] @ git+https://github.com/jungmannlab/picasso-registry.git@v0.1.0",
+    # WP-4: sortable run_id minting (matches the registry's ULID convention;
+    # also pulled by picasso-registry[client], kept explicit for clarity).
     "python-ulid>=2",
     # Stack-wide dependency harmonization (decision C41): picasso is the anchor,
     # so the shared numeric/IO libs adopt picasso 0.11.3's shared-lib ranges
