@@ -41,6 +41,20 @@ SEVERITY_COLOR = {
     "ok": "#5cb85c",  # green
 }
 
+# WP-ADVISOR (picasso_workflow.qc_advisor) uses a different severity vocabulary
+# ("bad"/"warn") and names its suggestion field "action". Normalise both here so
+# its Finding drops in via FindingsAdapter WITHOUT a critical "bad" silently
+# degrading to "info" (the Finding.__post_init__ fallback). Our own vocab and
+# any already-normalised value pass through unchanged.
+_SEVERITY_ALIASES = {
+    "bad": "error",
+    "warn": "warning",
+    "error": "error",
+    "warning": "warning",
+    "info": "info",
+    "ok": "ok",
+}
+
 
 @dataclass
 class Finding:
@@ -92,10 +106,14 @@ class FindingsAdapter:
                 return obj.get(key)
             return getattr(obj, key, None)
 
+        sev = str(_get("severity") or "info").lower()
         return Finding(
-            severity=str(_get("severity") or "info"),
+            # Map WP-ADVISOR's bad/warn -> error/warning (own vocab passes through).
+            severity=_SEVERITY_ALIASES.get(sev, sev),
             message=str(_get("message") or ""),
-            suggestion=_get("suggestion"),
+            # WP-ADVISOR names the suggestion field "action"; prefer our own
+            # "suggestion" when present, else fall back to "action".
+            suggestion=_get("suggestion") or _get("action"),
             source=_get("source"),
         )
 

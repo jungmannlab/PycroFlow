@@ -129,6 +129,37 @@ class TestAdvisorAdapter(unittest.TestCase):
         self.assertEqual(f.severity, "error")
         self.assertIsNone(f.suggestion)
 
+    def test_coerce_wp_advisor_finding(self):
+        # The real picasso_workflow.qc_advisor Finding: severity vocab is
+        # bad/warn/info/ok and the suggestion field is named "action" (plus
+        # extra fields metric/cause/value/detail). The adapter must map
+        # bad->error (NOT silently drop to info) and action->suggestion.
+        from PycroFlow.gui.live.advisor import FindingsAdapter
+
+        class QcAdvisorFinding:  # shape of picasso_workflow.qc_advisor.Finding
+            metric = "nena"
+            severity = "bad"
+            message = "NeNA very high"
+            cause = "drift/focus"
+            action = "abort and refocus"
+            value = 18.0
+            source = "diagnose"
+            detail = {}
+
+        f = FindingsAdapter.coerce(QcAdvisorFinding())
+        self.assertEqual(f.severity, "error")  # bad -> error, not info
+        self.assertEqual(
+            f.suggestion, "abort and refocus"
+        )  # action -> suggestion
+        self.assertEqual(f.source, "diagnose")
+
+        # warn -> warning, via dict shape + as_dict()-style keys
+        w = FindingsAdapter.coerce(
+            {"severity": "warn", "message": "bg high", "action": "lower power"}
+        )
+        self.assertEqual(w.severity, "warning")
+        self.assertEqual(w.suggestion, "lower power")
+
     def test_wrap_real_advisor_coerces_output(self):
         from PycroFlow.gui.live.advisor import Finding, FindingsAdapter
 
