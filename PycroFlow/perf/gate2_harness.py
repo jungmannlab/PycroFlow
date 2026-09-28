@@ -537,6 +537,9 @@ def _make_fov_config(args) -> FovConfig:
         write_target=WRITE_TARGET_LOCAL,
         movie_source_path=args.data_dir,
         archive_dir=args.archive_dir,
+        # From --pixelsize (None -> picasso assumes 130 nm with a warning);
+        # flows to the NDTiff source's camera_info so NeNA-in-nm is accurate.
+        pixelsize_nm=args.pixelsize_nm,
     )
 
 
@@ -1511,12 +1514,47 @@ def build_parser() -> argparse.ArgumentParser:
         "laser control -- required in --mode instrument for the T3 interlock "
         "check (find it in your monet configs.yaml / monet.CONFIGS).",
     )
+    parser.add_argument(
+        "--monet-config-paths",
+        dest="monet_config_paths",
+        default=None,
+        help="Path(s) to monet config.yaml (os.pathsep-separated) so "
+        "--monet-setup resolves. Exported as MONET_CONFIG_PATHS before monet is "
+        "imported (equivalent to setting it in a .env). Without it monet falls "
+        "back to its built-in defaults and your setup name won't be found.",
+    )
+    parser.add_argument(
+        "--monet-protocol-paths",
+        dest="monet_protocol_paths",
+        default=None,
+        help="Path(s) to monet protocols (os.pathsep-separated); exported as "
+        "MONET_PROTOCOL_PATHS before monet is imported.",
+    )
+    parser.add_argument(
+        "--pixelsize",
+        dest="pixelsize_nm",
+        type=float,
+        default=None,
+        help="Effective camera pixel size in nm, for accurate NeNA-in-nm "
+        "(instrument mode). If omitted picasso assumes 130 nm (a warning; NeNA "
+        "still computes, only its nm scaling is approximate).",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     """Parse args, run Gate-2, write the verdict, print a summary."""
     args = build_parser().parse_args(argv)
+
+    # Export monet config/protocol paths BEFORE monet is imported — its module
+    # reads MONET_CONFIG_PATHS / MONET_PROTOCOL_PATHS at import time (lazily, via
+    # the illumination system's _ensure_monet). Setting them here lets
+    # --monet-setup resolve without hand-managing a .env; override=False in
+    # monet means an already-exported value (e.g. a real .env) still wins.
+    if args.monet_config_paths:
+        os.environ["MONET_CONFIG_PATHS"] = args.monet_config_paths
+    if args.monet_protocol_paths:
+        os.environ["MONET_PROTOCOL_PATHS"] = args.monet_protocol_paths
 
     if args.mode == MODE_INSTRUMENT and not args.data_dir:
         print(
