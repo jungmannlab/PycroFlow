@@ -1,0 +1,104 @@
+# WP-1 live-reader performance harness — default configuration.
+#
+# Every knob here is also overridable on the command line (see
+# `python -m PycroFlow.perf --help`). The mode (--emulator / --instrument) is
+# normally set on the command line, not here, so one config file drives both
+# the dry run and the on-instrument run — ONLY the frame source differs.
+#
+# See docs/WP-1-RUNBOOK.md for how to run this on the acquisition PC and
+# docs/WP-1-perf-schema.md for the output schema + go/no-go thresholds.
+
+# emulator | instrument. Command-line --emulator/--instrument overrides this.
+mode: emulator
+
+# --- Acquisition parameters (match your real experiment) ---------------
+# Typical DNA-PAINT acquisition: 100 ms exposure, 10 Hz, 40000 frames.
+frame_rate_hz: 10.0
+exposure_ms: 100.0
+
+# Frames per configuration. The full sweep runs this many frames once per
+# batch size plus once for the no-reader baseline. NOTE: at 10 Hz the wall
+# time per config is n_frames / 10 s, multiplied by (1 + number of batch
+# sizes). 2000 frames ≈ 3.3 min/config; set 40000 for a full-length run
+# (≈ 67 min/config — expect a multi-hour sweep).
+n_frames: 25000
+
+# Full-frame dimensions + bytes per pixel (16-bit camera => 2). Used to turn
+# the buffer MB into a frame capacity and to record the frame size. For the
+# centre quadrant, set roi below (e.g. [256, 256, 512, 512]).
+image_width: 1152
+image_height: 1152
+bytes_per_pixel: 2
+
+# Micro-Manager circular-buffer footprint, in MB (mebibytes) — matches MM's
+# "sequence buffer size". At 1024x1024x2 = 2 MiB/frame, 4096 MB ≈ 2048 frames.
+buffer_mb: 10000.0
+
+# Camera ROI [x, y, w, h] (instrument mode). null = full frame. For the
+# centre 512x512 quadrant of a 1024x1024 sensor use [256, 256, 512, 512].
+roi: null
+
+# Live-evaluation batch sizes to sweep (contiguous frames per read; never
+# subsampled). The baseline (no reader) is run in addition to these.
+batch_sizes: [1, 10, 100]
+
+# How often the occupancy monitor samples the circular buffer (s).
+monitor_interval_s: 0.05
+
+# Also run a no-reader baseline (the control for the go/no-go comparison).
+include_baseline: true
+
+# --- Output locations --------------------------------------------------
+# Small, git-committed run dir (run_meta.json + metrics.csv +
+# buffer_timeseries.csv) lands under output_dir; commit it under results/.
+output_dir: results
+
+# Where the raw NDTiff acquisition is written (instrument mode). Use a LOCAL
+# drive (NOT a network/mapped drive, and NOT the repo) — local disk avoids the
+# over-the-network write penalty. The raw movie for EACH configuration is
+# deleted immediately after that acquisition is measured (even if it fails), so
+# peak disk use is only ONE acquisition, not the whole sweep. At the current
+# 576x576 / 16-bit / 40000 frames that peak is frame_bytes * n_frames
+# ≈ 663552 * 40000 ≈ 25 GB — make sure the local drive has at least that free
+# (reduce n_frames if not). Required in instrument mode; set keep_raw_data:
+# true only if you want to keep the movies. Override per-run with --data-dir.
+data_dir: U:\users\hgrabmayr\microscopy\260831_tmp
+keep_raw_data: false
+
+# How the concurrent reader runs (instrument mode):
+#   process — a SEPARATE OS PROCESS reads the NDTiff off disk (the design-
+#             intended isolation: no shared GIL / pycromanager ZMQ bridge with
+#             the acquisition). This is the decisive test for option (b).
+#   thread  — a thread inside the acquisition process (the more pessimistic
+#             coupling; use to reproduce the earlier same-process result).
+# Emulator mode always uses the built-in simulated reader regardless.
+reader_mode: process
+# Poll interval (s) of the separate-process reader while waiting for frames.
+reader_poll_s: 0.05
+# Minimum seconds between re-opens of the growing movie by the separate-process
+# reader. New frames are only seen by re-opening, which re-scans the TIFF IFD
+# offset table (via picasso/tifffile, or ndtiff as a fallback) — cheap on local
+# disk, but slow over a network drive for a multi-GB movie. So the reader opens
+# once and only re-opens this often (and only when the files have grown) to pick
+# up new frames. Raise it for very large datasets where each open is slow.
+reader_reopen_interval_s: 2.0
+
+# Prefix for the run-dir name.
+label: wp1
+
+# --- Emulator model (ignored in instrument mode) -----------------------
+# Defaults model the EXPECTED real outcome: the page cache serves the
+# just-written frames, so the reader barely contends with the writer and no
+# frames are dropped across the sweep. The backpressure regression test
+# overrides these to induce and detect contention.
+emulator:
+  # Writer drain rate as a multiple of the frame rate (>1 => baseline keeps
+  # up and the buffer stays near-empty).
+  write_speed_factor: 3.0
+  # Fractional writer slow-down while a batch is being read (0 => the reader
+  # is effectively free).
+  contention: 0.1
+  # Wall-clock cost the emulated reader spends per frame in a batch (s).
+  read_cost_per_frame_s: 0.0002
+  # Engine integration tick (s); sets sampling granularity, not correctness.
+  tick_s: 0.001
