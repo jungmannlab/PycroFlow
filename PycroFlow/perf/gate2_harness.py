@@ -802,11 +802,23 @@ def _make_illumination(args):
     """
     if args.mode == MODE_EMULATOR:
         return FakeIllumination()
+    # Instrument: the real monet-backed system. `setup` selects THIS scope's
+    # monet config (a monet.CONFIGS key) so the interlock knows which lasers to
+    # disable; without it monet can't resolve the laser control. Fail early with
+    # a clear message rather than a cryptic monet error deep in the interlock.
+    if not args.monet_setup:  # pragma: no cover - acq PC only
+        raise SystemExit(
+            "instrument mode needs --monet-setup <name> (a monet.CONFIGS key "
+            "for this microscope) so the T3 laser interlock can control the "
+            "lasers. Find it in your monet configs.yaml / monet.CONFIGS."
+        )
     from PycroFlow.illumination import (  # pragma: no cover - acq PC only
         IlluminationSystem,
     )
 
-    return IlluminationSystem()  # pragma: no cover - acq PC only
+    return IlluminationSystem(  # pragma: no cover - acq PC only
+        setup=args.monet_setup
+    )
 
 
 def _make_registry(args):
@@ -1034,6 +1046,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="monet host (recorded for provenance; illumination is created "
         "from the local config on the acq PC).",
+    )
+    parser.add_argument(
+        "--monet-setup",
+        dest="monet_setup",
+        default=None,
+        help="monet config name (a monet.CONFIGS key) for THIS microscope's "
+        "laser control -- required in --mode instrument for the T3 interlock "
+        "check (find it in your monet configs.yaml / monet.CONFIGS).",
     )
     return parser
 
