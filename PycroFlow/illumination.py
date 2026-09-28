@@ -139,6 +139,72 @@ class IlluminationSystem(AbstractSystem):
             logger.warning("beampath_close failed: {!r}".format(exc))
             return
 
+    def all_off(self):
+        """Fail-safe T3 primitive: disable EVERY laser and close the shutter.
+
+        The clean entry a laser interlock (T3, decision C21) should call. It
+        runs :meth:`_ensure_monet` first (so it works even before any other
+        illumination command has triggered the lazy monet build — the exact case
+        that made the interlock reach a not-yet-existing ``self.instrument`` on
+        the first real acquisition), then disables each laser in
+        ``self.instrument.lasers`` **independently** (one laser failing to
+        respond still disables the rest) and closes the shutter. It NEVER raises.
+
+        Returns
+        -------
+        dict
+            ``{"disabled": [...], "failed": [...], "shutter_closed": bool,
+            "errors": [...]}`` so a caller can report exactly what was darkened.
+        """
+        disabled = []
+        failed = []
+        errors = []
+        # Ensure monet/laser control exists before we touch it. If it cannot be
+        # built we still try the shutter and report — never raise from a T3 call.
+        try:
+            self._ensure_monet()
+        except Exception as exc:  # noqa: BLE001 - fail-safe: keep going
+            errors.append("_ensure_monet failed: {!r}".format(exc))
+
+        lasers = getattr(getattr(self, "instrument", None), "lasers", None)
+        try:
+            laser_ids = list(lasers.keys()) if lasers is not None else []
+        except Exception as exc:  # noqa: BLE001
+            laser_ids = []
+            errors.append("enumerating lasers: {!r}".format(exc))
+
+        for laser in laser_ids:
+            try:
+                self.set_laser_enabled(laser, False)
+                disabled.append(laser)
+            except Exception as exc:  # noqa: BLE001 - try every other laser
+                failed.append(laser)
+                errors.append("laser {!r}: {!r}".format(laser, exc))
+                logger.error(
+                    "all_off: could not disable laser {!r}: {!r}".format(
+                        laser, exc
+                    )
+                )
+
+        shutter_closed = True
+        try:
+            self.beampath_close()
+        except Exception as exc:  # noqa: BLE001 - fail-safe
+            shutter_closed = False
+            errors.append("beampath_close: {!r}".format(exc))
+            logger.error("all_off: could not close shutter: {!r}".format(exc))
+
+        if not laser_ids:
+            errors.append(
+                "all_off addressed zero lasers (no lasers enumerable)"
+            )
+        return {
+            "disabled": disabled,
+            "failed": failed,
+            "shutter_closed": shutter_closed,
+            "errors": errors,
+        }
+
     def log_status(self):
         """Display the status of all available laser lines"""
         for lsr in self.instrument.laser:

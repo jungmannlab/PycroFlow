@@ -80,26 +80,70 @@ class _FakeInstrument:
 
 
 class FakeIllumination:
-    """Duck-typed stand-in for IlluminationSystem's interlock surface."""
+    """Stand-in mirroring IlluminationSystem's PUBLIC interlock surface.
+
+    Exposes the same public methods the real object does — ``all_off()`` (the
+    T3 primitive, an ACTION returning a report dict), ``set_laser_enabled`` /
+    ``beampath_open`` / ``beampath_close`` — plus a lazily-built ``instrument``
+    (only created on first public-method call, like the real ``_ensure_monet``)
+    so any code that reaches into ``.instrument`` directly is caught here too.
+    Read hardware state for assertions via :attr:`lasers_all_off` /
+    :attr:`shutter_open`, NOT the ``all_off()`` action.
+    """
 
     def __init__(self, *, fail_laser=None, fail_shutter=False):
-        self.instrument = _FakeInstrument()
+        self.instrument = None  # lazy, like the real _ensure_monet()
         self.shutter_open = True
         self._fail_laser = fail_laser
         self._fail_shutter = fail_shutter
 
+    def _ensure_monet(self):
+        if self.instrument is None:
+            self.instrument = _FakeInstrument()
+
     def set_laser_enabled(self, laser, enabled):
+        self._ensure_monet()
         if self._fail_laser is not None and laser == self._fail_laser:
             raise RuntimeError("simulated laser comms failure")
         self.instrument.lasers[laser].enabled = enabled
 
+    def beampath_open(self):
+        self._ensure_monet()
+
     def beampath_close(self):
+        self._ensure_monet()
         if self._fail_shutter:
             raise RuntimeError("simulated shutter failure")
         self.shutter_open = False
 
-    @property
     def all_off(self):
+        """Public fail-safe primitive: disable every laser + close shutter."""
+        self._ensure_monet()
+        disabled, failed, errors = [], [], []
+        for laser in list(self.instrument.lasers.keys()):
+            try:
+                self.set_laser_enabled(laser, False)
+                disabled.append(laser)
+            except Exception as exc:  # noqa: BLE001
+                failed.append(laser)
+                errors.append(repr(exc))
+        shutter_closed = True
+        try:
+            self.beampath_close()
+        except Exception as exc:  # noqa: BLE001
+            shutter_closed = False
+            errors.append(repr(exc))
+        return {
+            "disabled": disabled,
+            "failed": failed,
+            "shutter_closed": shutter_closed,
+            "errors": errors,
+        }
+
+    @property
+    def lasers_all_off(self):
+        """State check for assertions (NOT the action ``all_off()``)."""
+        self._ensure_monet()
         return all(not la.enabled for la in self.instrument.lasers.values())
 
 
@@ -518,7 +562,7 @@ class TestLaserInterlock(unittest.TestCase):
         illu = FakeIllumination()
         result = LaserInterlock(illu).engage(reason="normal")
         self.assertTrue(result.safe)
-        self.assertTrue(illu.all_off)
+        self.assertTrue(illu.lasers_all_off)
         self.assertFalse(illu.shutter_open)
         self.assertEqual(sorted(result.lasers_disabled), [488, 561])
 
@@ -586,7 +630,7 @@ class TestLaserInterlock(unittest.TestCase):
         )
         res = svc.run_fov(cfg)
         self.assertTrue(res.aborted)
-        self.assertTrue(illu.all_off)
+        self.assertTrue(illu.lasers_all_off)
         self.assertFalse(illu.shutter_open)
 
     def test_interlock_on_injected_midrun_exception(self):
@@ -613,7 +657,7 @@ class TestLaserInterlock(unittest.TestCase):
             fs_mod.make_frame_source = orig
         self.assertIsNotNone(res.error)
         # The T3 fail-safe still fired.
-        self.assertTrue(illu.all_off)
+        self.assertTrue(illu.lasers_all_off)
         self.assertFalse(illu.shutter_open)
 
 

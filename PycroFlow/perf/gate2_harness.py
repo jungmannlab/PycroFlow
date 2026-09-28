@@ -160,30 +160,64 @@ class _FakeInstrument:
 
 
 class FakeIllumination:
-    """Duck-typed stand-in for the monet interlock surface (emulator mode).
+    """Stand-in mirroring IlluminationSystem's PUBLIC API (emulator mode).
 
-    Mirrors :class:`PycroFlow.illumination.IlluminationSystem`'s interlock
-    surface (``set_laser_enabled`` per laser + ``beampath_close``) so the T3
-    interlock exercises the SAME code path it will on hardware.
+    Exposes exactly the public surface the real
+    :class:`PycroFlow.illumination.IlluminationSystem` does — ``all_off()`` (the
+    T3 fail-safe primitive, an ACTION returning a report dict), plus
+    ``set_laser_enabled`` / ``beampath_open`` / ``beampath_close`` — so the T3
+    interlock and the harness laser-enable exercise the SAME public methods they
+    will on hardware. ``instrument`` is built LAZILY on first public-method call
+    (mirroring the real ``_ensure_monet``) so any code that reaches into
+    ``.instrument`` directly — the exact bug that failed on the first real run —
+    is caught in emulation too. Read hardware state for assertions via
+    :attr:`lasers_all_off` / :attr:`shutter_open`, NOT the ``all_off()`` action.
     """
 
     def __init__(self) -> None:
-        self.instrument = _FakeInstrument()
+        self.instrument = None  # lazy, like the real _ensure_monet()
         self.shutter_open = True
 
+    def _ensure_monet(self) -> None:
+        if self.instrument is None:
+            self.instrument = _FakeInstrument()
+
     def set_laser_enabled(self, laser, enabled) -> None:
+        self._ensure_monet()
         self.instrument.lasers[laser].enabled = enabled
 
+    def beampath_open(self) -> None:
+        self._ensure_monet()
+
     def beampath_close(self) -> None:
+        self._ensure_monet()
         self.shutter_open = False
 
+    def all_off(self) -> dict:
+        """Public fail-safe primitive: disable every laser + close shutter."""
+        self._ensure_monet()
+        disabled = []
+        for laser in list(self.instrument.lasers.keys()):
+            self.set_laser_enabled(laser, False)
+            disabled.append(laser)
+        self.beampath_close()
+        return {
+            "disabled": disabled,
+            "failed": [],
+            "shutter_closed": True,
+            "errors": [],
+        }
+
     def reset(self) -> None:
+        self._ensure_monet()
         for la in self.instrument.lasers.values():
             la.enabled = True
         self.shutter_open = True
 
     @property
-    def all_off(self) -> bool:
+    def lasers_all_off(self) -> bool:
+        """State check for assertions (NOT the action ``all_off()``)."""
+        self._ensure_monet()
         return all(not la.enabled for la in self.instrument.lasers.values())
 
 
@@ -416,20 +450,29 @@ class AcquisitionDriver:
 def _enable_signal_laser(illu, args) -> None:
     """Turn the imaging laser ON before acquiring (instrument mode only).
 
-    So live-localize sees real signal. The service's T3 interlock turns it OFF
-    at end / abort / crash — we do NOT bypass that. No-op in emulator mode (the
-    mock illumination has no real laser and the mock frames carry signal).
+    So live-localize sees real signal. Uses the PUBLIC illumination API only
+    (``set_laser_enabled`` + ``beampath_open``, both of which run the real
+    system's lazy monet init) — it does NOT read ``illu.instrument`` directly
+    (that bypasses the lazy build and AttributeErrors on hardware). The laser
+    line comes from ``--laser``; if it's omitted in instrument mode we skip
+    enabling with a clear warning rather than crashing. The service's T3
+    interlock turns the laser OFF at end / abort / crash — never bypassed. No-op
+    in emulator mode (mock frames already carry signal).
     """
     if args.mode == MODE_EMULATOR:
         return
+    laser = getattr(args, "laser", None)  # pragma: no cover - acq PC only
+    if laser is None:  # pragma: no cover - acq PC only
+        print(
+            "WARNING: --laser not given; NOT enabling any laser. Live-localize "
+            "may see no signal. Pass --laser <line> (e.g. 488) to enable."
+        )
+        return
     try:  # pragma: no cover - acq PC only
-        laser = getattr(illu.instrument, "curr_laser", None)
-        if laser is not None and hasattr(illu, "set_laser_enabled"):
-            illu.set_laser_enabled(laser, True)
-        if hasattr(illu, "beampath_open"):
-            illu.beampath_open()
+        illu.set_laser_enabled(int(laser), True)
+        illu.beampath_open()
     except Exception as exc:  # noqa: BLE001 - non-fatal; recorded in log
-        print("WARNING: could not enable laser: {!r}".format(exc))
+        print("WARNING: could not enable laser {}: {!r}".format(laser, exc))
 
 
 # ── the FOV run (both modes route through the same WP-4 service) ──────────────
@@ -839,7 +882,8 @@ def check_registry_record(run: FovRun, args) -> Check:
 
 
 def _interlock_safe(illu: FakeIllumination) -> bool:
-    return illu.all_off and not illu.shutter_open
+    # State check via the read-only property, NOT the all_off() action.
+    return illu.lasers_all_off and not illu.shutter_open
 
 
 def check_laser_interlock(args) -> Check:
@@ -1233,6 +1277,7 @@ def run_gate2(args) -> dict:
             "n_workers": args.n_workers,
             "timeout_s": args.timeout_s,
             "exposure_ms": args.exposure_ms,
+            "laser": getattr(args, "laser", None),
             "data_dir": args.data_dir,
             "archive_dir": args.archive_dir,
             "registry_url": args.registry_url,
@@ -1342,6 +1387,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_EXPOSURE_MS,
         help="Camera exposure per frame in ms (instrument-mode MDA).",
+    )
+    parser.add_argument(
+        "--laser",
+        dest="laser",
+        type=int,
+        default=None,
+        help="Imaging laser line to enable before acquiring (instrument mode), "
+        "e.g. 488 or 561. Enabled via the public illumination API; the T3 "
+        "interlock turns it off at end/abort. If omitted, no laser is enabled "
+        "(a warning is printed) so live-localize may see no signal.",
     )
     parser.add_argument(
         "--timeout",

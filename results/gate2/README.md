@@ -29,6 +29,7 @@ python -m PycroFlow.perf.gate2_harness --mode instrument ^
     --data-dir D:\gate2_raw ^
     --n-frames 2000 ^
     --exposure-ms 100 ^
+    --laser 488 ^
     --monet-setup <your-monet-config-name> ^
     --archive-dir \\pool\archive\gate2 ^
     --mm-config C:\path\to\MMConfig.cfg
@@ -37,8 +38,12 @@ python -m PycroFlow.perf.gate2_harness --mode instrument ^
 The harness **drives the acquisition itself** in instrument mode: it starts a
 real `multi_d_acquisition_events` MDA (via PycroFlow's shared MM Core) in a
 background thread writing NDTiff/OME-TIFF into `--data-dir`, turns the imaging
-laser ON, and the WP-4 tiff-tail source live-reads that movie while it is being
-written. The T3 interlock turns the laser off at the end/abort/crash.
+laser (`--laser <line>`, e.g. 488/561) ON **via the public illumination API**,
+and the WP-4 tiff-tail source live-reads that movie while it is being written.
+The T3 interlock turns the laser off at the end/abort/crash through the same
+public `IlluminationSystem.all_off()` primitive (which runs monet's lazy init
+first — so it works even before any other illumination command). Omit `--laser`
+and no laser is enabled (a warning prints); live-localize may then see no signal.
 
 Add `--registry-url http://<host>:<port> --registry-token <tok>` to post the
 per-FOV record to the **real** picasso-registry (requests-based `RegistryClient`,
@@ -104,7 +109,9 @@ confirm:
    ON and a sample with signal — pick a FOV that blinks).
 4. **The laser interlock fires on hardware.** `laser_interlock` PASS for all
    three exits (normal / abort / injected exception): after each, every laser is
-   disabled and the shutter closed. Watch the lasers physically go dark.
+   disabled and the shutter closed — via the public `IlluminationSystem.all_off()`
+   (NOT a direct `.instrument` reach, which AttributeError'd on the first real
+   run). Watch the lasers physically go dark.
 5. **pycromanager-1.0 items.** `pycromanager_1_0` PASS: NDTiff-v3/ndstorage tail
    worked, the RAM-peek probe returned frames, and numpy-2 + pycromanager-1.0 +
    picasso coexist with no ABI crash. Check the recorded `version_block`

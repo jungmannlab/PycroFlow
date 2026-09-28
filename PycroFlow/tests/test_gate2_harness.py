@@ -289,7 +289,7 @@ class TestWatchdog(unittest.TestCase):
         self.assertTrue(fov.stalled)
         self.assertIsNone(fov.result)
         # SAFETY: the interlock fired — lasers off + shutter closed.
-        self.assertTrue(illu.all_off)
+        self.assertTrue(illu.lasers_all_off)
         self.assertFalse(illu.shutter_open)
 
     def test_stalled_run_gate2_is_fail_with_stall_verdict(self):
@@ -334,6 +334,53 @@ class TestWatchdog(unittest.TestCase):
             fs_mod.make_frame_source = orig
         self.assertEqual(rc, 1)
         self.assertTrue(v["stalled"])
+
+
+class TestPublicIlluminationAPI(unittest.TestCase):
+    """The interlock + harness must drive the PUBLIC illumination API, and the
+    FakeIllumination must mirror it (all_off + lazy .instrument).
+    """
+
+    def test_fake_all_off_is_an_action_and_lazy_instrument(self):
+        illu = g2.FakeIllumination()
+        # Instrument is lazy (like the real _ensure_monet) — not built yet.
+        self.assertIsNone(illu.instrument)
+        report = illu.all_off()
+        # all_off() is an ACTION: it disabled every laser + closed the shutter.
+        self.assertTrue(illu.lasers_all_off)
+        self.assertFalse(illu.shutter_open)
+        self.assertEqual(sorted(report["disabled"]), [488, 561])
+        self.assertTrue(report["shutter_closed"])
+        # First public call built the instrument lazily.
+        self.assertIsNotNone(illu.instrument)
+
+    def test_interlock_uses_public_all_off(self):
+        from PycroFlow.live_analysis.laser_interlock import LaserInterlock
+
+        illu = g2.FakeIllumination()
+        called = {"n": 0}
+        real_all_off = illu.all_off
+
+        def spy():
+            called["n"] += 1
+            return real_all_off()
+
+        illu.all_off = spy
+        result = LaserInterlock(illu).engage(reason="test")
+        # It went through the PUBLIC all_off(), not into .instrument directly.
+        self.assertEqual(called["n"], 1)
+        self.assertTrue(result.safe)
+        self.assertEqual(sorted(result.lasers_disabled), [488, 561])
+        self.assertTrue(illu.lasers_all_off)
+        self.assertFalse(illu.shutter_open)
+
+    def test_enable_signal_laser_skips_without_laser_arg(self):
+        # Instrument mode, no --laser: must NOT crash, must NOT enable anything.
+        illu = g2.FakeIllumination()
+        args = _emulator_args(mode=g2.MODE_INSTRUMENT, laser=None)
+        g2._enable_signal_laser(illu, args)  # no exception
+        # Nothing was enabled (instrument still lazy / untouched).
+        self.assertIsNone(illu.instrument)
 
 
 if __name__ == "__main__":

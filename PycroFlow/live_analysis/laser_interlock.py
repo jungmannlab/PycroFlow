@@ -8,10 +8,14 @@ laser still tries the rest and still closes the shutter, and the interlock must
 NEVER raise into — or block — the acquisition path (a caller runs it inside a
 ``finally``). Automation defaults ``lasers_off_finally`` ON.
 
-The interlock talks to :class:`PycroFlow.illumination.IlluminationSystem`, which
-owns the monet laser control (``instrument.lasers[i].enabled = False`` per laser,
-``beampath_close()`` for the shutter). It is deliberately duck-typed on that
-surface so a test can pass a fake illumination system with the same shape.
+The interlock talks to :class:`PycroFlow.illumination.IlluminationSystem`. It
+prefers that system's PUBLIC fail-safe primitive ``all_off()`` (which runs the
+lazy monet init first — so it works even before any other illumination command
+built ``self.instrument``, the on-hardware case that used to AttributeError) and
+only falls back to the duck-typed ``instrument.lasers`` / ``set_laser_enabled`` /
+``beampath_close`` surface for pure stub fakes without ``all_off()``. It never
+reaches into ``.instrument`` on the real object without going through a method
+that runs ``_ensure_monet()``.
 """
 
 from __future__ import annotations
@@ -91,10 +95,68 @@ class LaserInterlock:
                 ": " + reason if reason else ""
             )
         )
+
+        # Prefer the illumination system's PUBLIC fail-safe primitive when it
+        # exposes one (the real IlluminationSystem.all_off — which runs
+        # _ensure_monet() first, so it works even before the lazy monet build).
+        # Reaching into ``.instrument`` directly would bypass that lazy init and
+        # AttributeError on the real object — exactly the on-hardware failure
+        # this replaces. Fall back to the duck-typed path only for pure stubs.
+        all_off = getattr(self._illu, "all_off", None)
+        if callable(all_off):
+            result = self._engage_via_all_off(all_off)
+        else:
+            result = self._engage_duck_typed()
+        if result.safe:
+            logger.info(
+                "laser interlock: all lasers off, shutter closed "
+                "(disabled {})".format(result.lasers_disabled)
+            )
+        else:
+            logger.error(
+                "laser interlock did NOT fully succeed: {}".format(result)
+            )
+        return result
+
+    # -- internals (each isolated so one failure can't abort the rest) -------
+
+    def _engage_via_all_off(self, all_off) -> "InterlockResult":
+        """Engage through the illumination system's public ``all_off()``.
+
+        ``all_off`` runs the system's own lazy monet init + fail-safe per-laser
+        disable + shutter close and returns a report dict; we map it into an
+        :class:`InterlockResult`. Never raises.
+        """
+        try:
+            report = all_off() or {}
+        except Exception as exc:  # noqa: BLE001 - interlock must never raise
+            logger.error("interlock all_off() raised: {!r}".format(exc))
+            return InterlockResult(
+                attempted=True,
+                lasers_disabled=[],
+                lasers_failed=[],
+                shutter_closed=False,
+                errors=["all_off raised: {!r}".format(exc)],
+            )
+        return InterlockResult(
+            attempted=True,
+            lasers_disabled=list(report.get("disabled", [])),
+            lasers_failed=list(report.get("failed", [])),
+            shutter_closed=bool(report.get("shutter_closed", False)),
+            errors=list(report.get("errors", [])),
+        )
+
+    def _engage_duck_typed(self) -> "InterlockResult":
+        """Fallback path for pure stubs without a public ``all_off()``.
+
+        Enumerates lasers off the duck-typed ``.instrument.lasers`` surface and
+        disables each via ``set_laser_enabled`` (or the direct monet fallback),
+        then closes the shutter. Used by minimal fakes in tests; the real
+        IlluminationSystem takes the ``all_off()`` path above instead.
+        """
         disabled: list = []
         failed: list = []
         errors: list = []
-
         for laser in self._iter_lasers(errors):
             try:
                 self._disable_one(laser)
@@ -107,28 +169,14 @@ class LaserInterlock:
                         laser, exc
                     )
                 )
-
         shutter_closed = self._close_shutter(errors)
-
-        result = InterlockResult(
+        return InterlockResult(
             attempted=True,
             lasers_disabled=disabled,
             lasers_failed=failed,
             shutter_closed=shutter_closed,
             errors=errors,
         )
-        if result.safe:
-            logger.info(
-                "laser interlock: all lasers off, shutter closed "
-                "(disabled {})".format(disabled)
-            )
-        else:
-            logger.error(
-                "laser interlock did NOT fully succeed: {}".format(result)
-            )
-        return result
-
-    # -- internals (each isolated so one failure can't abort the rest) -------
 
     def _iter_lasers(self, errors: list) -> list:
         """Return the laser identifiers to disable, tolerating a missing API.

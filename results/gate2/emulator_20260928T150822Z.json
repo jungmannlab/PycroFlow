@@ -12,12 +12,12 @@
         "queue_max_depth": 8,
         "queue_size": 8,
         "submitted": 20,
-        "wall_s": 9.4012
+        "wall_s": 8.8295
       }
     },
     {
       "criterion": "2: no silent subsample \u2014 coverage block reconciles",
-      "detail": "frames_read=2000 frames_localized=2000 expected=2000 partial=False run_id=01M3MAC6AXEQZY8GG8HJA22NTP",
+      "detail": "frames_read=2000 frames_localized=2000 expected=2000 partial=False run_id=01M3M8YC11B7SXPAXD3Z1VX0BV",
       "name": "no_silent_subsample",
       "passed": true,
       "values": {
@@ -26,7 +26,7 @@
         "frames_localized": 2000,
         "frames_read": 2000,
         "partial": false,
-        "run_id": "01M3MAC6AXEQZY8GG8HJA22NTP"
+        "run_id": "01M3M8YC11B7SXPAXD3Z1VX0BV"
       }
     },
     {
@@ -53,7 +53,7 @@
         "fov_frame_count": 2000,
         "raw_retained": true,
         "registry_ids": {
-          "acquisition_run_id": "01M3MAC6AXEQZY8GG8HJA22NTP",
+          "acquisition_run_id": "01M3M8YC11B7SXPAXD3Z1VX0BV",
           "analysis_run_id": "an-2",
           "fov_id": "fov-1",
           "metrics_id": "met-3"
@@ -101,8 +101,8 @@
       "name": "archive",
       "passed": true,
       "values": {
-        "checksum": "95ecd406c563a252a44dad28f1cfb869dc8c896bf961df7ea752fbc8b73a2b57",
-        "dest": "/tmp/tmp2_xtvwsj/archive/gate2_movie.tif",
+        "checksum": "c4478b02ce61ef36889293bafe91a286e6d5fa405f8fc35a41236822bc62101b",
+        "dest": "/tmp/tmpihej729x/archive/gate2_movie.tif",
         "local_deleted": true,
         "moved": true,
         "verified": true
@@ -114,7 +114,6 @@
     "batch_size": 100,
     "data_dir": null,
     "exposure_ms": 100.0,
-    "laser": null,
     "mm_config": null,
     "mode": "emulator",
     "monet_host": null,
@@ -131,8 +130,8 @@
   "stall_detail": "",
   "stalled": false,
   "stalled_phase": null,
-  "utc_end": "2026-09-28T15:33:24.349952+00:00",
-  "utc_start": "2026-09-28T15:33:14.416472+00:00",
+  "utc_end": "2026-09-28T15:08:22.282600+00:00",
+  "utc_start": "2026-09-28T15:08:12.882944+00:00",
   "version_block": {
     "git_commit": "d8a485767c4b8a0d553712ace5c7c25f9b39100b",
     "host": "7f64228f3b5c",

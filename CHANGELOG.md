@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`IlluminationSystem.all_off()` — public T3 fail-safe primitive**
+  (`PycroFlow/illumination.py`): runs the lazy monet init (`_ensure_monet`)
+  first, then disables **every** laser in `instrument.lasers` fail-safe
+  (one laser failing still disables the rest) and closes the shutter, returning
+  a `{disabled, failed, shutter_closed, errors}` report and never raising. The
+  T3 laser interlock (`live_analysis/laser_interlock.py`) now **prefers this
+  public method** over reaching into `.instrument` directly — the direct reach
+  bypassed the lazy build and `AttributeError`'d on the first real acquisition
+  (laser never disabled; interlock reported "all paths unsafe"). It falls back
+  to the duck-typed `.instrument`/`set_laser_enabled` surface only for pure stub
+  fakes. Gate-2 harness laser-enable now uses the public API + a `--laser` CLI
+  arg (skips with a warning if omitted) instead of `illu.instrument.curr_laser`.
+
 - **WP-GUI — composable operator frontend** (`PycroFlow.gui.live`): the
   V0.8-modelled operator UI rebuilt as a **composable shell** (C31 layout + C32
   shell + A13/C23 thin client) over WP-4's live-analysis seam. A **thin
