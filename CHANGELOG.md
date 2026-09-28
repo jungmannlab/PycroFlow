@@ -16,6 +16,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this is the one flagged non-wheel git-URL dependency), `picasso-registry` (the
   per-FOV record sink client), and `python-ulid` (sortable `run_id`, matching the
   registry's ULID convention).
+- **Stack-wide dependency harmonization (decision C41, picasso is the anchor).**
+  Adopted picasso 0.11.3's shared-lib ranges. Base: `numpy>=1.24,<2` →
+  `numpy>=2.2.6,<3` (no longer capped for pycromanager — the `[hardware]` stack
+  is bumped to numpy-2-compatible pycromanager 1.0), `pandas>=2.3` →
+  `pandas>=2.3.3,<3`, `pyyaml>=6.0` → `pyyaml>=6.0.3,<7`. `[hardware]`:
+  `matplotlib>=3.10` → `matplotlib>=3.10.7,<4`. `[gui]`: `PyQt6` →
+  `PyQt6>=6.10.2,<7`.
+- **`[hardware]`: `pycromanager==0.29.5` → `pycromanager>=1.0,<2`** (numpy-2
+  harmonization, C41). This is a MAJOR bump: the acquisition-code migration,
+  Micro-Manager compatibility, and on-instrument validation are tracked as **B8
+  / Gate-2** and are **not** done here (the acquisition code is not exercised in
+  dev/CI). Dropped the explicit `ndtiff==2.2.1` pin — pycromanager 1.0 pulls its
+  NDTiff reader (`ndstorage`) transitively, and the WP-1 reader already resolves
+  `ndstorage` → `ndtiff` → `pycromanager` in turn.
+
+### Fixed
+
+- **WP-4 NeNA oracle now a real check** (numpy 2 unmasked it). `postprocess.nena`
+  reads `Pixelsize` from its `info` argument, so passing `None` raises
+  `ValueError: info must be a dict or a list of dicts`. The live
+  `RunningMetrics` NeNA path was calling `nena(locs, None)` and swallowing that
+  error → silently returning `None`; the T2 oracle then passed vacuously (both
+  live and batch NeNA were `None`). `RunningMetrics` now carries the picasso
+  `info` (`set_info`, wired from the frame source's `camera_info()` in
+  `LiveAnalysisService`) and hands it to every `nena` call, so live NeNA is a
+  genuine value; the oracle asserts live NeNA == batch NeNA over the same frames.
 
 - Versioning now derives from the git tag via `setuptools-scm` (writes
   `PycroFlow/_version.py`); the manual `version` string in `pyproject.toml`

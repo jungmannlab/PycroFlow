@@ -31,7 +31,7 @@ classifiers = [
 dependencies = [
     "pyserial>=3.5",
     "loguru",
-    "pyyaml>=6.0",
+    "pyyaml>=6.0.3,<7",
     "pydantic>=2,<3",
     # WP-4: PycroFlow is now a picasso consumer (live localize_frames wrapper).
     # TEMP bridge: pinned to the picasso commit that carries localize_frames
@@ -46,12 +46,12 @@ dependencies = [
     "picasso-registry",
     # WP-4: sortable run_id minting (matches the registry's ULID convention).
     "python-ulid>=2",
-    # Capped below 2.0 because the [hardware] stack (pycromanager 0.29.5 /
-    # ndtiff 2.2.1) predates numpy 2's ABI break and is not validated against
-    # it; keep the cap here so a base + [hardware] install resolves to one
-    # compatible numpy. Revisit when bumping pycromanager.
-    "numpy>=1.24,<2",
-    "pandas>=2.3",
+    # Stack-wide dependency harmonization (decision C41): picasso is the anchor,
+    # so the shared numeric/IO libs adopt picasso 0.11.3's shared-lib ranges
+    # everywhere. numpy is no longer capped below 2 for pycromanager — the
+    # [hardware] stack is bumped to pycromanager 1.0 (B8), which supports numpy 2.
+    "numpy>=2.2.6,<3",
+    "pandas>=2.3.3,<3",
     "openpyxl>=3.1",
 ]
 
@@ -59,8 +59,14 @@ dependencies = [
 # Everything required to actually drive the microscope and fluid handler.
 # Installed on the lab Windows box.
 hardware = [
-    "pycromanager==0.29.5",
-    "ndtiff==2.2.1",
+    # numpy-2 harmonization (C41): pycromanager 1.0 is the numpy-2-compatible
+    # line. This is a MAJOR bump — the acquisition-code migration, Micro-Manager
+    # compatibility, and on-instrument validation are tracked as B8 / Gate-2 and
+    # are NOT done here (the acquisition code is not exercised in dev/CI tests).
+    # pycromanager 1.0 pulls its NDTiff reader (ndstorage) transitively, so no
+    # explicit ndtiff/ndstorage pin is needed here; the WP-1 reader already
+    # resolves ndstorage → ndtiff → pycromanager in turn.
+    "pycromanager>=1.0,<2",
     "PyHamiltonPSD==1.1.0",
     "ThorlabsPM100>=1.2.2",
     "pyvisa>=1.15",
@@ -75,9 +81,9 @@ hardware = [
     # (no network access during this edit).
     "pycobolt @ git+https://github.com/cobolt-lasers/pycobolt.git",
     # numpy / pandas / openpyxl moved to the base `dependencies` (core
-    # fluid/imaging modules import them at load time); the numpy<2 ABI cap
-    # lives there too.
-    "matplotlib>=3.10",
+    # fluid/imaging modules import them at load time); numpy is harmonized to
+    # the C41 anchor range there.
+    "matplotlib>=3.10.7,<4",
     "lmfit>=1.3",
     "icecream>=2.1",
     "inputimeout==1.0.4",
@@ -86,7 +92,9 @@ hardware = [
 # Stage 5: Qt GUI frontend that embeds monet's MonetMainWindow as a tab.
 # PyQt6 binding, matching monet (also on PyQt6) so its window embeds in-process.
 gui = [
-    "PyQt6",
+    # C41 harmonization: match the anchor PyQt6 range (and monet's, so its
+    # window embeds in-process).
+    "PyQt6>=6.10.2,<7",
 ]
 
 # Test and dev tooling. Sufficient to run the unit tests under CI without

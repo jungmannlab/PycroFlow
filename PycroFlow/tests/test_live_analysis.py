@@ -16,10 +16,11 @@ Tiers exercised without an instrument:
   local copy is deleted only after the archived copy is confirmed;
 * golden — the per-FOV registry payload is snapshotted.
 
-picasso's ``localize_frames`` is used for real (it's editable-installed in this
-container); NeNA equality is only asserted when numpy exposes ``trapezoid`` (the
-installed picasso calls ``np.trapezoid``, absent on the repo's pinned numpy<2 —
-see the Gate-2 note), so the oracle stays green either way.
+picasso's ``localize_frames`` and ``postprocess.nena`` are used for real (picasso
+is installed in this container). Under the C41-harmonized numpy-2 env the T2
+oracle asserts live NeNA == batch NeNA over the same frames (a REAL check — it
+previously passed vacuously because both were ``None``: ``nena`` raised on a
+``None`` info and the live path swallowed it).
 """
 
 from __future__ import annotations
@@ -62,7 +63,6 @@ except ImportError:
     _HAVE_PYQT6 = False
 
 _LOC_PARAMS = {"Box Size": 7, "Min. Net Gradient": 200}
-_NENA_OK = hasattr(np, "trapezoid")  # installed picasso calls np.trapezoid
 
 
 # ── fakes ────────────────────────────────────────────────────────────────
@@ -159,26 +159,35 @@ class TestMockFrameSource(unittest.TestCase):
 
 class TestRunningMetricsOracle(unittest.TestCase):
     def _batch_metrics(self, frames, info):
-        """Compute metrics the batch (offline) way over ALL frames at once."""
+        """Compute metrics the batch (offline) way over ALL frames at once.
+
+        NeNA is computed the same way ``RunningMetrics`` does — via
+        ``postprocess.nena(locs, info)`` with a proper picasso info list-of-dicts
+        (passing ``None`` raises ``ValueError: info must be a dict or a list of
+        dicts``, since nena reads ``Pixelsize`` from it).
+        """
         locs = localize_batch(frames, info, _LOC_PARAMS, start_frame=0)
         n_frames = frames.shape[0]
         spf = len(locs) / n_frames
         bg = float(locs["bg"].mean()) if len(locs) else None
-        nena = None
-        if _NENA_OK and len(locs) > 100:
-            from picasso import postprocess
+        from picasso import postprocess
 
-            _r, s = postprocess.nena(locs, None)
-            nena = float(s)
-        return spf, bg, nena, len(locs)
+        info_list = [info] if isinstance(info, dict) else info
+        _r, s = postprocess.nena(locs, info_list)
+        return spf, bg, float(s), len(locs)
 
     def test_live_equals_batch_over_same_frames(self):
+        # tolerance for the live==batch NeNA comparison (px). Both paths run the
+        # identical picasso nena() over the identical accumulated locs table, so
+        # they agree to fit precision; a small tolerance guards float noise.
+        nena_tol_px = 1e-6
         src = MockFrameSource(n_frames=250, height=64, width=64, seed=7)
         info = src.camera_info()
         all_frames = np.stack([src._make_frame() for _ in range(250)])
         # Reseed a fresh source so the live path sees the *same* frames.
         src2 = MockFrameSource(n_frames=250, height=64, width=64, seed=7)
         rm = RunningMetrics(nena_min_new_locs=0, nena_min_interval_s=0.0)
+        rm.set_info(info)
         rm.set_pixelsize_nm(1.0)  # NeNA nm == px so we compare directly
         for b in src2.batches(50):
             locs = localize_batch(
@@ -192,9 +201,12 @@ class TestRunningMetricsOracle(unittest.TestCase):
         self.assertEqual(live["n_locs"], b_nlocs)
         self.assertAlmostEqual(live["spots_per_frame"], b_spf, places=4)
         self.assertAlmostEqual(live["background"], round(b_bg, 4), places=3)
-        if _NENA_OK and b_nena is not None:
-            self.assertIsNotNone(live["nena_px"])
-            self.assertAlmostEqual(live["nena_px"], b_nena, places=3)
+        # The T2 oracle, now a REAL check under numpy 2: the live incremental
+        # NeNA equals the batch NeNA over the same frames. Neither is None (the
+        # whole point — it passed vacuously before when both were None).
+        self.assertIsNotNone(live["nena_px"], "live NeNA must not be None")
+        self.assertGreater(b_nena, 0.0)
+        self.assertAlmostEqual(live["nena_px"], b_nena, delta=nena_tol_px)
 
     def test_absolute_frame_indices_are_contiguous(self):
         """start_frame offset makes frame indices absolute + contiguous."""

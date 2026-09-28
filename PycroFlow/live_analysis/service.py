@@ -193,6 +193,8 @@ class LiveAnalysisService:
 
         try:
             info = source.camera_info()
+            if info is not None:
+                metrics.set_info(info)
             backend = make_compute_backend(
                 cfg.compute_kind,
                 info=info,
@@ -216,6 +218,8 @@ class LiveAnalysisService:
                 # Lazily learn camera info if the source only knew it after open.
                 if info is None:
                     info = source.camera_info()
+                    if info is not None:
+                        metrics.set_info(info)
                 ok = backend.submit(
                     LocalizeRequest(
                         seq=seq,

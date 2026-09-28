@@ -58,11 +58,35 @@ class RunningMetrics:
         self._last_nena_at = 0.0
         self._locs_at_last_nena = 0
         self._pixelsize_nm: float | None = None
+        # picasso metadata (list-of-dicts). NeNA needs a dict / list-of-dicts —
+        # ``postprocess.nena`` looks up ``Pixelsize`` from it (passing ``None``
+        # raises ``ValueError: info must be a dict or a list of dicts``), so we
+        # keep the camera info here and hand it to every NeNA call.
+        self._info: list | None = None
 
     def set_pixelsize_nm(self, pixelsize_nm: float | None) -> None:
         """Set the camera pixel size (nm), used to report NeNA in nm."""
         with self._lock:
             self._pixelsize_nm = pixelsize_nm
+
+    def set_info(self, info) -> None:
+        """Set the picasso metadata used by NeNA (a dict or list-of-dicts).
+
+        Normalised to a list-of-dicts (picasso's convention). If it carries a
+        ``Pixelsize`` and no explicit pixel size was set, that is adopted so
+        NeNA can be reported in nm.
+        """
+        with self._lock:
+            if info is None:
+                self._info = None
+                return
+            info_list = [info] if isinstance(info, dict) else list(info)
+            self._info = info_list
+            if self._pixelsize_nm is None:
+                for inf in info_list:
+                    if isinstance(inf, dict) and inf.get("Pixelsize"):
+                        self._pixelsize_nm = float(inf["Pixelsize"])
+                        break
 
     def update(self, locs: "pd.DataFrame", n_frames_in_batch: int) -> None:
         """Fold one batch's localizations + its frame count into the running set.
@@ -110,7 +134,11 @@ class RunningMetrics:
         try:
             from picasso import postprocess
 
-            _result, s_px = postprocess.nena(locs, None)
+            # nena requires info to be a dict / list-of-dicts (it reads
+            # Pixelsize from it); fall back to an empty dict when we have none
+            # so the call never raises just for lack of metadata.
+            info = self._info if self._info is not None else {}
+            _result, s_px = postprocess.nena(locs, info)
         except Exception:
             return
         self._nena_px = float(s_px)
