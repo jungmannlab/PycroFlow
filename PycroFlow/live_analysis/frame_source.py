@@ -644,6 +644,7 @@ class NdTiffDatasetFrameSource(FrameSource):
         time_axis: str = "time",
         poll_s: float = 0.05,
         idle_grace_s: float = 2.0,
+        first_frame_timeout_s: float = 120.0,
     ) -> None:
         self._ds = dataset
         self._pixelsize_nm = pixelsize_nm
@@ -652,6 +653,12 @@ class NdTiffDatasetFrameSource(FrameSource):
         # After is_finished(), wait this long for a final frame whose index is
         # not yet visible before declaring the stream done.
         self._idle_grace_s = idle_grace_s
+        # If the FIRST frame never arrives within this window, stop instead of
+        # awaiting forever — a not-producing camera / stuck MDA (contention, MM
+        # GUI holding the camera) otherwise hangs until the outer watchdog.
+        self._first_frame_timeout_s = first_frame_timeout_s
+        #: Set True if we gave up waiting for the first frame (diagnostics).
+        self.no_frames_timed_out = False
         self._read = 0
         self._stop = threading.Event()
 
@@ -693,6 +700,7 @@ class NdTiffDatasetFrameSource(FrameSource):
     def batches(self, batch_size: int) -> Iterator[Batch]:
         buf: list = []
         start = 0
+        t0 = time.monotonic()
         while not self._stop.is_set():
             i = self._read + len(buf)
             if self._has(i):
@@ -710,6 +718,17 @@ class NdTiffDatasetFrameSource(FrameSource):
                     buf = []
                 continue
             # frame i not present yet
+            # Fail fast if the acquisition never produced a single frame (camera
+            # not triggering / MDA stuck / device contention) — else we await
+            # until the outer watchdog (minutes wasted).
+            if (
+                self._read == 0
+                and not buf
+                and self._first_frame_timeout_s
+                and (time.monotonic() - t0) > self._first_frame_timeout_s
+            ):
+                self.no_frames_timed_out = True
+                break
             if self._finished():
                 deadline = time.monotonic() + self._idle_grace_s
                 while (

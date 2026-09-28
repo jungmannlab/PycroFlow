@@ -127,6 +127,21 @@ class TestNdTiffDatasetFrameSource(unittest.TestCase):
         self.assertFalse(t.is_alive())  # close() broke the poll loop
         self.assertEqual(out, [])  # nothing was ever available
 
+    def test_first_frame_timeout_fails_fast(self):
+        # A camera that never produces (and never finishes) must NOT hang until
+        # the outer watchdog — the first-frame timeout bails fast.
+        ds = _LiveDataset()  # no frames ever added, is_finished() stays False
+        src = NdTiffDatasetFrameSource(
+            ds, poll_s=0.005, first_frame_timeout_s=0.1
+        )
+        t0 = time.monotonic()
+        out = list(src.batches(batch_size=4))
+        elapsed = time.monotonic() - t0
+        self.assertEqual(out, [])
+        self.assertEqual(src.frames_read(), 0)
+        self.assertTrue(src.no_frames_timed_out)
+        self.assertLess(elapsed, 5.0)  # bailed ~0.1 s, did not hang
+
 
 if __name__ == "__main__":
     unittest.main()

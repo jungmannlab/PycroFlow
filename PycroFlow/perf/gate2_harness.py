@@ -601,6 +601,7 @@ def run_clean_fov(args, registry, illu) -> FovRun:
             cfg.source_kwargs = {
                 "dataset": ds,
                 "pixelsize_nm": cfg.pixelsize_nm,
+                "first_frame_timeout_s": args.first_frame_timeout_s,
             }
         else:
             print(
@@ -1538,6 +1539,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Effective camera pixel size in nm, for accurate NeNA-in-nm "
         "(instrument mode). If omitted picasso assumes 130 nm (a warning; NeNA "
         "still computes, only its nm scaling is approximate).",
+    )
+    parser.add_argument(
+        "--first-frame-timeout",
+        dest="first_frame_timeout_s",
+        type=float,
+        default=120.0,
+        help="Instrument mode: fail fast if the acquisition produces NO first "
+        "frame within this many seconds (camera not triggering / MDA stuck / "
+        "device contention) instead of awaiting the full --timeout.",
     )
     return parser
 
