@@ -169,16 +169,32 @@ class TestBufferSizing(unittest.TestCase):
 
 
 class TestInstrumentGuards(unittest.TestCase):
+    """The data_dir guard must be hermetic w.r.t. pycromanager's presence.
+
+    ``InstrumentBackend.start()`` must refuse to run without a ``data_dir``
+    (rather than risk writing the raw NDTiff movie into the repo). This has to
+    hold deterministically whether or not pycromanager is importable: on base
+    CI it is absent (mocked), but in the dev container and on the acq PC (which
+    installs the ``[hardware]`` extra) it is real, and then ``get_core()`` would
+    attempt a live Micro-Manager ZMQ connect. So we patch ``mm_core.get_core``
+    to exercise the guard WITHOUT any real MM connect in either environment.
+    """
+
     def test_instrument_requires_data_dir(self):
-        # pycromanager is mocked in the test env; start() must refuse to run
-        # without a data_dir rather than risk writing the raw movie into the
-        # repo.
         from PycroFlow.perf.backends import InstrumentBackend
 
         cfg = PerfConfig(mode="instrument", data_dir=None)
         backend = InstrumentBackend(cfg)
-        with self.assertRaises(ValueError):
-            backend.start()
+        # Patch the Core accessor so — even if the guard were ever reordered
+        # after the connect — the test never attempts a real MM ZMQ connect
+        # (which, with pycromanager installed, raises the wrong error / hangs).
+        with mock.patch("PycroFlow.services.mm_core.get_core") as get_core:
+            with self.assertRaises(ValueError):
+                backend.start()
+        # The guard fires BEFORE any Core connect is attempted, so the data_dir
+        # check can never be shadowed by a connect failure/hang (locks in the
+        # fail-fast ordering: the guard is hoisted ahead of the connect).
+        get_core.assert_not_called()
 
 
 class TestReaderModeConfig(unittest.TestCase):
