@@ -36,11 +36,13 @@ pipeline and does NOT modify production code (it is purely additive).
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import json
 import os
 import platform
 import socket
 import sys
+import threading
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -70,6 +72,14 @@ DEFAULT_EMU_WIDTH = 48
 DEFAULT_EMU_SEED = 7
 # Loosened net-gradient so the mock movie yields plenty of spots for NeNA.
 _EMU_LOCALIZE_PARAMS = {"Box Size": 7, "Min. Net Gradient": 200}
+
+# Instrument-mode acquisition defaults.
+DEFAULT_EXPOSURE_MS = 100.0
+# Watchdog: an overall wall-clock cap on the FOV (acquire + live-tail). Generous
+# for a real MDA (2000 frames @ 100 ms ≈ 200 s) but finite, so a stall — e.g. no
+# MDA ever starts and the tiff-tail source polls an empty dir forever — is caught
+# instead of hanging. Configurable via --timeout.
+DEFAULT_TIMEOUT_S = 900.0
 
 
 # ── check bookkeeping ───────────────────────────────────────────────────────
@@ -309,6 +319,119 @@ def build_version_block(mode: str) -> dict:
     return block
 
 
+# ── acquisition driver (instrument mode) ─────────────────────────────────────
+
+
+class AcquisitionDriver:
+    """Drive a real MDA to ``data_dir`` so the tiff-tail source has something.
+
+    In ``--mode instrument`` the WP-4 tiff-tail :class:`FrameSource` only TAILS a
+    movie in ``data_dir`` — it never starts an acquisition. Without a driver the
+    source polls an empty dir forever (the 60-min hang). This driver spawns the
+    acquisition in a **background thread** while the service tails ``data_dir``,
+    which is exactly the PycroFlow-spawned "live" path WP-4 targets.
+
+    It reuses PycroFlow's shared Micro-Manager Core
+    (:func:`PycroFlow.services.mm_core.get_core`, the same connection the GUI /
+    monet use) and pycromanager's ``Acquisition`` + ``multi_d_acquisition_events``
+    — the identical acquisition primitive ``PycroFlow.imaging`` uses
+    (``record_movie`` / ``AcquisitionThread``); the full ``ImagingSystem`` is not
+    reused because it needs a protocol + PFS config Gate-2 does not have. The MDA
+    writes a standard NDTiff / OME-TIFF dataset into ``data_dir`` — the layout the
+    tiff-tail ``_find_movie_file`` already discovers. In emulator mode this is a
+    no-op (``MockFrameSource`` fabricates frames).
+
+    pycromanager is imported lazily so emulator mode never needs it.
+    """
+
+    def __init__(self, args) -> None:
+        self.args = args
+        self._thread: threading.Thread | None = None
+        self._error: BaseException | None = None
+        self._started = threading.Event()
+        self._done = threading.Event()
+        self._acq = None
+
+    def is_noop(self) -> bool:
+        return self.args.mode == MODE_EMULATOR
+
+    def start(self) -> None:
+        """Start acquiring in a background thread (no-op in emulator mode)."""
+        if self.is_noop():
+            self._done.set()
+            return
+        self._thread = threading.Thread(  # pragma: no cover - acq PC only
+            target=self._run, name="gate2-acq", daemon=True
+        )
+        self._thread.start()  # pragma: no cover - acq PC only
+
+    def _run(self) -> None:  # pragma: no cover - acq PC only (needs MM)
+        try:
+            from pycromanager import (
+                Acquisition,
+                multi_d_acquisition_events,
+            )
+
+            from PycroFlow.services import mm_core
+
+            core = mm_core.get_core()
+            try:
+                core.set_exposure(float(self.args.exposure_ms))
+            except Exception:
+                pass
+            os.makedirs(self.args.data_dir, exist_ok=True)
+            events = multi_d_acquisition_events(
+                num_time_points=int(self.args.n_frames),
+                time_interval_s=0,
+                channel_exposures_ms=[float(self.args.exposure_ms)],
+                order="tcpz",
+            )
+            self._started.set()
+            with Acquisition(
+                directory=self.args.data_dir,
+                name="gate2_raw",
+                show_display=False,
+            ) as acq:
+                self._acq = acq
+                acq.acquire(events)
+        except BaseException as exc:  # noqa: BLE001 - surfaced to the driver
+            self._error = exc
+        finally:
+            self._started.set()
+            self._done.set()
+
+    def error(self) -> BaseException | None:
+        return self._error
+
+    def wait(self, timeout: float | None = None) -> bool:
+        """Block until acquisition finishes; True if it completed in time."""
+        return self._done.wait(timeout=timeout)
+
+    def close(self) -> None:
+        """Best-effort teardown of the acquisition thread."""
+        if self._thread is not None:  # pragma: no cover - acq PC only
+            self._thread.join(timeout=10.0)
+
+
+def _enable_signal_laser(illu, args) -> None:
+    """Turn the imaging laser ON before acquiring (instrument mode only).
+
+    So live-localize sees real signal. The service's T3 interlock turns it OFF
+    at end / abort / crash — we do NOT bypass that. No-op in emulator mode (the
+    mock illumination has no real laser and the mock frames carry signal).
+    """
+    if args.mode == MODE_EMULATOR:
+        return
+    try:  # pragma: no cover - acq PC only
+        laser = getattr(illu.instrument, "curr_laser", None)
+        if laser is not None and hasattr(illu, "set_laser_enabled"):
+            illu.set_laser_enabled(laser, True)
+        if hasattr(illu, "beampath_open"):
+            illu.beampath_open()
+    except Exception as exc:  # noqa: BLE001 - non-fatal; recorded in log
+        print("WARNING: could not enable laser: {!r}".format(exc))
+
+
 # ── the FOV run (both modes route through the same WP-4 service) ──────────────
 
 
@@ -336,7 +459,7 @@ def _make_fov_config(args) -> FovConfig:
             pixelsize_nm=130.0,
             write_target=WRITE_TARGET_LOCAL,
         )
-    # instrument mode
+    # instrument mode: tail the movie the AcquisitionDriver writes to data_dir.
     return FovConfig(  # pragma: no cover - exercised only on the acq PC
         source_kind="tiff-tail",
         source_kwargs={"acq_dir": args.data_dir},
@@ -344,22 +467,46 @@ def _make_fov_config(args) -> FovConfig:
         n_workers=args.n_workers,
         use_processes=True,
         write_target=WRITE_TARGET_LOCAL,
+        movie_source_path=args.data_dir,
+        archive_dir=args.archive_dir,
     )
 
 
 @dataclass
 class FovRun:
-    """The outcome of one clean FOV run, shared by the coverage/metrics checks."""
+    """The outcome of one clean FOV run, shared by the coverage/metrics checks.
 
-    result: object  # FovResult
-    illu: FakeIllumination | None
+    ``stalled`` is True if the watchdog fired (the FOV did not finish within
+    ``--timeout``); ``result`` is then ``None`` and the coverage/metrics checks
+    fail with a stall detail.
+    """
+
+    result: object  # FovResult or None (on stall)
+    illu: object | None
     registry: object | None
     registry_ids: dict | None
     wall_s: float
+    stalled: bool = False
+    stall_detail: str = ""
+    acq_error: str | None = None
+
+
+class _StallTimeout(Exception):
+    """Raised internally when the FOV exceeds the watchdog timeout."""
 
 
 def run_clean_fov(args, registry, illu) -> FovRun:
-    """Run one clean FOV through the real WP-4 service (normal end)."""
+    """Run one clean FOV through the real WP-4 service, under a watchdog.
+
+    Instrument mode: start the :class:`AcquisitionDriver` (a background MDA to
+    ``data_dir``) + enable the imaging laser, then the service tails ``data_dir``
+    live. Emulator mode: the driver is a no-op and ``MockFrameSource`` fabricates
+    frames. Either way the whole FOV runs on a worker thread bounded by
+    ``args.timeout_s``; on timeout the watchdog fires the T3 interlock FIRST
+    (safety — never leave lasers hot on a stall), dumps all thread tracebacks,
+    requests abort + tears the driver down, and returns a ``stalled`` result so
+    the caller writes a non-zero verdict instead of hanging.
+    """
     svc = LiveAnalysisService(
         registry_client=registry,
         illumination_system=illu,
@@ -367,19 +514,110 @@ def run_clean_fov(args, registry, illu) -> FovRun:
     )
     svc.start_experiment()
     cfg = _make_fov_config(args)
+
+    driver = AcquisitionDriver(args)
+    driver.start()
+    _enable_signal_laser(illu, args)
+
+    holder: dict = {}
+
+    def _work() -> None:
+        try:
+            holder["result"] = svc.run_fov(cfg)
+        except Exception as exc:  # noqa: BLE001 - surfaced via holder
+            holder["error"] = exc
+
+    worker = threading.Thread(target=_work, name="gate2-fov", daemon=True)
     t0 = time.perf_counter()
-    result = svc.run_fov(cfg)
+    worker.start()
+    worker.join(timeout=args.timeout_s)
     wall = time.perf_counter() - t0
+
+    if worker.is_alive():
+        # STALL. Safety first: fire the interlock directly (do not wait on the
+        # hung service), then dump tracebacks, request abort + tear down.
+        detail = _handle_stall(svc, driver, illu, args, wall)
+        return FovRun(
+            result=None,
+            illu=illu,
+            registry=registry,
+            registry_ids=None,
+            wall_s=wall,
+            stalled=True,
+            stall_detail=detail,
+            acq_error=(
+                repr(driver.error()) if driver.error() is not None else None
+            ),
+        )
+
+    driver.close()
+    if "error" in holder:
+        # The service itself raised (its own finally already ran the interlock).
+        raise holder["error"]
+    result = holder["result"]
     return FovRun(
         result=result,
-        illu=illu if isinstance(illu, FakeIllumination) else None,
+        illu=illu,
         registry=registry,
         registry_ids=result.registry_ids,
         wall_s=wall,
+        acq_error=(
+            repr(driver.error()) if driver.error() is not None else None
+        ),
+    )
+
+
+def _handle_stall(svc, driver, illu, args, wall) -> str:
+    """Watchdog stall handler: interlock-first, then diagnostics + teardown."""
+    # (a) SAFETY FIRST — lasers off + shutter closed, directly + immediately.
+    try:
+        LaserInterlock(illu).engage(reason="gate2 watchdog stall")
+    except Exception as exc:  # noqa: BLE001 - interlock must never raise up
+        print("WARNING: watchdog interlock raised: {!r}".format(exc))
+    # (b) DUMP all thread tracebacks so we see WHERE it stalled.
+    print(
+        "\n=== GATE-2 WATCHDOG: FOV exceeded {}s; dumping tracebacks ===".format(
+            args.timeout_s
+        ),
+        flush=True,
+    )
+    faulthandler.dump_traceback(file=sys.stderr)
+    # (c) Request abort + tear the acquisition down (best-effort; the hung FOV
+    #     thread is a daemon and is abandoned — we do not block on it).
+    try:
+        svc.request_abort()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        driver.close()
+    except Exception:  # noqa: BLE001
+        pass
+    return (
+        "FOV stalled: did not finish within {}s (no frames tailed / MDA never "
+        "produced?). Interlock fired; tracebacks dumped to stderr.".format(
+            args.timeout_s
+        )
     )
 
 
 # ── individual checks ────────────────────────────────────────────────────────
+
+
+def _stall_check(name: str, criterion: str, run: FovRun) -> Check | None:
+    """Return a failed Check if the FOV stalled, else None.
+
+    The four FOV-derived checks (keep-up, coverage, live-metrics, registry) have
+    no valid data on a watchdog stall, so each fails with the stall detail.
+    """
+    if run.stalled or run.result is None:
+        return Check(
+            name=name,
+            criterion=criterion,
+            passed=False,
+            detail=run.stall_detail or "FOV produced no result",
+            values={"stalled": True, "acq_error": run.acq_error},
+        )
+    return None
 
 
 def check_keep_up(run: FovRun, args) -> Check:
@@ -393,6 +631,11 @@ def check_keep_up(run: FovRun, args) -> Check:
     throughput proper live in instrument mode's MDA; here the load-bearing
     keep-up signal is the no-drop + no-overflow invariant.
     """
+    stall = _stall_check(
+        "keep_up", "1: acquisition uncompromised / reader keeps up", run
+    )
+    if stall is not None:
+        return stall
     res = run.result
     stats = res.backend_stats or {}
     dropped = int(stats.get("dropped", 0))
@@ -436,6 +679,13 @@ def check_no_silent_subsample(run: FovRun, args) -> Check:
     ``run_id`` is present on the result. This is the invariant the WP-4 coverage
     block exists to guarantee.
     """
+    stall = _stall_check(
+        "no_silent_subsample",
+        "2: no silent subsample — coverage block reconciles",
+        run,
+    )
+    if stall is not None:
+        return stall
     res = run.result
     stats = res.backend_stats or {}
     frames_read = int(res.frames_read)
@@ -485,6 +735,13 @@ def check_live_metrics_real(run: FovRun, args) -> Check:
     None NeNA would mean the live path silently swallowed the compute (the exact
     regression the WP-4 T2 oracle guards).
     """
+    stall = _stall_check(
+        "live_metrics_real",
+        "3: live NeNA / locs-per-frame / background are real",
+        run,
+    )
+    if stall is not None:
+        return stall
     m = run.result.metrics or {}
     nena_px = m.get("nena_px")
     nena_nm = m.get("nena_nm")
@@ -525,9 +782,16 @@ def check_registry_record(run: FovRun, args) -> Check:
     ``run_id``. We assert the ids came back, the acquisition row is
     ``live_localized`` with ``raw_retained``, and the FOV's ``frame_count``
     reconciles with the frames actually localized (the record's own coverage).
-    In emulator the registry is the picasso-registry in-memory mock; on the acq
-    PC it is the real client if ``--registry-url`` is given, else the mock.
+    In emulator the registry is the harness's in-memory stub; on the acq PC it
+    is the real client if ``--registry-url`` is given, else the stub.
     """
+    stall = _stall_check(
+        "registry_record",
+        "4: one per-FOV record reaches the registry",
+        run,
+    )
+    if stall is not None:
+        return stall
     res = run.result
     ids = run.registry_ids
     reg = run.registry
@@ -597,24 +861,19 @@ def check_laser_interlock(args) -> Check:
         if isinstance(i, FakeIllumination):
             i.reset()
 
-    # (a) NORMAL END — the service's finally engages the interlock.
+    # (a) NORMAL END — the service's finally engages the interlock. In instrument
+    #     mode a short driver-backed acquisition supplies frames; both paths run
+    #     under a sub-timeout so a mis-wired scope can't hang the safety check.
     _reset(illu)
-    svc = LiveAnalysisService(
-        illumination_system=illu, lasers_off_finally=True
-    )
-    svc.start_experiment()
-    svc.run_fov(_short_fov(args))
-    paths["normal_end"] = _exit_safe(illu)
+    res_a, ok_a = _run_interlock_fov(args, illu, abort=False)
+    paths["normal_end"] = ok_a and _exit_safe(illu)
 
     # (b) EARLY-ABORT — abort requested before any frame is processed.
     _reset(illu)
-    svc = LiveAnalysisService(
-        illumination_system=illu, lasers_off_finally=True
+    res_b, ok_b = _run_interlock_fov(args, illu, abort=True)
+    paths["early_abort"] = (
+        ok_b and _exit_safe(illu) and bool(res_b is not None and res_b.aborted)
     )
-    svc.start_experiment()
-    svc.request_abort()
-    res_ab = svc.run_fov(_short_fov(args))
-    paths["early_abort"] = _exit_safe(illu) and bool(res_ab.aborted)
 
     # (c) INJECTED MID-RUN EXCEPTION — a frame source that blows up mid-iterate.
     _reset(illu)
@@ -646,12 +905,19 @@ def _exit_safe(illu) -> bool:
     )  # pragma: no cover - acq PC only
 
 
+_INTERLOCK_N_FRAMES = 40
+
+
 def _short_fov(args) -> FovConfig:
     """A tiny FOV config for the interlock paths (fast; coverage irrelevant)."""
     if args.mode == MODE_EMULATOR:
         return FovConfig(
             source_kind="mock",
-            source_kwargs={"n_frames": 40, "height": 24, "width": 24},
+            source_kwargs={
+                "n_frames": _INTERLOCK_N_FRAMES,
+                "height": 24,
+                "width": 24,
+            },
             localize_params=dict(_EMU_LOCALIZE_PARAMS),
             batch_size=20,
             use_processes=False,
@@ -662,6 +928,63 @@ def _short_fov(args) -> FovConfig:
         batch_size=args.batch_size,
         use_processes=True,
     )
+
+
+def _run_interlock_fov(args, illu, *, abort: bool):
+    """Run one short interlock-path FOV, bounded so it can never hang.
+
+    Emulator: ``MockFrameSource`` supplies frames. Instrument: a short driver-
+    backed acquisition (``_INTERLOCK_N_FRAMES``) writes to ``data_dir`` while the
+    service tails it. Runs on a worker thread with a sub-timeout; on timeout the
+    interlock is fired directly and ``(None, False)`` is returned so the safety
+    check FAILS loudly rather than blocking. Returns ``(FovResult|None, ok)``.
+    """
+    svc = LiveAnalysisService(
+        illumination_system=illu, lasers_off_finally=True
+    )
+    svc.start_experiment()
+    if abort:
+        svc.request_abort()
+
+    # Short-FOV driver: reuse the main driver against a small frame count.
+    sub_args = argparse.Namespace(**vars(args))
+    sub_args.n_frames = _INTERLOCK_N_FRAMES
+    driver = AcquisitionDriver(sub_args)
+    driver.start()
+    if not abort:
+        _enable_signal_laser(illu, args)
+
+    holder: dict = {}
+
+    def _work():
+        try:
+            holder["res"] = svc.run_fov(_short_fov(args))
+        except Exception as exc:  # noqa: BLE001
+            holder["err"] = exc
+
+    worker = threading.Thread(
+        target=_work, name="gate2-interlock", daemon=True
+    )
+    worker.start()
+    # A short sub-timeout: a real 40-frame MDA is seconds; be generous but
+    # finite, and never larger than the overall timeout (so a small configured
+    # timeout keeps the safety check snappy too).
+    sub_timeout = min(max(30.0, min(args.timeout_s, 120.0)), args.timeout_s)
+    worker.join(timeout=sub_timeout)
+    if worker.is_alive():  # pragma: no cover - acq PC stall only
+        try:
+            LaserInterlock(illu).engage(reason="gate2 interlock-path stall")
+        except Exception:  # noqa: BLE001
+            pass
+        faulthandler.dump_traceback(file=sys.stderr)
+        svc.request_abort()
+        driver.close()
+        return None, False
+    driver.close()
+    if "err" in holder:
+        # The service raised; its own finally already fired the interlock.
+        return None, True
+    return holder.get("res"), True
 
 
 def _run_exploding_fov(illu) -> bool:
@@ -854,9 +1177,13 @@ def run_gate2(args) -> dict:
 
     registry, close_registry = _make_registry(args)
     illu = _make_illumination(args)
+    stalled = False
+    stall_detail = ""
     try:
-        # One clean FOV drives criteria 1-4.
+        # One clean FOV drives criteria 1-4 (bounded by the watchdog).
         fov = run_clean_fov(args, registry, illu)
+        stalled = fov.stalled
+        stall_detail = fov.stall_detail
         runner.add(check_keep_up(fov, args))
         runner.add(check_no_silent_subsample(fov, args))
         runner.add(check_live_metrics_real(fov, args))
@@ -896,12 +1223,18 @@ def run_gate2(args) -> dict:
         "utc_start": utc_start,
         "utc_end": utc_end,
         "version_block": version_block,
+        "stalled": stalled,
+        "stalled_phase": "clean_fov" if stalled else None,
+        "stall_detail": stall_detail,
         "config": {
             "mode": args.mode,
             "n_frames": args.n_frames,
             "batch_size": args.batch_size,
             "n_workers": args.n_workers,
+            "timeout_s": args.timeout_s,
+            "exposure_ms": args.exposure_ms,
             "data_dir": args.data_dir,
+            "archive_dir": args.archive_dir,
             "registry_url": args.registry_url,
             "mm_config": args.mm_config,
             "monet_host": args.monet_host,
@@ -954,6 +1287,8 @@ def print_summary(verdict: dict) -> None:
                 vb.get("mm_version"), vb.get("ndtiff"), vb.get("ndstorage")
             )
         )
+    if verdict.get("stalled"):
+        print("STALLED in phase: {}".format(verdict.get("stalled_phase")))
     print(
         "OVERALL: {}".format(
             "GATE-2 PASS" if verdict["gate2_pass"] else "GATE-2 FAIL"
@@ -1000,6 +1335,29 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=2,
         help="Localize worker processes (instrument mode).",
+    )
+    parser.add_argument(
+        "--exposure-ms",
+        dest="exposure_ms",
+        type=float,
+        default=DEFAULT_EXPOSURE_MS,
+        help="Camera exposure per frame in ms (instrument-mode MDA).",
+    )
+    parser.add_argument(
+        "--timeout",
+        dest="timeout_s",
+        type=float,
+        default=DEFAULT_TIMEOUT_S,
+        help="Watchdog: max wall-clock seconds for the clean FOV (acquire + "
+        "live-tail). On timeout the harness fires the T3 interlock, dumps "
+        "tracebacks, and exits non-zero instead of hanging.",
+    )
+    parser.add_argument(
+        "--archive-dir",
+        dest="archive_dir",
+        default=None,
+        help="Network archive dir for the movie (instrument mode; the "
+        "checksum-verified local->archive move). Omit to skip the move.",
     )
     parser.add_argument(
         "--out",
@@ -1076,14 +1434,39 @@ def main(argv: list[str] | None = None) -> int:
         )
         args.output_dir = os.path.join(repo_root, "results", "gate2")
 
+    # Last-ditch self-report: even if the harness's own watchdog is itself
+    # wedged, faulthandler dumps every thread's traceback after a hard deadline
+    # (timeout + generous slack) so a silent hang can never recur unseen.
+    faulthandler.enable()
+    hard_deadline = args.timeout_s + 300.0
+    try:
+        faulthandler.dump_traceback_later(hard_deadline, exit=False)
+    except Exception:  # noqa: BLE001 - not fatal if unavailable
+        pass
+
     print(
-        "Running Gate-2 harness: mode={} n_frames={} batch_size={}".format(
-            args.mode, args.n_frames, args.batch_size
+        "Running Gate-2 harness: mode={} n_frames={} batch_size={} "
+        "timeout={}s".format(
+            args.mode, args.n_frames, args.batch_size, args.timeout_s
         )
     )
-    verdict = run_gate2(args)
+    try:
+        verdict = run_gate2(args)
+    finally:
+        try:
+            faulthandler.cancel_dump_traceback_later()
+        except Exception:  # noqa: BLE001
+            pass
     path = write_verdict(verdict, args.output_dir)
     print_summary(verdict)
+    if verdict.get("stalled"):
+        print(
+            "\nSTALL: {} — see the dumped tracebacks above. Interlock was "
+            "fired (lasers off + shutter closed).".format(
+                verdict.get("stall_detail")
+            ),
+            file=sys.stderr,
+        )
     print("Wrote verdict: {}".format(path))
     return 0 if verdict["gate2_pass"] else 1
 

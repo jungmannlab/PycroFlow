@@ -9,34 +9,31 @@ and the verdict serialises to the documented JSON shape.
 
 from __future__ import annotations
 
-import argparse
 import builtins
 import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 
 from PycroFlow.perf import gate2_harness as g2
 
 
 def _emulator_args(**overrides):
-    """A fully-populated emulator-mode args namespace (small + fast)."""
-    base = dict(
-        mode=g2.MODE_EMULATOR,
-        n_frames=300,
-        batch_size=50,
-        n_workers=2,
-        output_dir=None,
-        data_dir=None,
-        registry_url=None,
-        registry_token=None,
-        mm_config=None,
-        mm_port=4827,
-        monet_host=None,
-    )
-    base.update(overrides)
-    return argparse.Namespace(**base)
+    """A fully-populated emulator-mode args namespace (small + fast).
+
+    Built from the real parser defaults so it never drifts from the CLI, then
+    overridden for a quick hermetic run.
+    """
+    args = g2.build_parser().parse_args(["--mode", g2.MODE_EMULATOR])
+    args.n_frames = 300
+    args.batch_size = 50
+    args.n_workers = 2
+    args.timeout_s = 60.0
+    for k, v in overrides.items():
+        setattr(args, k, v)
+    return args
 
 
 class TestCheckRunner(unittest.TestCase):
@@ -248,6 +245,95 @@ class TestMockPathIsFastapiFree(unittest.TestCase):
         finally:
             builtins.__import__ = real_import
             sys.modules.update(saved)
+
+
+class TestWatchdog(unittest.TestCase):
+    """The watchdog must catch a stalled FOV: interlock fired, non-zero exit,
+    verdict written, and NO hang — the exact failure that hung the acq PC.
+    """
+
+    def _patch_hanging_source(self):
+        """Patch make_frame_source with one whose batches() blocks forever."""
+        import PycroFlow.live_analysis.frame_source as fs_mod
+        from PycroFlow.live_analysis.frame_source import MockFrameSource
+
+        class _Hanging(MockFrameSource):
+            def batches(self, batch_size):
+                # Never yields: models a tiff-tail source polling an empty
+                # data_dir because no MDA ever started (the acq-PC hang).
+                while not self._stop.is_set():
+                    time.sleep(0.02)
+                return
+                yield  # pragma: no cover - unreachable, makes this a generator
+
+        orig = fs_mod.make_frame_source
+        fs_mod.make_frame_source = lambda kind, **kw: _Hanging(
+            n_frames=1000, height=16, width=16
+        )
+        return fs_mod, orig
+
+    def test_stalled_fov_fires_interlock_and_returns_stalled(self):
+        fs_mod, orig = self._patch_hanging_source()
+        illu = g2.FakeIllumination()
+        registry = g2.InMemoryRegistryStub()
+        args = _emulator_args(timeout_s=0.5)
+        try:
+            start = time.monotonic()
+            fov = g2.run_clean_fov(args, registry, illu)
+            elapsed = time.monotonic() - start
+        finally:
+            fs_mod.make_frame_source = orig
+            registry.close()
+        # It returned (did not hang) shortly after the timeout.
+        self.assertLess(elapsed, 20.0)
+        self.assertTrue(fov.stalled)
+        self.assertIsNone(fov.result)
+        # SAFETY: the interlock fired — lasers off + shutter closed.
+        self.assertTrue(illu.all_off)
+        self.assertFalse(illu.shutter_open)
+
+    def test_stalled_run_gate2_is_fail_with_stall_verdict(self):
+        fs_mod, orig = self._patch_hanging_source()
+        args = _emulator_args(timeout_s=0.5)
+        try:
+            verdict = g2.run_gate2(args)
+        finally:
+            fs_mod.make_frame_source = orig
+        self.assertFalse(verdict["gate2_pass"])
+        self.assertTrue(verdict["stalled"])
+        self.assertEqual(verdict["stalled_phase"], "clean_fov")
+        # The four FOV-derived checks fail with a stall detail; archive still ran.
+        by_name = {c["name"]: c for c in verdict["checks"]}
+        self.assertFalse(by_name["no_silent_subsample"]["passed"])
+        self.assertTrue(by_name["no_silent_subsample"]["values"]["stalled"])
+        self.assertTrue(by_name["archive"]["passed"])
+
+    def test_main_stalled_returns_nonzero_and_writes_verdict(self):
+        fs_mod, orig = self._patch_hanging_source()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                rc = g2.main(
+                    [
+                        "--mode",
+                        "emulator",
+                        "--n-frames",
+                        "1000",
+                        "--timeout",
+                        "0.5",
+                        "--out",
+                        tmp,
+                    ]
+                )
+                written = [f for f in os.listdir(tmp) if f.endswith(".json")]
+                self.assertEqual(len(written), 1)
+                with open(
+                    os.path.join(tmp, written[0]), encoding="utf-8"
+                ) as fh:
+                    v = json.load(fh)
+        finally:
+            fs_mod.make_frame_source = orig
+        self.assertEqual(rc, 1)
+        self.assertTrue(v["stalled"])
 
 
 if __name__ == "__main__":

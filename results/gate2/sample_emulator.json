@@ -12,12 +12,12 @@
         "queue_max_depth": 8,
         "queue_size": 8,
         "submitted": 20,
-        "wall_s": 8.3579
+        "wall_s": 8.6733
       }
     },
     {
       "criterion": "2: no silent subsample \u2014 coverage block reconciles",
-      "detail": "frames_read=2000 frames_localized=2000 expected=2000 partial=False run_id=01M3M4M4A3FCJHWRA62ZBPWT7B",
+      "detail": "frames_read=2000 frames_localized=2000 expected=2000 partial=False run_id=01M3M8TNVBN557R105X11BXJD0",
       "name": "no_silent_subsample",
       "passed": true,
       "values": {
@@ -26,7 +26,7 @@
         "frames_localized": 2000,
         "frames_read": 2000,
         "partial": false,
-        "run_id": "01M3M4M4A3FCJHWRA62ZBPWT7B"
+        "run_id": "01M3M8TNVBN557R105X11BXJD0"
       }
     },
     {
@@ -53,7 +53,7 @@
         "fov_frame_count": 2000,
         "raw_retained": true,
         "registry_ids": {
-          "acquisition_run_id": "01M3M4M4A3FCJHWRA62ZBPWT7B",
+          "acquisition_run_id": "01M3M8TNVBN557R105X11BXJD0",
           "analysis_run_id": "an-2",
           "fov_id": "fov-1",
           "metrics_id": "met-3"
@@ -81,7 +81,7 @@
       "values": {
         "skipped": true,
         "versions": {
-          "git_commit": "d688a0b178fd38f31b881758944184fa001bc613",
+          "git_commit": "8037ae406ff8e45a79996795ede62acf54e1355e",
           "host": "7f64228f3b5c",
           "mode": "emulator",
           "numpy": "2.2.6",
@@ -101,8 +101,8 @@
       "name": "archive",
       "passed": true,
       "values": {
-        "checksum": "d694c0e7bcc4a4a59b871c008f34313d2770483b2bb15037dfb352674764500a",
-        "dest": "/tmp/tmp4hc6j1ru/archive/gate2_movie.tif",
+        "checksum": "83c2d7a042c39d743d8cb388be37b867b12cbec9defc506dbe154450f7eda806",
+        "dest": "/tmp/tmp3qjrpir4/archive/gate2_movie.tif",
         "local_deleted": true,
         "moved": true,
         "verified": true
@@ -110,24 +110,30 @@
     }
   ],
   "config": {
+    "archive_dir": null,
     "batch_size": 100,
     "data_dir": null,
+    "exposure_ms": 100.0,
     "mm_config": null,
     "mode": "emulator",
     "monet_host": null,
     "n_frames": 2000,
     "n_workers": 2,
-    "registry_url": null
+    "registry_url": null,
+    "timeout_s": 900.0
   },
   "failures": [],
   "gate": "gate2",
   "gate2_pass": true,
   "mode": "emulator",
   "schema_version": "1.0",
-  "utc_end": "2026-09-28T13:52:51.912305+00:00",
-  "utc_start": "2026-09-28T13:52:43.042452+00:00",
+  "stall_detail": "",
+  "stalled": false,
+  "stalled_phase": null,
+  "utc_end": "2026-09-28T15:06:21.099292+00:00",
+  "utc_start": "2026-09-28T15:06:11.862358+00:00",
   "version_block": {
-    "git_commit": "d688a0b178fd38f31b881758944184fa001bc613",
+    "git_commit": "8037ae406ff8e45a79996795ede62acf54e1355e",
     "host": "7f64228f3b5c",
     "mode": "emulator",
     "numpy": "2.2.6",

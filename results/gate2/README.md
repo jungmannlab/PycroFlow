@@ -19,19 +19,40 @@ Hermetic dry run (the dev container / CI — no hardware, no network):
 python -m PycroFlow.perf.gate2_harness --mode emulator
 ```
 
-On the acquisition PC (real MDA + real monet interlock):
+On the acquisition PC (real MDA + real monet interlock). **The MM 2.0 GUI must
+be running** (the harness connects to its ZMQ core) and `--monet-setup` must name
+this microscope's monet config (a `monet.CONFIGS` key) so the T3 interlock can
+control the lasers:
 
 ```
 python -m PycroFlow.perf.gate2_harness --mode instrument ^
     --data-dir D:\gate2_raw ^
     --n-frames 2000 ^
+    --exposure-ms 100 ^
+    --monet-setup <your-monet-config-name> ^
+    --archive-dir \\pool\archive\gate2 ^
     --mm-config C:\path\to\MMConfig.cfg
 ```
+
+The harness **drives the acquisition itself** in instrument mode: it starts a
+real `multi_d_acquisition_events` MDA (via PycroFlow's shared MM Core) in a
+background thread writing NDTiff/OME-TIFF into `--data-dir`, turns the imaging
+laser ON, and the WP-4 tiff-tail source live-reads that movie while it is being
+written. The T3 interlock turns the laser off at the end/abort/crash.
 
 Add `--registry-url http://<host>:<port> --registry-token <tok>` to post the
 per-FOV record to the **real** picasso-registry (requests-based `RegistryClient`,
 works on a `[client]`-only install) instead of the harness's built-in
 fastapi-free in-memory stub.
+
+**Watchdog / no-hang guarantee.** `--timeout <s>` (default 900) caps the clean
+FOV. On timeout the harness (a) **fires the T3 interlock first** — lasers off +
+shutter closed, never left hot on a stall — then (b) dumps every thread's
+traceback to stderr (so you see where it stalled), (c) tears the acquisition
+down, and (d) writes a verdict with `stalled: true` / `stalled_phase` and exits
+non-zero. A `faulthandler` hard-deadline dump is also armed as a last-ditch
+self-report. It will **never silently hang** again.
+
 Every knob has a default and is documented in `--help`; the run is fully
 non-interactive.
 
@@ -63,3 +84,36 @@ Emulator dry-run verdicts (`emulator_*.json`) are throwaway and normally not
 committed; commit the `instrument_*.json` verdicts that carry the real
 on-hardware numbers. `sample_emulator.json` is a checked-in example verdict from
 a hermetic run so the JSON shape is reviewable without running the harness.
+
+## Acq-PC checklist — what only hardware can confirm
+
+The container has no Micro-Manager, so the real-MDA leg is built best-effort here
+and validated by you on the acquisition PC. When you run `--mode instrument`,
+confirm:
+
+1. **Acquisition actually runs.** A `gate2_raw` dataset appears under
+   `--data-dir` and grows during the run (the driver's MDA is writing frames).
+   The 60-min hang was exactly this step never happening — if no folder appears,
+   the harness now times out, dumps tracebacks, and exits non-zero instead of
+   hanging.
+2. **tiff-tail reads it live.** `keep_up` and `no_silent_subsample` PASS:
+   `frames_read == frames_localized == n_frames`, `partial=false`, no dropped
+   batches, bounded queue never overflowed.
+3. **Live metrics are real on real signal.** `live_metrics_real` PASS with a
+   non-None `nena_px`/`nena_nm` and positive `spots_per_frame` (needs the laser
+   ON and a sample with signal — pick a FOV that blinks).
+4. **The laser interlock fires on hardware.** `laser_interlock` PASS for all
+   three exits (normal / abort / injected exception): after each, every laser is
+   disabled and the shutter closed. Watch the lasers physically go dark.
+5. **pycromanager-1.0 items.** `pycromanager_1_0` PASS: NDTiff-v3/ndstorage tail
+   worked, the RAM-peek probe returned frames, and numpy-2 + pycromanager-1.0 +
+   picasso coexist with no ABI crash. Check the recorded `version_block`
+   (`mm_version`, `ndtiff`, `ndstorage`, `numpy`, `pycromanager`).
+6. **Archive move.** If `--archive-dir` is on a real network share, confirm
+   `archive` PASS with `verified=true` and the local copy removed only after the
+   checksum matched.
+7. **Coverage reconciles end-to-end** and the per-FOV record reached the
+   registry (`registry_record` PASS) — with `--registry-url` if you want it in
+   the real DB.
+
+Then commit the `instrument_*.json` verdict and push for analysis.
