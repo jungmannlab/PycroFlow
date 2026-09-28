@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **PycroFlow is now a picasso consumer** (WP-4 live localization). Added base
+  dependencies: `picassosr` (temporarily **pinned to a git commit** carrying
+  `localize_frames`, PR#705 — a TEMP bridge until picassosr 0.11.3 hits PyPI,
+  then revert to `picassosr>=0.11.3`; tracked as planning Open-Decisions **B7**;
+  this is the one flagged non-wheel git-URL dependency), `picasso-registry` (the
+  per-FOV record sink client), and `python-ulid` (sortable `run_id`, matching the
+  registry's ULID convention).
+
 - Versioning now derives from the git tag via `setuptools-scm` (writes
   `PycroFlow/_version.py`); the manual `version` string in `pyproject.toml`
   is gone. `PycroFlow.__version__` reads the generated module with a fallback.
@@ -37,6 +45,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **WP-4 live analysis** (`PycroFlow/live_analysis/`): the first end-to-end
+  slice — acquire one FOV → live-localize (no drift) → metrics to the Quality
+  tab → one record to `picasso-registry`. A frontend-agnostic, headless
+  `LiveAnalysisService` owns the acquisition + a `frames → locs` pipeline and
+  pushes state over a thin client seam (`client_seam.py`: an update channel +
+  early-abort control call; in-process Qt signals today, shaped so a
+  WebSocket/SSE + REST client is a later drop-in). It never blocks acquisition:
+  a **frame-source abstraction** (`frame_source.py`) reads frames — default
+  `TiffTailFrameSource` (lossless, reuses WP-1's picasso `TiffMultiMap` reader,
+  designed to run in a separate OS process; handles MM's ~4 GB `_1/_2` rollover
+  via natural sort and per-`_Pos<N>` batching so a batch never spans two
+  positions), plus a lossy `RamPeekFrameSource` (pycromanager
+  `Core.get_last_tagged_image`, live-view only) and a hermetic `MockFrameSource`.
+  A **pool of worker processes** (`compute_backend.py` / `worker.py`) runs
+  picasso `localize_frames` off a **bounded queue**; when it can't keep pace it
+  **lags** in contiguous batches (never subsamples the authoritative stream) —
+  the runtime backpressure invariant (queue never exceeds its bound) is asserted
+  in production code. Running metrics (`metrics.py`): NeNA, localizations/frame,
+  background (no live drift correction). A ULID `run_id` is minted at experiment
+  start (`run_id.py`) and tags every FOV/record. The compute backend + movie
+  write-target are pluggable: `local-subprocess` reading local disk **ships now**
+  (default); `remote-worker` (a LAN GPU node reading the pool folder) is a
+  **stub** behind the same interface, gated on decision **B5** (register C33
+  topology) so the switch is config, not a rewrite.
+- **WP-4 laser fail-safe interlock** (`live_analysis/laser_interlock.py`, T3 /
+  decision C21): the early-abort path AND any error/crash exit go through a
+  `try/finally` interlock that disables every laser (monet's per-laser `enabled`
+  setter, via `IlluminationSystem`) and closes the shutter, with automation
+  defaulting `lasers_off_finally` ON. Fail-safe (one laser failing still disables
+  the rest and closes the shutter) and never blocks/raises into acquisition.
+- **WP-4 archive step** (`live_analysis/archive.py`): on the fallback path the
+  raw movie is MOVED local → network-drive archive after the live read, with a
+  verified sha256 checksum; the local copy is deleted ONLY after the archived
+  copy is confirmed. Skipped when acquiring straight to the pool. Only
+  localizations ever go to the cluster — the movie is never shipped there.
+- **WP-4 Quality tab** (`PycroFlow/gui/tabs/quality_tab.py`): the first client
+  over the streaming seam — live metrics (NeNA/locs-per-frame/background), a
+  NeNA trend, live pipeline lag (bounded-queue depth), a thumbnail slot, and an
+  early-abort button issuing the service's control call. Minimal (the full V0.8
+  UI is WP-GUI); Qt is lazy-imported and runs headless.
 - **WP-1 live-reader performance harness** (`PycroFlow/perf/`): a
   non-interactive, config-driven harness that benchmarks acquisition at the
   target frame rate with and without a concurrent incremental NDTiff reader,
