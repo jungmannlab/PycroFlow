@@ -73,6 +73,15 @@ hardware = [
     # explicit ndtiff/ndstorage pin is needed here; the WP-1 reader already
     # resolves ndstorage → ndtiff → pycromanager in turn.
     "pycromanager>=1.0,<2",
+    # The T3 laser interlock (PycroFlow.illumination) controls lasers via monet's
+    # in-process API (`import monet`) -- the safe path for a fail-safe (no network
+    # hop). monet is NOT on PyPI (git tag v0.4.0, like the registry dep, C40); pin
+    # the released tag with [hardware] so its laser SDKs resolve. A fresh acq-PC
+    # env caught the missing dep (`ModuleNotFoundError: monet`) -- it was masked in
+    # the editable dev container where monet is installed. (monet[hardware]'s SDKs
+    # overlap this extra's; pip dedups. A later cleanup could fold this extra's
+    # laser SDKs into monet[hardware].)
+    "monet[hardware] @ git+https://github.com/jungmannlab/monet.git@v0.4.0",
     "PyHamiltonPSD==1.1.0",
     "ThorlabsPM100>=1.2.2",
     "pyvisa>=1.15",
