@@ -614,11 +614,125 @@ class MockFrameSource(FrameSource):
             self._read += len(buf)
 
 
+class NdTiffDatasetFrameSource(FrameSource):
+    """Live-read a pycromanager NDTiff dataset (``Acquisition.get_dataset()``).
+
+    In the PycroFlow-spawned instrument path the driver runs a pycromanager
+    ``Acquisition`` — which writes an **NDTiff v3** dataset into a ``<name>_<n>/``
+    subfolder (NOT a flat OME-TIFF in the run dir, so the ``tiff-tail`` glob never
+    finds it) — and its ``get_dataset()`` returns an **ndstorage** ``Dataset``
+    readable *while the acquisition is still writing*. This source tails that
+    dataset along the ``time`` axis (the driver acquires ``num_time_points``
+    frames), reading each frame as it lands, yielding contiguous batches, and
+    stopping once the dataset reports ``is_finished()`` and no more frames appear.
+
+    Lossless (reads every written frame); single position (``position=None``).
+    ndstorage is NOT imported here — the live ``Dataset`` is handed in (same
+    process as the ``Acquisition``), so this module still imports on dev / CI
+    without ndstorage/pycromanager. The dataset need only expose
+    ``has_image``/``read_image``/``is_finished`` (+ optional ``await_new_image``),
+    which also lets a fake dataset drive it in hermetic tests.
+    """
+
+    lossless = True
+
+    def __init__(
+        self,
+        dataset,
+        *,
+        pixelsize_nm: float | None = None,
+        time_axis: str = "time",
+        poll_s: float = 0.05,
+        idle_grace_s: float = 2.0,
+    ) -> None:
+        self._ds = dataset
+        self._pixelsize_nm = pixelsize_nm
+        self._axis = time_axis
+        self._poll_s = poll_s
+        # After is_finished(), wait this long for a final frame whose index is
+        # not yet visible before declaring the stream done.
+        self._idle_grace_s = idle_grace_s
+        self._read = 0
+        self._stop = threading.Event()
+
+    def camera_info(self) -> dict:
+        info: dict = {}
+        if self._pixelsize_nm:
+            info["Pixelsize"] = float(self._pixelsize_nm)
+        return info
+
+    def frames_read(self) -> int:
+        return self._read
+
+    def close(self) -> None:
+        self._stop.set()
+
+    def _has(self, i: int) -> bool:
+        try:
+            return bool(self._ds.has_image(**{self._axis: i}))
+        except Exception:
+            return False
+
+    def _finished(self) -> bool:
+        try:
+            return bool(self._ds.is_finished())
+        except Exception:
+            return False
+
+    def _await(self) -> None:
+        # Event-driven wait when the dataset supports it; else poll-sleep.
+        aw = getattr(self._ds, "await_new_image", None)
+        if callable(aw):
+            try:
+                aw(timeout=self._poll_s)
+                return
+            except Exception:
+                pass
+        time.sleep(self._poll_s)
+
+    def batches(self, batch_size: int) -> Iterator[Batch]:
+        buf: list = []
+        start = 0
+        while not self._stop.is_set():
+            i = self._read + len(buf)
+            if self._has(i):
+                try:
+                    img = np.asarray(self._ds.read_image(**{self._axis: i}))
+                except Exception:
+                    # index registered but bytes not flushed yet; retry it.
+                    self._await()
+                    continue
+                buf.append(img)
+                if len(buf) >= batch_size:
+                    yield Batch(np.stack(buf, axis=0), start, None)
+                    self._read += len(buf)
+                    start = self._read
+                    buf = []
+                continue
+            # frame i not present yet
+            if self._finished():
+                deadline = time.monotonic() + self._idle_grace_s
+                while (
+                    not self._has(i)
+                    and not self._stop.is_set()
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(self._poll_s)
+                if not self._has(i):
+                    break
+                continue
+            self._await()
+        if buf:
+            yield Batch(np.stack(buf, axis=0), start, None)
+            self._read += len(buf)
+
+
 # ── factory ─────────────────────────────────────────────────────────────────
 
 SOURCE_TIFF_TAIL = "tiff-tail"
 SOURCE_RAM_PEEK = "ram-peek"
 SOURCE_MOCK = "mock"
+SOURCE_NDTIFF_DATASET = "ndtiff-dataset"
 
 
 def make_frame_source(kind: str, **kwargs) -> FrameSource:
@@ -633,4 +747,6 @@ def make_frame_source(kind: str, **kwargs) -> FrameSource:
         return RamPeekFrameSource(**kwargs)
     if kind == SOURCE_MOCK:
         return MockFrameSource(**kwargs)
+    if kind == SOURCE_NDTIFF_DATASET:
+        return NdTiffDatasetFrameSource(**kwargs)
     raise ValueError("unknown frame source {!r}".format(kind))

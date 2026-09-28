@@ -56,6 +56,7 @@ from PycroFlow.live_analysis.archive import (
     WRITE_TARGET_LOCAL,
     archive_movie,
 )
+from PycroFlow.live_analysis.frame_source import SOURCE_NDTIFF_DATASET
 from PycroFlow.live_analysis.laser_interlock import LaserInterlock
 from PycroFlow.live_analysis.service import FovConfig, LiveAnalysisService
 
@@ -441,6 +442,30 @@ class AcquisitionDriver:
         """Block until acquisition finishes; True if it completed in time."""
         return self._done.wait(timeout=timeout)
 
+    def get_dataset(self, timeout: float = 60.0):  # pragma: no cover - acq PC
+        """Return the Acquisition's live ndstorage ``Dataset`` (or None).
+
+        The dataset only exists once ``_run`` has entered ``with Acquisition``.
+        Poll until it's available (or the acquisition errored / finished with no
+        dataset), returning None on timeout so the caller can fall back instead
+        of crashing. The returned dataset is readable *while acquiring* — that's
+        what the NDTiff live source tails.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._error is not None:
+                return None
+            acq = self._acq
+            if acq is not None:
+                try:
+                    return acq.get_dataset()
+                except Exception:
+                    pass  # created but dataset not ready yet — keep polling
+            elif self._done.is_set():
+                return None  # finished/failed before an Acquisition existed
+            time.sleep(0.1)
+        return None
+
     def close(self) -> None:
         """Best-effort teardown of the acquisition thread."""
         if self._thread is not None:  # pragma: no cover - acq PC only
@@ -561,6 +586,24 @@ def run_clean_fov(args, registry, illu) -> FovRun:
     driver = AcquisitionDriver(args)
     driver.start()
     _enable_signal_laser(illu, args)
+
+    if args.mode == MODE_INSTRUMENT:
+        # Read the driver's LIVE NDTiff dataset (Acquisition.get_dataset()), not
+        # a tiff-tail glob: pycromanager writes NDTiff into a <name>_<n>/ subdir
+        # that the OME-TIFF glob never discovers (the first-run frames_read=0).
+        # ndstorage's Dataset is readable while acquiring — the real live path.
+        ds = driver.get_dataset(timeout=min(60.0, float(args.timeout_s)))
+        if ds is not None:
+            cfg.source_kind = SOURCE_NDTIFF_DATASET
+            cfg.source_kwargs = {
+                "dataset": ds,
+                "pixelsize_nm": cfg.pixelsize_nm,
+            }
+        else:
+            print(
+                "WARNING: could not obtain the acquisition dataset; leaving the "
+                "tiff-tail source (live-localize will likely see no frames)."
+            )
 
     holder: dict = {}
 
