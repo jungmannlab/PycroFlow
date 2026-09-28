@@ -318,6 +318,13 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
 
         from PycroFlow.services import mm_core
 
+        # Validate the data_dir guard BEFORE opening the MM Core connection, so
+        # a missing data_dir fails fast (and deterministically, regardless of
+        # whether Core is the real ZMQ bridge or a test mock) instead of first
+        # blocking on a hardware connect. Raw NDTiff is large and must never
+        # land in the repo.
+        data_dir = self._resolve_data_dir()
+
         self._core = mm_core.get_core()
         # Size the circular buffer to the configured MB footprint (matches
         # Micro-Manager's "sequence buffer size") and apply the ROI.
@@ -347,7 +354,7 @@ class InstrumentBackend(FrameSourceBackend):  # pragma: no cover
         # measurement unless keep_raw_data.
         stamp = time.strftime("%Y%m%dT%H%M%S")
         self._acq_dir = os.path.join(
-            self._resolve_data_dir(),
+            data_dir,
             "wp1_raw_{}_{}".format(self._tag, stamp),
         )
         os.makedirs(self._acq_dir, exist_ok=True)

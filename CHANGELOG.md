@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **pycromanager 0.29 → 1.0 acquisition-code migration (WP-PYCRO-1.0, B8 /
+  Gate-2; decision C41).** Completes the code-side migration that the C41 pin
+  bump (`[hardware]` `pycromanager>=1.0,<2`) deferred. The acquisition API
+  PycroFlow uses is largely stable across 0.29→1.0 **when running against the
+  Micro-Manager Java backend** (MM 2.0 GUI + ZMQ bridge, which is PycroFlow's
+  mode): the `Acquisition(...)` factory dispatches `show_display`,
+  `image_process_fn`, `pre_hardware_hook_fn`, and the `image_process_fn(img,
+  meta, event_queue)` / `event_queue.put(None)` abort contract through to the
+  Java backend unchanged, and `get_dataset()` / `get_viewer()` remain. The one
+  breaking change is the **`Dataset` relocation** — in 1.0 the NDTiff reader is
+  `from ndstorage import Dataset`, no longer `from pycromanager import Dataset`;
+  the WP-1 reader (`perf/reader_process.py`) already resolves `ndstorage →
+  ndtiff → pycromanager` in turn, so it needed no change. WP-4's frame sources
+  (`live_analysis/frame_source.py`) read via picasso `TiffMultiMap` (tail, the
+  authoritative path) and `Core.get_last_tagged_image` (RAM peek) — neither
+  touches the relocated `Dataset`, so both are unaffected. **Minimum
+  Micro-Manager: a Micro-Manager 2.0 nightly build contemporaneous with (or
+  newer than) pycromanager 1.0.0 (released 2024-08-28)** — the Python ZMQ
+  client and the Java server bundled in the MM nightly share a version
+  handshake, so an older MM nightly raises a version-mismatch. Verified
+  statically/headlessly in-container against the real pycromanager 1.0.2; real
+  MDA + numpy-2/acquisition ABI coexistence are on the on-instrument Gate-2
+  checklist (this repo cannot run Micro-Manager).
 - **PycroFlow is now a picasso consumer** (WP-4 live localization). Added base
   dependencies: `picassosr` (temporarily **pinned to a git commit** carrying
   `localize_frames`, PR#705 — a TEMP bridge until picassosr 0.11.3 hits PyPI,
@@ -33,6 +56,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`perf.InstrumentBackend.start()` validates `data_dir` before connecting to
+  the MM Core** (WP-PYCRO-1.0). Previously it opened the Core connection first
+  and only then checked `data_dir`, so the "refuse to write raw NDTiff into the
+  repo" guard depended on Core being a fast-returning mock. With real
+  pycromanager 1.0 installed, the connect blocks/times out before the guard
+  runs. The guard now fails fast and deterministically regardless of backend.
 - **WP-4 NeNA oracle now a real check** (numpy 2 unmasked it). `postprocess.nena`
   reads `Pixelsize` from its `info` argument, so passing `None` raises
   `ValueError: info must be a dict or a list of dicts`. The live
