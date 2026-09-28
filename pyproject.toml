@@ -33,6 +33,19 @@ dependencies = [
     "loguru",
     "pyyaml>=6.0",
     "pydantic>=2,<3",
+    # WP-4: PycroFlow is now a picasso consumer (live localize_frames wrapper).
+    # TEMP bridge: pinned to the picasso commit that carries localize_frames
+    # (PR#705) until picassosr 0.11.3 hits PyPI — then revert to
+    # "picassosr>=0.11.3". Tracked as planning Open-Decisions B7. This is the
+    # one flagged non-wheel git-URL dependency; the base install is otherwise
+    # wheel-only. (Dev/CI use the already-editable-installed picasso, which has
+    # localize_frames; picasso pulls picasso_registry's client transitively is
+    # not the case — the registry client is a separate install.)
+    "picassosr @ git+https://github.com/jungmannlab/picasso.git@e5c91196",
+    # WP-4: append-only provenance/metrics DB client (per-FOV record sink).
+    "picasso-registry",
+    # WP-4: sortable run_id minting (matches the registry's ULID convention).
+    "python-ulid>=2",
     # Capped below 2.0 because the [hardware] stack (pycromanager 0.29.5 /
     # ndtiff 2.2.1) predates numpy 2's ABI break and is not validated against
     # it; keep the cap here so a base + [hardware] install resolves to one

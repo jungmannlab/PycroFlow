@@ -1,0 +1,347 @@
+"""LiveAnalysisService — the headless server owning acquisition + the pipeline.
+
+The first end-to-end slice: acquire one FOV -> live-localize (no drift) ->
+metrics to the Quality tab -> one record to the registry. It is **frontend-
+agnostic** (a headless server) and pushes state to clients only over the thin
+:mod:`client_seam` boundary, so a Qt tab today and a WebSocket client later are
+both just clients. It **never blocks acquisition**: frames are read off disk (a
+separate-process tail reader by default), a pool of worker processes localizes
+them off a bounded queue, and if the pool can't keep pace the pipeline LAGS
+(never subsamples the authoritative stream).
+
+Per-FOV flow (:meth:`run_fov`):
+  1. spawn the worker pool + compute backend;
+  2. iterate the frame source's contiguous, position-pure batches, submitting
+     each to the backend (lagging under backpressure);
+  3. a drain thread folds each batch's locs into :class:`RunningMetrics` and
+     pushes a metrics update to clients;
+  4. on normal end / early-abort / ANY exception, a ``try/finally`` engages the
+     laser interlock (T3, C21), snapshots the final metrics, archives the raw
+     movie (fallback path), and posts the per-FOV registry record;
+  5. tear the pool down.
+
+The experiment-level entry (:meth:`start_experiment`) mints the ULID ``run_id``
+once and tags every FOV/record with it.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from dataclasses import dataclass, field
+
+from loguru import logger
+
+from PycroFlow.live_analysis.archive import (
+    WRITE_TARGET_LOCAL,
+    WRITE_TARGET_POOL,
+    archive_movie,
+)
+from PycroFlow.live_analysis.client_seam import UpdateHub
+from PycroFlow.live_analysis.compute_backend import (
+    COMPUTE_LOCAL,
+    POLICY_LAG,
+    make_compute_backend,
+)
+from PycroFlow.live_analysis.laser_interlock import LaserInterlock
+from PycroFlow.live_analysis.metrics import RunningMetrics
+from PycroFlow.live_analysis.registry_payload import (
+    build_fov_payload,
+    post_fov_record,
+)
+from PycroFlow.live_analysis.run_id import new_run_id
+from PycroFlow.live_analysis.worker import LocalizeRequest, LocalizeResult
+
+# Default picasso identification params — placeholders until the recommender
+# (WP-3/WP-7) supplies sample-aware values; a caller overrides per FOV.
+DEFAULT_LOCALIZE_PARAMS = {
+    "Box Size": 7,
+    "Min. Net Gradient": 5000,
+}
+
+
+@dataclass
+class FovConfig:
+    """Per-FOV inputs (what/where to read + how to localize + where to archive)."""
+
+    source_kind: str = "tiff-tail"
+    source_kwargs: dict = field(default_factory=dict)
+    localize_params: dict = field(
+        default_factory=lambda: dict(DEFAULT_LOCALIZE_PARAMS)
+    )
+    fitting_method: str = "gausslq"
+    batch_size: int = 100
+    n_workers: int = 2
+    queue_size: int = 8
+    compute_kind: str = COMPUTE_LOCAL
+    use_processes: bool = True
+    # Movie write-target + archive (fallback path only).
+    write_target: str = WRITE_TARGET_LOCAL
+    movie_source_path: str | None = None
+    archive_dir: str | None = None
+    # Registry row extras (positions, rate, etc.).
+    fov_fields: dict = field(default_factory=dict)
+    acquisition_fields: dict = field(default_factory=dict)
+    analysis_fields: dict = field(default_factory=dict)
+    pixelsize_nm: float | None = None
+    # Metric snapshot cadence pushed to clients (s).
+    metrics_push_interval_s: float = 0.5
+
+
+@dataclass
+class FovResult:
+    """Outcome of one FOV run (returned + logged; drives the golden test)."""
+
+    run_id: str
+    metrics: dict
+    frames_read: int
+    backend_stats: dict
+    interlock: object
+    archive: object
+    registry_ids: dict | None
+    aborted: bool
+    error: str | None
+
+
+class LiveAnalysisService:
+    """Headless owner of live acquisition + the frames->locs pipeline.
+
+    Parameters
+    ----------
+    registry_client : object or None
+        A picasso-registry client (real or the in-memory mock). When None, the
+        per-FOV record is not posted (records are still built + surfaced).
+    illumination_system : object or None
+        The illumination system for the laser interlock (None -> interlock no-op).
+    lasers_off_finally : bool
+        Master switch for the T3 interlock (default ON, fail-safe).
+    """
+
+    def __init__(
+        self,
+        *,
+        registry_client=None,
+        illumination_system=None,
+        lasers_off_finally: bool = True,
+    ):
+        self._registry = registry_client
+        self._interlock = LaserInterlock(
+            illumination_system, enabled=lasers_off_finally
+        )
+        self.hub = UpdateHub()
+        self._run_id: str | None = None
+        self._abort = threading.Event()
+
+    # -- experiment lifecycle ----------------------------------------------
+    def start_experiment(self, run_id: str | None = None) -> str:
+        """Mint (or accept) the ULID ``run_id`` for this experiment.
+
+        Returns the run_id; every FOV/record in the experiment is tagged with it.
+        """
+        self._run_id = run_id or new_run_id()
+        self._abort.clear()
+        logger.info(
+            "live-analysis experiment run_id = {}".format(self._run_id)
+        )
+        self.hub.push_kind("state", self._run_id, state="experiment_started")
+        return self._run_id
+
+    @property
+    def run_id(self) -> str | None:
+        return self._run_id
+
+    def request_abort(self) -> None:
+        """Early-abort control call (from a client / QC). Non-blocking.
+
+        Sets the abort flag; the running FOV stops reading new batches, drains
+        what's in flight, and the ``finally`` engages the laser interlock.
+        """
+        logger.warning("live-analysis early-abort requested")
+        self._abort.set()
+        self.hub.push_kind("state", self._run_id, state="abort_requested")
+
+    # -- per-FOV run --------------------------------------------------------
+    def run_fov(self, cfg: FovConfig) -> FovResult:
+        """Run the full live-analysis slice for one FOV. Never blocks acquisition.
+
+        The whole body is under ``try/finally`` so the laser interlock fires on
+        normal end, early-abort, AND any exception — the T3 fail-safe (C21).
+        """
+        if self._run_id is None:
+            self.start_experiment()
+        run_id = self._run_id
+        assert run_id is not None
+
+        from PycroFlow.live_analysis.frame_source import make_frame_source
+
+        metrics = RunningMetrics()
+        metrics.set_pixelsize_nm(cfg.pixelsize_nm)
+        source = make_frame_source(cfg.source_kind, **cfg.source_kwargs)
+
+        aborted = False
+        error: str | None = None
+        backend = None
+        interlock_result = None
+        archive_result = None
+        registry_ids = None
+
+        def _on_result(res: LocalizeResult) -> None:
+            # Drain-thread sink: fold locs into the running metrics and push.
+            if res.locs is None:
+                return
+            metrics.update(res.locs, res.n_frames)
+
+        try:
+            info = source.camera_info()
+            backend = make_compute_backend(
+                cfg.compute_kind,
+                info=info,
+                params=cfg.localize_params,
+                on_result=_on_result,
+                n_workers=cfg.n_workers,
+                queue_size=cfg.queue_size,
+                policy=POLICY_LAG,
+                fitting_method=cfg.fitting_method,
+                use_processes=cfg.use_processes,
+            )
+            backend.start()
+            self.hub.push_kind("state", run_id, state="fov_started")
+
+            seq = 0
+            last_push = 0.0
+            for batch in source.batches(cfg.batch_size):
+                if self._abort.is_set():
+                    aborted = True
+                    break
+                # Lazily learn camera info if the source only knew it after open.
+                if info is None:
+                    info = source.camera_info()
+                ok = backend.submit(
+                    LocalizeRequest(
+                        seq=seq,
+                        frames=batch.frames,
+                        start_frame=batch.start_frame,
+                        position=batch.position,
+                    )
+                )
+                if not ok:
+                    # Backend is stopping (abort); stop feeding it.
+                    aborted = self._abort.is_set()
+                    break
+                seq += 1
+                now = time.monotonic()
+                if now - last_push >= cfg.metrics_push_interval_s:
+                    self._push_metrics(run_id, metrics, backend)
+                    last_push = now
+
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - captured; interlock still runs
+            error = repr(exc)
+            logger.exception("live-analysis FOV failed")
+        finally:
+            # --- T3 laser fail-safe: ALWAYS runs (normal / abort / crash) ---
+            try:
+                interlock_result = self._interlock.engage(
+                    reason=(
+                        "fov end"
+                        if not (aborted or error)
+                        else ("abort" if aborted else "error")
+                    )
+                )
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 - interlock must never raise
+                logger.error("interlock itself raised: {!r}".format(exc))
+
+            # Drain in-flight localizations + tear the pool down.
+            if backend is not None:
+                try:
+                    backend.drain_and_stop(timeout=60.0)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("backend teardown raised: {!r}".format(exc))
+            try:
+                source.close()
+            except Exception:
+                pass
+
+            frames_read = source.frames_read()
+            backend_stats = backend.stats() if backend is not None else {}
+            final_metrics = metrics.snapshot(force_nena=True)
+            self.hub.push_kind(
+                "metrics", run_id, metrics=final_metrics, backend=backend_stats
+            )
+
+            # Archive the raw movie (fallback path); skipped when on the pool.
+            try:
+                archive_result = archive_movie(
+                    cfg.movie_source_path,
+                    cfg.archive_dir,
+                    write_target=cfg.write_target,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("archive step raised: {!r}".format(exc))
+
+            # Post the per-FOV registry record (best-effort; never blocks).
+            payload = build_fov_payload(
+                run_id=run_id,
+                metrics=final_metrics,
+                fov=cfg.fov_fields,
+                acquisition=cfg.acquisition_fields,
+                analysis=cfg.analysis_fields,
+            )
+            registry_ids = self._post_record(run_id, payload)
+
+            state = (
+                "fov_aborted"
+                if aborted
+                else ("fov_error" if error else "fov_done")
+            )
+            self.hub.push_kind("state", run_id, state=state)
+
+        return FovResult(
+            run_id=run_id,
+            metrics=final_metrics,
+            frames_read=frames_read,
+            backend_stats=backend_stats,
+            interlock=interlock_result,
+            archive=archive_result,
+            registry_ids=registry_ids,
+            aborted=aborted,
+            error=error,
+        )
+
+    # -- internals ----------------------------------------------------------
+    def _push_metrics(self, run_id, metrics: RunningMetrics, backend) -> None:
+        self.hub.push_kind(
+            "metrics",
+            run_id,
+            metrics=metrics.snapshot(),
+            backend=backend.stats(),
+        )
+
+    def _post_record(self, run_id, payload: dict) -> dict | None:
+        if self._registry is None:
+            self.hub.push_kind("record", run_id, payload=payload, posted=False)
+            return None
+        try:
+            ids = post_fov_record(self._registry, payload)
+            self.hub.push_kind("record", run_id, ids=ids, posted=True)
+            return ids
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - a registry outage isn't fatal
+            logger.warning("posting FOV record failed: {!r}".format(exc))
+            self.hub.push_kind("record", run_id, error=repr(exc), posted=False)
+            return None
+
+
+# Re-exported so callers don't reach into archive.py for the constants.
+__all__ = [
+    "LiveAnalysisService",
+    "FovConfig",
+    "FovResult",
+    "WRITE_TARGET_LOCAL",
+    "WRITE_TARGET_POOL",
+    "DEFAULT_LOCALIZE_PARAMS",
+]
