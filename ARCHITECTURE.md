@@ -46,7 +46,9 @@ PycroFlow/
 │   ├── app.py            #   entry point + monet Core sharing
 │   ├── main_window.py    #   PycroFlowMainWindow (tabbed)
 │   ├── qt_bridge.py      #   service observer -> Qt signals
-│   └── tabs/             #   experiment / fluid / imaging / monet / quality tabs
+│   ├── tabs/             #   experiment / fluid / imaging / monet / quality tabs
+│   └── live/             #   WP-GUI: composable operator frontend over the
+│                         #   WP-4 seam (shell + panels + advisor adapter)
 ├── configs/              # YAML instrument configs
 ├── examples/             # demo protocols
 ├── pyHamilton/           # in-house Hamilton serial driver
