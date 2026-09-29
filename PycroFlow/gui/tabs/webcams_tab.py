@@ -49,15 +49,24 @@ class _PreviewWorker(QThread):
 
     frame_ready = pyqtSignal(QImage)
 
-    def __init__(self, cameras, mode, tile_cols=None, parent=None):
+    def __init__(
+        self, cameras, mode, tile_cols=None, backend=None, parent=None
+    ):
         super().__init__(parent)
         self._cameras = cameras
         self._mode = mode
+        self._backend = backend
         self._layout = plan_layout(cameras, tile_cols)
 
     def run(self) -> None:
         threads = [
-            CaptureThread(c, self._mode, queue_size=2, fps=_PREVIEW_FPS)
+            CaptureThread(
+                c,
+                self._mode,
+                queue_size=2,
+                fps=_PREVIEW_FPS,
+                backend=self._backend,
+            )
             for c in self._cameras
         ]
         for t in threads:
@@ -186,7 +195,10 @@ class WebcamsTab(QWidget):
         ):
             return
         self._worker = _PreviewWorker(
-            self._current_cameras(), self._mode(), self._config.tile_cols
+            self._current_cameras(),
+            self._mode(),
+            self._config.tile_cols,
+            backend=self._config.backend,
         )
         self._worker.frame_ready.connect(self._show_frame)
         self._worker.start()

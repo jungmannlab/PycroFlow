@@ -21,12 +21,44 @@ escaped exception) as a dropped frame / gap.
 from __future__ import annotations
 
 import abc
+import sys
 import time
 from typing import Optional
 
 import numpy as np
+from loguru import logger
 
 from PycroFlow.monitoring.config import CameraConfig
+
+# OpenCV capture backends by name. On Windows the default (MSMF) is unreliable
+# with many UVC webcams -- it opens but delivers black/empty frames -- so the
+# instrument source prefers DirectShow there. `None` means auto-select.
+_BACKENDS = {
+    "dshow": "CAP_DSHOW",
+    "msmf": "CAP_MSMF",
+    "v4l2": "CAP_V4L2",
+    "avfoundation": "CAP_AVFOUNDATION",
+    "any": "CAP_ANY",
+}
+
+
+def _backend_candidates(cv2, backend: Optional[str]) -> list:
+    """Ordered (name, cv2-flag) capture backends to try for ``backend``.
+
+    An explicit name pins that one backend; ``None`` auto-selects -- DirectShow
+    first on Windows (then MSMF, then ANY), else just ANY.
+    """
+    if backend:
+        name = backend.lower()
+        flag = getattr(cv2, _BACKENDS.get(name, "CAP_ANY"), cv2.CAP_ANY)
+        return [(name, flag)]
+    if sys.platform.startswith("win"):
+        return [
+            ("dshow", cv2.CAP_DSHOW),
+            ("msmf", cv2.CAP_MSMF),
+            ("any", cv2.CAP_ANY),
+        ]
+    return [("any", cv2.CAP_ANY)]
 
 
 class FrameSource(abc.ABC):
@@ -119,11 +151,20 @@ class InstrumentFrameSource(FrameSource):
     OpenCV is imported lazily in :meth:`open` so importing this module (and the
     whole ``monitoring`` package) works on a base install with no OpenCV; only
     actually starting an instrument capture needs the extra.
+
+    Parameters
+    ----------
+    backend : str or None
+        Capture backend: ``dshow`` / ``msmf`` / ``v4l2`` / ``any``. ``None``
+        auto-selects (DirectShow first on Windows, else ANY). DirectShow is
+        strongly preferred on Windows -- the default MSMF backend often opens a
+        UVC webcam but only yields black frames.
     """
 
-    def __init__(self, camera: CameraConfig):
+    def __init__(self, camera: CameraConfig, backend: Optional[str] = None):
         super().__init__(camera)
         self._cap = None
+        self._backend = backend
 
     def open(self) -> None:
         try:
@@ -133,15 +174,44 @@ class InstrumentFrameSource(FrameSource):
                 "instrument capture needs OpenCV; install pip install -e "
                 '".[monitoring]"'
             ) from exc
-        cap = cv2.VideoCapture(self.camera.device)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-        if not cap.isOpened():  # pragma: no cover - needs hardware
-            cap.release()
-            raise OSError(
-                "could not open camera {}".format(self.camera.device)
+        tried = []
+        for name, flag in _backend_candidates(cv2, self._backend):
+            cap = cv2.VideoCapture(self.camera.device, flag)
+            if not cap.isOpened():  # pragma: no cover - needs hardware
+                cap.release()
+                tried.append(name)
+                continue
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            # Warm up: MSMF/DShow often return black/empty for the first few
+            # reads while the pipeline spins up. Pull a few and check we get a
+            # real frame before committing to this backend.
+            got = self._warmup(cap)
+            logger.info(
+                "monitoring: camera {} opened via {} at {}x{} "
+                "(first frame: {})",
+                self.camera.role,
+                name,
+                int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or self.width,
+                int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or self.height,
+                "yes" if got else "NONE -- check camera not in use / privacy",
             )
-        self._cap = cap
+            self._cap = cap
+            return
+        raise OSError(  # pragma: no cover - needs hardware
+            "could not open camera {} (tried backends: {})".format(
+                self.camera.device, ", ".join(tried) or "none"
+            )
+        )
+
+    @staticmethod
+    def _warmup(cap, attempts: int = 10) -> bool:  # pragma: no cover - hw
+        for _ in range(attempts):
+            ok, frame = cap.read()
+            if ok and frame is not None:
+                return True
+            time.sleep(0.05)
+        return False
 
     def read(
         self,
@@ -186,14 +256,16 @@ def make_source(
     camera: CameraConfig,
     mode: str,
     *,
+    backend: Optional[str] = None,
     fail_mode: Optional[str] = None,
     delay: float = 0.0,
 ) -> FrameSource:
     """Build the frame source for ``mode`` (``'emulator'`` / ``'instrument'``).
 
-    ``fail_mode`` / ``delay`` apply only to the emulator source (fault
-    injection for tests); they are ignored for the instrument source.
+    ``backend`` selects the OpenCV capture backend for the instrument source;
+    ``fail_mode`` / ``delay`` apply only to the emulator source (fault injection
+    for tests). Each is ignored by the other source.
     """
     if mode == "instrument":
-        return InstrumentFrameSource(camera)
+        return InstrumentFrameSource(camera, backend=backend)
     return EmulatedFrameSource(camera, fail_mode=fail_mode, delay=delay)

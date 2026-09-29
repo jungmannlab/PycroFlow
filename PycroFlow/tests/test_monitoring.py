@@ -264,6 +264,38 @@ class TestFrameSources(unittest.TestCase):
         src.read()
         self.assertGreaterEqual(time.monotonic() - t0, 0.15)
 
+    def test_make_source_threads_backend_to_instrument(self):
+        src = make_source(
+            CameraConfig("pump", 2), "instrument", backend="dshow"
+        )
+        self.assertIsInstance(src, InstrumentFrameSource)
+        self.assertEqual(src._backend, "dshow")
+
+    def test_backend_round_trips_through_config(self):
+        cfg = load_monitoring_config(
+            {
+                "monitoring": {
+                    "output_dir": "/x",
+                    "backend": "dshow",
+                    "cameras": [{"role": "pump", "device": 2}],
+                }
+            }
+        )
+        self.assertEqual(cfg.backend, "dshow")
+        self.assertEqual(
+            MonitoringConfig.from_dict(cfg.to_dict()).backend, "dshow"
+        )
+
+    def test_probe_without_opencv_is_graceful(self):
+        try:
+            import cv2  # noqa: F401
+        except ImportError:
+            from PycroFlow.monitoring.capture_service import _run_probe
+
+            self.assertEqual(_run_probe(max_index=0), 2)
+        else:
+            self.skipTest("OpenCV installed; no-cv2 probe path not exercised")
+
     def test_instrument_source_without_opencv_reports_extra(self):
         try:
             import cv2  # noqa: F401

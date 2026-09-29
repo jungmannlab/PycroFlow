@@ -1,0 +1,149 @@
+{
+  "checks": [
+    {
+      "criterion": "1: acquisition uncompromised / reader keeps up",
+      "detail": "dropped=0 submitted=20 completed=20 queue_max_depth=8/8",
+      "name": "keep_up",
+      "passed": true,
+      "values": {
+        "backend": "inline",
+        "completed": 20,
+        "dropped": 0,
+        "queue_max_depth": 8,
+        "queue_size": 8,
+        "submitted": 20,
+        "wall_s": 8.8391
+      }
+    },
+    {
+      "criterion": "2: no silent subsample \u2014 coverage block reconciles",
+      "detail": "frames_read=2000 frames_localized=2000 expected=2000 partial=False run_id=01M3MGDW2Y8E2HMZ79VC1M23VM",
+      "name": "no_silent_subsample",
+      "passed": true,
+      "values": {
+        "errors": 0,
+        "expected_frames": 2000,
+        "frames_localized": 2000,
+        "frames_read": 2000,
+        "partial": false,
+        "run_id": "01M3MGDW2Y8E2HMZ79VC1M23VM"
+      }
+    },
+    {
+      "criterion": "3: live NeNA / locs-per-frame / background are real",
+      "detail": "nena_px=0.824785 nena_nm=107.2221 spots_per_frame=5.891 background=3.6098 n_locs=11782",
+      "name": "live_metrics_real",
+      "passed": true,
+      "values": {
+        "background": 3.6098,
+        "n_locs": 11782,
+        "nena_nm": 107.2221,
+        "nena_px": 0.824785,
+        "spots_per_frame": 5.891
+      }
+    },
+    {
+      "criterion": "4: one per-FOV record reaches the registry",
+      "detail": "record present + coverage reconciles",
+      "name": "registry_record",
+      "passed": true,
+      "values": {
+        "acq_status": "live_localized",
+        "analysis_kind": "live_localize",
+        "fov_frame_count": 2000,
+        "raw_retained": true,
+        "registry_ids": {
+          "acquisition_run_id": "01M3MGDW2Y8E2HMZ79VC1M23VM",
+          "analysis_run_id": "an-2",
+          "fov_id": "fov-1",
+          "metrics_id": "met-3"
+        }
+      }
+    },
+    {
+      "criterion": "5: T3 laser interlock \u2014 all three exit paths (safety)",
+      "detail": "paths safe: {'normal_end': True, 'early_abort': True, 'injected_exception': True}",
+      "name": "laser_interlock",
+      "passed": true,
+      "values": {
+        "paths": {
+          "early_abort": true,
+          "injected_exception": true,
+          "normal_end": true
+        }
+      }
+    },
+    {
+      "criterion": "6: pycromanager-1.0 acq-PC items (instrument-only)",
+      "detail": "skipped in emulator mode (no MM / MDA); records versions",
+      "name": "pycromanager_1_0",
+      "passed": true,
+      "values": {
+        "skipped": true,
+        "versions": {
+          "git_commit": "306b790238bb7336f0664e58ca82e2009ea48654",
+          "host": "7f64228f3b5c",
+          "mode": "emulator",
+          "numpy": "2.2.6",
+          "numpy_has_trapezoid": true,
+          "os": "Linux-7.0.14-orbstack-00380-ga7e0a2dc9535-aarch64-with-glibc2.41",
+          "picasso": "0.11.2",
+          "pycroflow": "0.1.1.dev251+gcfb9589ac",
+          "pycromanager": "1.0.2",
+          "python": "3.10.20",
+          "schema_version": "1.0"
+        }
+      }
+    },
+    {
+      "criterion": "7: write-target-gated archive + checksum-before-delete",
+      "detail": "verified=True moved=True local_deleted=True dest_exists=True",
+      "name": "archive",
+      "passed": true,
+      "values": {
+        "checksum": "819d2e47930239ebdf4e626a17cf243af3c01d43e182194004a1fca5f84178b8",
+        "dest": "/tmp/tmpze905awt/archive/gate2_movie.tif",
+        "local_deleted": true,
+        "moved": true,
+        "verified": true
+      }
+    }
+  ],
+  "config": {
+    "archive_dir": null,
+    "batch_size": 100,
+    "data_dir": null,
+    "exposure_ms": 100.0,
+    "laser": null,
+    "mm_config": null,
+    "mode": "emulator",
+    "monet_host": null,
+    "n_frames": 2000,
+    "n_workers": 2,
+    "registry_url": null,
+    "timeout_s": 900.0
+  },
+  "failures": [],
+  "gate": "gate2",
+  "gate2_pass": true,
+  "mode": "emulator",
+  "schema_version": "1.0",
+  "stall_detail": "",
+  "stalled": false,
+  "stalled_phase": null,
+  "utc_end": "2026-09-28T17:19:10.277942+00:00",
+  "utc_start": "2026-09-28T17:19:00.904967+00:00",
+  "version_block": {
+    "git_commit": "306b790238bb7336f0664e58ca82e2009ea48654",
+    "host": "7f64228f3b5c",
+    "mode": "emulator",
+    "numpy": "2.2.6",
+    "numpy_has_trapezoid": true,
+    "os": "Linux-7.0.14-orbstack-00380-ga7e0a2dc9535-aarch64-with-glibc2.41",
+    "picasso": "0.11.2",
+    "pycroflow": "0.1.1.dev251+gcfb9589ac",
+    "pycromanager": "1.0.2",
+    "python": "3.10.20",
+    "schema_version": "1.0"
+  }
+}

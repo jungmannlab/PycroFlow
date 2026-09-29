@@ -84,6 +84,10 @@ class MonitoringConfig:
         setup's ``emulated`` flag).
     poll_interval : float
         Control-channel poll period in the capture process, seconds.
+    backend : str or None
+        OpenCV capture backend for the instrument source: ``dshow`` / ``msmf`` /
+        ``v4l2`` / ``any``. ``None`` auto-selects (DirectShow first on Windows,
+        which is far more reliable than the default MSMF for UVC webcams).
     """
 
     cameras: list[CameraConfig]
@@ -95,6 +99,7 @@ class MonitoringConfig:
     source: Optional[str] = None
     poll_interval: float = 0.05
     tile_cols: Optional[int] = None
+    backend: Optional[str] = None
 
     def to_dict(self) -> dict:
         """Serialise to a plain dict (written to the child's config file)."""
@@ -107,6 +112,7 @@ class MonitoringConfig:
             "source": self.source,
             "poll_interval": self.poll_interval,
             "tile_cols": self.tile_cols,
+            "backend": self.backend,
             "cameras": [
                 {
                     "role": c.role,
@@ -141,6 +147,7 @@ class MonitoringConfig:
             source=data.get("source"),
             poll_interval=float(data.get("poll_interval", 0.05)),
             tile_cols=data.get("tile_cols"),
+            backend=data.get("backend"),
         )
 
 

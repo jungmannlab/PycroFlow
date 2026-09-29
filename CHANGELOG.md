@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Fluidics monitoring: reliable real-webcam capture on Windows. The instrument
+  source now selects the OpenCV backend (defaulting to **DirectShow** on
+  Windows, since the default MSMF backend commonly opens a UVC webcam but only
+  yields black frames), warms up a few frames on open, and logs the backend +
+  resolution + whether a first frame arrived. Configurable via `monitoring.
+  backend` (`dshow`/`msmf`/`v4l2`/`any`). New `pycroflow-capture --probe`
+  scans camera indices × backends and reports which yield a live (non-black)
+  frame, to find the right index/backend on a rig. See the runbook's black-
+  preview section.
 - Fluidics monitoring: clips now land **with the run** and carry their step.
   The `monitoring.output_dir` is optional — when omitted, clips default to
   `<experiment save_dir>/fluidics_cam/` (resolved at run start), so they sit

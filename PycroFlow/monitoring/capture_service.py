@@ -44,7 +44,7 @@ from loguru import logger
 from PycroFlow.monitoring.avi import RawAviWriter
 from PycroFlow.monitoring.config import CameraConfig, MonitoringConfig
 from PycroFlow.monitoring.registry_index import RegistryIndexWriter
-from PycroFlow.monitoring.sources import make_source
+from PycroFlow.monitoring.sources import _backend_candidates, make_source
 from PycroFlow.monitoring.tiling import compose, plan_layout
 
 
@@ -65,13 +65,18 @@ class CaptureThread(Thread):
         *,
         queue_size: int,
         fps: int,
+        backend: Optional[str] = None,
         fail_mode: Optional[str] = None,
         fail_delay: float = 0.0,
     ):
         super().__init__(name="cam-{}".format(camera.role), daemon=True)
         self.camera = camera
         self._source = make_source(
-            camera, mode, fail_mode=fail_mode, delay=fail_delay
+            camera,
+            mode,
+            backend=backend,
+            fail_mode=fail_mode,
+            delay=fail_delay,
         )
         self._fps = max(1, fps)
         self._buf: deque = deque(maxlen=max(1, queue_size))
@@ -163,6 +168,7 @@ class CaptureService:
                 mode,
                 queue_size=config.queue_size,
                 fps=config.fps,
+                backend=config.backend,
                 fail_mode=fail_mode,
                 fail_delay=fail_delay,
             )
@@ -382,7 +388,13 @@ def _run_smoke(config: MonitoringConfig, mode: str, run_id: str) -> int:
     os.makedirs(config.output_dir, exist_ok=True)
     layout = plan_layout(config.cameras, config.tile_cols)
     threads = [
-        CaptureThread(c, mode, queue_size=config.queue_size, fps=config.fps)
+        CaptureThread(
+            c,
+            mode,
+            queue_size=config.queue_size,
+            fps=config.fps,
+            backend=config.backend,
+        )
         for c in config.cameras
     ]
     for t in threads:
@@ -406,14 +418,54 @@ def _run_smoke(config: MonitoringConfig, mode: str, run_id: str) -> int:
     return 0
 
 
+def _run_probe(max_index: int = 9) -> int:
+    """Report which (device index, backend) pairs open and yield a live frame.
+
+    The go-to diagnostic when the instrument preview is black: it scans camera
+    indices across the platform's capture backends, opens each, and prints
+    whether a real (non-black) frame arrives. Pick the index+backend whose mean
+    brightness is well above 0 and set it in the setup's ``monitoring:`` block.
+    """
+    try:
+        import cv2
+    except ImportError:
+        print('OpenCV not installed; run  pip install -e ".[monitoring]"')
+        return 2
+    backends = _backend_candidates(cv2, None)
+    print("index  backend  opened  frame            mean  (mean~0 = black)")
+    for idx in range(max_index + 1):
+        for name, flag in backends:
+            cap = cv2.VideoCapture(idx, flag)
+            opened = cap.isOpened()
+            shape = None
+            mean = None
+            if opened:
+                for _ in range(10):
+                    ok, frame = cap.read()
+                    if ok and frame is not None:
+                        shape = "x".join(str(s) for s in frame.shape)
+                        mean = round(float(frame.mean()), 1)
+                        break
+                    time.sleep(0.05)
+            cap.release()
+            print(
+                "{:5d}  {:7s}  {:6s}  {:15s}  {}".format(
+                    idx,
+                    name,
+                    "yes" if opened else "no",
+                    shape or "-",
+                    "-" if mean is None else mean,
+                )
+            )
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="pycroflow-capture",
         description="Fluidics monitoring camera-capture service.",
     )
-    parser.add_argument(
-        "--config", required=True, help="path to the cameras config JSON"
-    )
+    parser.add_argument("--config", help="path to the cameras config JSON")
     parser.add_argument(
         "--control-dir", help="directory the parent drops round commands into"
     )
@@ -438,11 +490,28 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="grab a short clip from each camera and exit (no orchestration)",
     )
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="scan camera indices x backends and report which yield a live "
+        "frame, then exit (diagnose a black preview; no --config needed)",
+    )
+    parser.add_argument(
+        "--max-index",
+        type=int,
+        default=9,
+        help="highest camera index --probe scans (default 9)",
+    )
     # Fault injection for the isolation proof (emulator source only).
     parser.add_argument("--fail-mode", choices=("slow", "raise", "unplug"))
     parser.add_argument("--fail-delay", type=float, default=0.0)
     args = parser.parse_args(argv)
 
+    if args.probe:
+        return _run_probe(args.max_index)
+
+    if not args.config:
+        parser.error("--config is required unless --probe is given")
     with open(args.config) as f:
         config = MonitoringConfig.from_dict(json.load(f))
     mode = args.mode or config.source or "emulator"

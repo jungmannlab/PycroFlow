@@ -48,6 +48,8 @@ monitoring:
   retention_days: 14                 # prune clips older than this (0 disables)
   # source: instrument               # optional; inferred from the setup's
                                      #   `emulated:` flag when omitted
+  # backend: dshow                   # OpenCV backend (Windows): dshow (default,
+                                     #   recommended) / msmf / any. See §8.
   cameras:
     - {role: reservoir, device: 0, width: 640, height: 480}
     - {role: pump,      device: 1, width: 640, height: 480}
@@ -203,13 +205,54 @@ evidence back in the dev container and ticks the gate.
 
 ---
 
+## 8. Black preview / black panels on Windows (real webcam)
+
+The webcam works in Windows' Camera app but the Webcams tab (or the recorded
+tile) is all black. This is almost always OpenCV, not the camera. Work through
+these in order:
+
+1. **Close every other app using the camera** — especially the Windows
+   **Camera** app. UVC webcams are usually *exclusive*: while another program
+   holds the device, OpenCV opens it but only gets black frames. Close it and
+   retry.
+2. **Camera privacy permission.** Windows Settings → Privacy & security →
+   Camera → turn on **Camera access** and **Let desktop apps access your
+   camera** (Python/OpenCV counts as a desktop app; if off, frames are black).
+3. **Confirm OpenCV is installed:** `pip install -e ".[hardware,monitoring]"`.
+   A missing `[monitoring]` extra logs `instrument capture needs OpenCV`.
+4. **Find the working index + backend with the probe** (the fastest way):
+
+   ```bash
+   pycroflow-capture --probe
+   ```
+   It scans camera indices across backends and prints, per (index, backend),
+   whether it opened and the frame's **mean brightness** — `mean ~0` is black,
+   a value well above 0 is a real image. Use the winning row's index (set it in
+   the Webcams tab or the `monitoring:` block) and, if MSMF is black but
+   DirectShow isn't, pin `backend: dshow`.
+5. **Backend.** The instrument source defaults to **DirectShow** on Windows
+   (the default MSMF backend commonly opens a UVC cam but yields only black
+   frames). Force it explicitly with `backend: dshow` in the `monitoring:`
+   block if needed; `msmf` / `any` are the other options.
+6. **Check the log.** Each camera logs a line like
+   `monitoring: camera pump opened via dshow at 640x480 (first frame: yes)`.
+   `first frame: NONE` means it opened but delivered no frame — that's the
+   in-use / privacy case (steps 1–2), not a wrong index.
+
+Note the Webcams-tab preview and the actual recording use the **same** backend
+selection, so once the probe finds a working index+backend, both work.
+
+---
+
 ## Troubleshooting
 
 - **No clips written** — the setup has no `monitoring:` block or no `cameras`;
   or every camera failed to open (check the log for `did not open`).
-- **All panels black** — cameras did not open (wrong `device` index) or are all
-  unplugged; the **Webcams** tab preview or the smoke test (§3) isolates this,
-  and the tab lets you correct the index on the spot.
+- **All panels black (real cameras, Windows)** — see §8: usually the Windows
+  Camera app holding the device, a camera privacy setting, or the MSMF backend;
+  `pycroflow-capture --probe` finds the working index + backend.
+- **All panels black (emulated setup)** — you're on an `emulated: true` setup,
+  so the preview shows the synthetic source; that's expected, not a failure.
 - **`instrument capture needs OpenCV`** — install the `[monitoring]` extra.
 - **Clips not indexed** — `PAINT_REGISTRY_URL` unset, registry unreachable, or
   `[registry]` extra not installed; recording is unaffected.
