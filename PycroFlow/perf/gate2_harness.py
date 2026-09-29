@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import faulthandler
 import json
+import logging
 import os
 import platform
 import queue
@@ -569,8 +570,15 @@ def _make_fov_config(args) -> FovConfig:
         movie_source_path=args.data_dir,
         archive_dir=args.archive_dir,
         # From --pixelsize (None -> picasso assumes 130 nm with a warning);
-        # flows to the NDTiff source's camera_info so NeNA-in-nm is accurate.
+        # flows to the source's camera_info so NeNA-in-nm is accurate.
         pixelsize_nm=args.pixelsize_nm,
+        # Tunable spot detection/fit (instrument): the default Min. Net Gradient
+        # (5000) is often too high for real frames -> 0 spots. Set --min-net-
+        # gradient to your usual picasso value for this camera/sample.
+        localize_params={
+            "Box Size": args.box_size,
+            "Min. Net Gradient": args.min_net_gradient,
+        },
     )
 
 
@@ -631,7 +639,15 @@ def run_clean_fov(args, registry, illu) -> FovRun:
         cfg.source_kind = SOURCE_IMAGE_QUEUE
         cfg.source_kwargs = {
             "frame_q": driver.get_frame_queue(),
-            "pixelsize_nm": cfg.pixelsize_nm,
+            # Full picasso camera_info (fit needs the photon-conversion keys, not
+            # just Pixelsize, or the worker localize raises -> frames_localized=0).
+            "camera_info": {
+                "Baseline": args.baseline,
+                "Sensitivity": args.sensitivity,
+                "Gain": args.gain,
+                "Qe": args.qe,
+                "Pixelsize": cfg.pixelsize_nm or 130.0,
+            },
             "first_frame_timeout_s": args.first_frame_timeout_s,
         }
 
@@ -1578,12 +1594,69 @@ def build_parser() -> argparse.ArgumentParser:
         "frame within this many seconds (camera not triggering / MDA stuck / "
         "device contention) instead of awaiting the full --timeout.",
     )
+    # Camera photon-conversion info picasso's fit REQUIRES (Baseline / "
+    # Sensitivity / Gain / Qe) -- without these the worker localize raises and
+    # nothing is localized. Defaults are placeholders (localize runs, photons
+    # approximate); pass your camera's real values for accurate photons.
+    parser.add_argument(
+        "--baseline",
+        dest="baseline",
+        type=float,
+        default=100.0,
+        help="Camera baseline/offset (ADU) for picasso (instrument mode).",
+    )
+    parser.add_argument(
+        "--sensitivity",
+        dest="sensitivity",
+        type=float,
+        default=1.0,
+        help="Camera sensitivity (e-/ADU) for picasso.",
+    )
+    parser.add_argument(
+        "--gain",
+        dest="gain",
+        type=float,
+        default=1.0,
+        help="Camera gain for picasso (1 for sCMOS).",
+    )
+    parser.add_argument(
+        "--qe",
+        dest="qe",
+        type=float,
+        default=0.9,
+        help="Camera quantum efficiency for picasso.",
+    )
+    parser.add_argument(
+        "--min-net-gradient",
+        dest="min_net_gradient",
+        type=float,
+        default=5000.0,
+        help="picasso Min. Net Gradient for spot detection (instrument mode). "
+        "Set to your usual value for this camera/sample -- too high yields 0 "
+        "spots (n_locs=0).",
+    )
+    parser.add_argument(
+        "--box-size",
+        dest="box_size",
+        type=int,
+        default=7,
+        help="picasso Box Size for spot detection/fit.",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     """Parse args, run Gate-2, write the verdict, print a summary."""
     args = build_parser().parse_args(argv)
+
+    # Surface the live-localize worker path: the compute backend logs a WARNING
+    # per failed batch ("live-localize batch N failed: <error>"). Without a
+    # configured handler those are swallowed, so a fit that raises on every
+    # frame reads as a silent frames_localized=0. Route them to stderr.
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
 
     # Export monet config/protocol paths BEFORE monet is imported — its module
     # reads MONET_CONFIG_PATHS / MONET_PROTOCOL_PATHS at import time (lazily, via

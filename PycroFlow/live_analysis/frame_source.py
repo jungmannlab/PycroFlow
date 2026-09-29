@@ -771,12 +771,19 @@ class ImageQueueFrameSource(FrameSource):
         self,
         frame_q,
         *,
+        camera_info: dict | None = None,
         pixelsize_nm: float | None = None,
         first_frame_timeout_s: float = 120.0,
         poll_s: float = 0.2,
     ) -> None:
         self._q = frame_q
-        self._pixelsize_nm = pixelsize_nm
+        # picasso's fit needs the full photon-conversion info (Baseline /
+        # Sensitivity / Gain / Qe / Pixelsize) — NOT just Pixelsize, or the
+        # worker localize raises and nothing is localized. Callers pass the real
+        # camera_info; pixelsize_nm is a back-compat convenience folded in.
+        self._camera_info = dict(camera_info) if camera_info else {}
+        if pixelsize_nm and "Pixelsize" not in self._camera_info:
+            self._camera_info["Pixelsize"] = float(pixelsize_nm)
         self._first_frame_timeout_s = first_frame_timeout_s
         self._poll_s = poll_s
         self.no_frames_timed_out = False
@@ -784,10 +791,7 @@ class ImageQueueFrameSource(FrameSource):
         self._stop = threading.Event()
 
     def camera_info(self) -> dict:
-        info: dict = {}
-        if self._pixelsize_nm:
-            info["Pixelsize"] = float(self._pixelsize_nm)
-        return info
+        return dict(self._camera_info)
 
     def frames_read(self) -> int:
         return self._read
