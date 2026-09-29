@@ -605,6 +605,30 @@ class _StallTimeout(Exception):
     """Raised internally when the FOV exceeds the watchdog timeout."""
 
 
+def _image_queue_source_kwargs(args, driver, pixelsize_nm) -> dict:
+    """Build the SOURCE_IMAGE_QUEUE kwargs for a driver-fed instrument FOV.
+
+    Shared by the clean FOV and the interlock-path FOVs so BOTH read the frames
+    pushed from the acquisition's ``image_process_fn`` (via the driver's queue)
+    with a full picasso ``camera_info`` — not the tiff-tail source, which globs
+    ``data_dir`` and can't find the queue-fed frames (that mismatch hung the
+    interlock paths on the first real run).
+    """
+    return {
+        "frame_q": driver.get_frame_queue(),
+        # Full picasso camera_info: the fit needs the photon-conversion keys
+        # (Baseline/Sensitivity/Gain/Qe), not just Pixelsize, or it raises.
+        "camera_info": {
+            "Baseline": args.baseline,
+            "Sensitivity": args.sensitivity,
+            "Gain": args.gain,
+            "Qe": args.qe,
+            "Pixelsize": pixelsize_nm or 130.0,
+        },
+        "first_frame_timeout_s": args.first_frame_timeout_s,
+    }
+
+
 def run_clean_fov(args, registry, illu) -> FovRun:
     """Run one clean FOV through the real WP-4 service, under a watchdog.
 
@@ -637,19 +661,9 @@ def run_clean_fov(args, registry, illu) -> FovRun:
         # yet reader_frames_read=0, hung in await_new_image). The queue is
         # available immediately (no wait for the dataset to materialise).
         cfg.source_kind = SOURCE_IMAGE_QUEUE
-        cfg.source_kwargs = {
-            "frame_q": driver.get_frame_queue(),
-            # Full picasso camera_info (fit needs the photon-conversion keys, not
-            # just Pixelsize, or the worker localize raises -> frames_localized=0).
-            "camera_info": {
-                "Baseline": args.baseline,
-                "Sensitivity": args.sensitivity,
-                "Gain": args.gain,
-                "Qe": args.qe,
-                "Pixelsize": cfg.pixelsize_nm or 130.0,
-            },
-            "first_frame_timeout_s": args.first_frame_timeout_s,
-        }
+        cfg.source_kwargs = _image_queue_source_kwargs(
+            args, driver, cfg.pixelsize_nm
+        )
 
     holder: dict = {}
 
@@ -1094,7 +1108,15 @@ def _run_interlock_fov(args, illu, *, abort: bool):
 
     def _work():
         try:
-            holder["res"] = svc.run_fov(_short_fov(args))
+            cfg = _short_fov(args)
+            if args.mode == MODE_INSTRUMENT:
+                # Same driver-fed image queue as the clean FOV — NOT tiff-tail,
+                # which would glob data_dir for frames the queue holds and hang.
+                cfg.source_kind = SOURCE_IMAGE_QUEUE
+                cfg.source_kwargs = _image_queue_source_kwargs(
+                    args, driver, cfg.pixelsize_nm
+                )
+            holder["res"] = svc.run_fov(cfg)
         except Exception as exc:  # noqa: BLE001
             holder["err"] = exc
 
