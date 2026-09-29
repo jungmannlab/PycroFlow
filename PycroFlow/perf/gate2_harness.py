@@ -40,6 +40,7 @@ import faulthandler
 import json
 import os
 import platform
+import queue
 import socket
 import sys
 import threading
@@ -56,7 +57,7 @@ from PycroFlow.live_analysis.archive import (
     WRITE_TARGET_LOCAL,
     archive_movie,
 )
-from PycroFlow.live_analysis.frame_source import SOURCE_NDTIFF_DATASET
+from PycroFlow.live_analysis.frame_source import SOURCE_IMAGE_QUEUE
 from PycroFlow.live_analysis.laser_interlock import LaserInterlock
 from PycroFlow.live_analysis.service import FovConfig, LiveAnalysisService
 
@@ -386,6 +387,30 @@ class AcquisitionDriver:
         self._started = threading.Event()
         self._done = threading.Event()
         self._acq = None
+        # Live frames pushed from the acquisition's image_process_fn (the same
+        # hook PycroFlow.imaging uses). Unbounded so the callback never blocks
+        # acquisition; the ImageQueueFrameSource drains it. A None sentinel is
+        # enqueued when acquisition ends so the reader stops.
+        self._frame_q: "queue.Queue" = queue.Queue()
+
+    def get_frame_queue(self) -> "queue.Queue":
+        return self._frame_q
+
+    def _on_image(self, img, meta, event_queue):  # pragma: no cover - acq PC
+        """image_process_fn: push each frame to the reader, keep saving to disk.
+
+        Mirrors PycroFlow.imaging's proven ``image_process_fn(img, meta,
+        event_queue)`` contract — returns ``(img, meta)`` so the frame stays in
+        the save pipeline (disk + archive), and additionally enqueues a copy for
+        the live localize pipeline. Never raises into the acquisition.
+        """
+        try:
+            import numpy as _np
+
+            self._frame_q.put_nowait(_np.array(img, copy=True))
+        except Exception:
+            pass
+        return (img, meta)
 
     def is_noop(self) -> bool:
         return self.args.mode == MODE_EMULATOR
@@ -426,6 +451,7 @@ class AcquisitionDriver:
                 directory=self.args.data_dir,
                 name="gate2_raw",
                 show_display=False,
+                image_process_fn=self._on_image,
             ) as acq:
                 self._acq = acq
                 acq.acquire(events)
@@ -434,6 +460,11 @@ class AcquisitionDriver:
         finally:
             self._started.set()
             self._done.set()
+            # Unblock the reader whether acquisition finished or errored.
+            try:
+                self._frame_q.put_nowait(None)
+            except Exception:
+                pass
 
     def error(self) -> BaseException | None:
         return self._error
@@ -591,23 +622,18 @@ def run_clean_fov(args, registry, illu) -> FovRun:
     _enable_signal_laser(illu, args)
 
     if args.mode == MODE_INSTRUMENT:
-        # Read the driver's LIVE NDTiff dataset (Acquisition.get_dataset()), not
-        # a tiff-tail glob: pycromanager writes NDTiff into a <name>_<n>/ subdir
-        # that the OME-TIFF glob never discovers (the first-run frames_read=0).
-        # ndstorage's Dataset is readable while acquiring — the real live path.
-        ds = driver.get_dataset(timeout=min(60.0, float(args.timeout_s)))
-        if ds is not None:
-            cfg.source_kind = SOURCE_NDTIFF_DATASET
-            cfg.source_kwargs = {
-                "dataset": ds,
-                "pixelsize_nm": cfg.pixelsize_nm,
-                "first_frame_timeout_s": args.first_frame_timeout_s,
-            }
-        else:
-            print(
-                "WARNING: could not obtain the acquisition dataset; leaving the "
-                "tiff-tail source (live-localize will likely see no frames)."
-            )
+        # Live-read frames PUSHED from the acquisition's image_process_fn (the
+        # production PycroFlow.imaging hook) via the driver's in-memory queue.
+        # NOT acq.get_dataset()'s ndstorage live view: on the Java backend that
+        # never surfaced the frames being written to disk (100 MB-5 GB acquired
+        # yet reader_frames_read=0, hung in await_new_image). The queue is
+        # available immediately (no wait for the dataset to materialise).
+        cfg.source_kind = SOURCE_IMAGE_QUEUE
+        cfg.source_kwargs = {
+            "frame_q": driver.get_frame_queue(),
+            "pixelsize_nm": cfg.pixelsize_nm,
+            "first_frame_timeout_s": args.first_frame_timeout_s,
+        }
 
     holder: dict = {}
 

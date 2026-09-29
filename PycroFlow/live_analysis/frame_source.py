@@ -746,12 +746,95 @@ class NdTiffDatasetFrameSource(FrameSource):
             self._read += len(buf)
 
 
+class ImageQueueFrameSource(FrameSource):
+    """Live frames pushed from a pycromanager ``image_process_fn`` into a queue.
+
+    The canonical pycromanager live path — the SAME hook ``PycroFlow.imaging``
+    uses in production (proven on the rig): the Java backend calls
+    ``image_process_fn(img, meta, event_queue)`` per acquired frame; the driver
+    pushes each ``img`` onto ``frame_q`` and returns ``(img, meta)`` so the frame
+    still saves to disk. This source drains that queue into contiguous batches.
+    A ``None`` sentinel marks the end of acquisition.
+
+    Chosen over tailing the on-disk NDTiff because ``acq.get_dataset()``'s
+    ndstorage live view did NOT surface frames the Java backend was writing
+    (``has_image``/``await_new_image`` never fired), so the reader hung though
+    the MDA was producing. The queue is **unbounded** so the producer never
+    blocks acquisition and never drops a frame (lossless); for a bounded test
+    (n_frames) it drains as localization proceeds. Single position
+    (``position=None``); ``queue`` / numpy only — no pycromanager import here.
+    """
+
+    lossless = True
+
+    def __init__(
+        self,
+        frame_q,
+        *,
+        pixelsize_nm: float | None = None,
+        first_frame_timeout_s: float = 120.0,
+        poll_s: float = 0.2,
+    ) -> None:
+        self._q = frame_q
+        self._pixelsize_nm = pixelsize_nm
+        self._first_frame_timeout_s = first_frame_timeout_s
+        self._poll_s = poll_s
+        self.no_frames_timed_out = False
+        self._read = 0
+        self._stop = threading.Event()
+
+    def camera_info(self) -> dict:
+        info: dict = {}
+        if self._pixelsize_nm:
+            info["Pixelsize"] = float(self._pixelsize_nm)
+        return info
+
+    def frames_read(self) -> int:
+        return self._read
+
+    def close(self) -> None:
+        self._stop.set()
+
+    def batches(self, batch_size: int) -> Iterator[Batch]:
+        buf: list = []
+        start = 0
+        got_first = False
+        t0 = time.monotonic()
+        while not self._stop.is_set():
+            try:
+                item = self._q.get(timeout=self._poll_s)
+            except queue.Empty:
+                if (
+                    not got_first
+                    and self._first_frame_timeout_s
+                    and (time.monotonic() - t0) > self._first_frame_timeout_s
+                ):
+                    # No first frame ever — fail fast (queue.get's timeout keeps
+                    # this loop live, unlike a blocking ndstorage await).
+                    self.no_frames_timed_out = True
+                    break
+                continue
+            if item is None:  # sentinel — acquisition finished
+                break
+            got_first = True
+            buf.append(np.asarray(item))
+            if len(buf) >= batch_size:
+                yield Batch(np.stack(buf, axis=0), start, None)
+                self._read += len(buf)
+                start = self._read
+                buf = []
+        if buf:
+            yield Batch(np.stack(buf, axis=0), start, None)
+            self._read += len(buf)
+
+
 # ── factory ─────────────────────────────────────────────────────────────────
 
 SOURCE_TIFF_TAIL = "tiff-tail"
 SOURCE_RAM_PEEK = "ram-peek"
 SOURCE_MOCK = "mock"
 SOURCE_NDTIFF_DATASET = "ndtiff-dataset"
+SOURCE_IMAGE_QUEUE = "image-queue"
 
 
 def make_frame_source(kind: str, **kwargs) -> FrameSource:
@@ -768,4 +851,6 @@ def make_frame_source(kind: str, **kwargs) -> FrameSource:
         return MockFrameSource(**kwargs)
     if kind == SOURCE_NDTIFF_DATASET:
         return NdTiffDatasetFrameSource(**kwargs)
+    if kind == SOURCE_IMAGE_QUEUE:
+        return ImageQueueFrameSource(**kwargs)
     raise ValueError("unknown frame source {!r}".format(kind))

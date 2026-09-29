@@ -143,5 +143,69 @@ class TestNdTiffDatasetFrameSource(unittest.TestCase):
         self.assertLess(elapsed, 5.0)  # bailed ~0.1 s, did not hang
 
 
+class TestImageQueueFrameSource(unittest.TestCase):
+    """The image_process_fn-fed queue source (the acq-PC live path)."""
+
+    def test_drains_queue_in_batches_until_sentinel(self):
+        import queue as _q
+
+        from PycroFlow.live_analysis.frame_source import (
+            ImageQueueFrameSource,
+        )
+
+        fq = _q.Queue()
+        for i in range(7):
+            fq.put(np.full((3, 3), i, dtype=np.uint16))
+        fq.put(None)  # end-of-acquisition sentinel
+        src = ImageQueueFrameSource(fq, pixelsize_nm=106.0, poll_s=0.01)
+        batches = list(src.batches(batch_size=3))
+        self.assertEqual([b.n_frames for b in batches], [3, 3, 1])
+        self.assertEqual([b.start_frame for b in batches], [0, 3, 6])
+        self.assertTrue(all(b.position is None for b in batches))
+        self.assertEqual(src.frames_read(), 7)
+        got = np.concatenate([b.frames for b in batches], axis=0)
+        self.assertEqual([int(got[i, 0, 0]) for i in range(7)], list(range(7)))
+        self.assertEqual(src.camera_info().get("Pixelsize"), 106.0)
+
+    def test_first_frame_timeout_when_queue_stays_empty(self):
+        import queue as _q
+
+        from PycroFlow.live_analysis.frame_source import (
+            ImageQueueFrameSource,
+        )
+
+        fq = _q.Queue()  # no frame + no sentinel ever
+        src = ImageQueueFrameSource(fq, poll_s=0.01, first_frame_timeout_s=0.1)
+        t0 = time.monotonic()
+        out = list(src.batches(batch_size=4))
+        self.assertEqual(out, [])
+        self.assertTrue(src.no_frames_timed_out)
+        self.assertLess(time.monotonic() - t0, 5.0)
+
+    def test_live_arrivals_then_sentinel(self):
+        import queue as _q
+
+        from PycroFlow.live_analysis.frame_source import (
+            ImageQueueFrameSource,
+        )
+
+        fq = _q.Queue()
+
+        def producer():
+            for i in range(5):
+                time.sleep(0.02)
+                fq.put(np.full((2, 2), i, dtype=np.uint16))
+            fq.put(None)
+
+        src = ImageQueueFrameSource(fq, poll_s=0.01)
+        t = threading.Thread(target=producer)
+        t.start()
+        batches = list(src.batches(batch_size=2))
+        t.join()
+        self.assertEqual(src.frames_read(), 5)
+        got = np.concatenate([b.frames for b in batches], axis=0)
+        self.assertEqual([int(got[i, 0, 0]) for i in range(5)], list(range(5)))
+
+
 if __name__ == "__main__":
     unittest.main()
