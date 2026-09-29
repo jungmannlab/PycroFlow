@@ -61,6 +61,33 @@ def _backend_candidates(cv2, backend: Optional[str]) -> list:
     return [("any", cv2.CAP_ANY)]
 
 
+def _quiet_cv2(cv2) -> None:
+    """Best-effort: mute OpenCV's stderr backend chatter.
+
+    Auto-selection tries backends in turn, so a backend that can't open a given
+    index (e.g. DShow-by-index on some builds) logs a WARN before we fall back
+    to one that works. Drop OpenCV's log level to ERROR so that expected
+    fallback noise doesn't reach the terminal. No-op if the API differs.
+    """
+    try:
+        cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+    except Exception:  # pragma: no cover - version/build dependent
+        pass
+
+
+def _open_capture(cv2, device, flag):
+    """``cv2.VideoCapture(device, flag)`` that never raises.
+
+    Some backends raise a C++ exception on an index they can't handle; treat
+    that as "not opened" so auto-selection cleanly moves to the next backend.
+    Returns the capture, or ``None`` if construction raised.
+    """
+    try:
+        return cv2.VideoCapture(device, flag)
+    except Exception:  # pragma: no cover - needs a specific build/hardware
+        return None
+
+
 class FrameSource(abc.ABC):
     """One camera's frame source."""
 
@@ -174,11 +201,13 @@ class InstrumentFrameSource(FrameSource):
                 "instrument capture needs OpenCV; install pip install -e "
                 '".[monitoring]"'
             ) from exc
+        _quiet_cv2(cv2)
         tried = []
         for name, flag in _backend_candidates(cv2, self._backend):
-            cap = cv2.VideoCapture(self.camera.device, flag)
-            if not cap.isOpened():  # pragma: no cover - needs hardware
-                cap.release()
+            cap = _open_capture(cv2, self.camera.device, flag)
+            if cap is None or not cap.isOpened():  # pragma: no cover - hw
+                if cap is not None:
+                    cap.release()
                 tried.append(name)
                 continue
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)

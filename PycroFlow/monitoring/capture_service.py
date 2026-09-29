@@ -44,7 +44,12 @@ from loguru import logger
 from PycroFlow.monitoring.avi import RawAviWriter
 from PycroFlow.monitoring.config import CameraConfig, MonitoringConfig
 from PycroFlow.monitoring.registry_index import RegistryIndexWriter
-from PycroFlow.monitoring.sources import _backend_candidates, make_source
+from PycroFlow.monitoring.sources import (
+    _backend_candidates,
+    _open_capture,
+    _quiet_cv2,
+    make_source,
+)
 from PycroFlow.monitoring.tiling import compose, plan_layout
 
 
@@ -431,12 +436,13 @@ def _run_probe(max_index: int = 9) -> int:
     except ImportError:
         print('OpenCV not installed; run  pip install -e ".[monitoring]"')
         return 2
+    _quiet_cv2(cv2)
     backends = _backend_candidates(cv2, None)
     print("index  backend  opened  frame            mean  (mean~0 = black)")
     for idx in range(max_index + 1):
         for name, flag in backends:
-            cap = cv2.VideoCapture(idx, flag)
-            opened = cap.isOpened()
+            cap = _open_capture(cv2, idx, flag)
+            opened = bool(cap and cap.isOpened())
             shape = None
             mean = None
             if opened:
@@ -447,7 +453,8 @@ def _run_probe(max_index: int = 9) -> int:
                         mean = round(float(frame.mean()), 1)
                         break
                     time.sleep(0.05)
-            cap.release()
+            if cap is not None:
+                cap.release()
             print(
                 "{:5d}  {:7s}  {:6s}  {:15s}  {}".format(
                     idx,
