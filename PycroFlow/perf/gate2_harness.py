@@ -41,7 +41,6 @@ import json
 import logging
 import os
 import platform
-import queue
 import socket
 import sys
 import threading
@@ -57,6 +56,10 @@ import PycroFlow
 from PycroFlow.live_analysis.archive import (
     WRITE_TARGET_LOCAL,
     archive_movie,
+)
+from PycroFlow.live_analysis.acquisition_driver import (
+    AcquisitionDriver,
+    image_queue_source_kwargs,
 )
 from PycroFlow.live_analysis.frame_source import SOURCE_IMAGE_QUEUE
 from PycroFlow.live_analysis.laser_interlock import LaserInterlock
@@ -359,151 +362,6 @@ def build_version_block(mode: str) -> dict:
 # ── acquisition driver (instrument mode) ─────────────────────────────────────
 
 
-class AcquisitionDriver:
-    """Drive a real MDA to ``data_dir`` so the tiff-tail source has something.
-
-    In ``--mode instrument`` the WP-4 tiff-tail :class:`FrameSource` only TAILS a
-    movie in ``data_dir`` — it never starts an acquisition. Without a driver the
-    source polls an empty dir forever (the 60-min hang). This driver spawns the
-    acquisition in a **background thread** while the service tails ``data_dir``,
-    which is exactly the PycroFlow-spawned "live" path WP-4 targets.
-
-    It reuses PycroFlow's shared Micro-Manager Core
-    (:func:`PycroFlow.services.mm_core.get_core`, the same connection the GUI /
-    monet use) and pycromanager's ``Acquisition`` + ``multi_d_acquisition_events``
-    — the identical acquisition primitive ``PycroFlow.imaging`` uses
-    (``record_movie`` / ``AcquisitionThread``); the full ``ImagingSystem`` is not
-    reused because it needs a protocol + PFS config Gate-2 does not have. The MDA
-    writes a standard NDTiff / OME-TIFF dataset into ``data_dir`` — the layout the
-    tiff-tail ``_find_movie_file`` already discovers. In emulator mode this is a
-    no-op (``MockFrameSource`` fabricates frames).
-
-    pycromanager is imported lazily so emulator mode never needs it.
-    """
-
-    def __init__(self, args) -> None:
-        self.args = args
-        self._thread: threading.Thread | None = None
-        self._error: BaseException | None = None
-        self._started = threading.Event()
-        self._done = threading.Event()
-        self._acq = None
-        # Live frames pushed from the acquisition's image_process_fn (the same
-        # hook PycroFlow.imaging uses). Unbounded so the callback never blocks
-        # acquisition; the ImageQueueFrameSource drains it. A None sentinel is
-        # enqueued when acquisition ends so the reader stops.
-        self._frame_q: "queue.Queue" = queue.Queue()
-
-    def get_frame_queue(self) -> "queue.Queue":
-        return self._frame_q
-
-    def _on_image(self, img, meta, event_queue):  # pragma: no cover - acq PC
-        """image_process_fn: push each frame to the reader, keep saving to disk.
-
-        Mirrors PycroFlow.imaging's proven ``image_process_fn(img, meta,
-        event_queue)`` contract — returns ``(img, meta)`` so the frame stays in
-        the save pipeline (disk + archive), and additionally enqueues a copy for
-        the live localize pipeline. Never raises into the acquisition.
-        """
-        try:
-            import numpy as _np
-
-            self._frame_q.put_nowait(_np.array(img, copy=True))
-        except Exception:
-            pass
-        return (img, meta)
-
-    def is_noop(self) -> bool:
-        return self.args.mode == MODE_EMULATOR
-
-    def start(self) -> None:
-        """Start acquiring in a background thread (no-op in emulator mode)."""
-        if self.is_noop():
-            self._done.set()
-            return
-        self._thread = threading.Thread(  # pragma: no cover - acq PC only
-            target=self._run, name="gate2-acq", daemon=True
-        )
-        self._thread.start()  # pragma: no cover - acq PC only
-
-    def _run(self) -> None:  # pragma: no cover - acq PC only (needs MM)
-        try:
-            from pycromanager import (
-                Acquisition,
-                multi_d_acquisition_events,
-            )
-
-            from PycroFlow.services import mm_core
-
-            core = mm_core.get_core()
-            try:
-                core.set_exposure(float(self.args.exposure_ms))
-            except Exception:
-                pass
-            os.makedirs(self.args.data_dir, exist_ok=True)
-            events = multi_d_acquisition_events(
-                num_time_points=int(self.args.n_frames),
-                time_interval_s=0,
-                channel_exposures_ms=[float(self.args.exposure_ms)],
-                order="tcpz",
-            )
-            self._started.set()
-            with Acquisition(
-                directory=self.args.data_dir,
-                name="gate2_raw",
-                show_display=False,
-                image_process_fn=self._on_image,
-            ) as acq:
-                self._acq = acq
-                acq.acquire(events)
-        except BaseException as exc:  # noqa: BLE001 - surfaced to the driver
-            self._error = exc
-        finally:
-            self._started.set()
-            self._done.set()
-            # Unblock the reader whether acquisition finished or errored.
-            try:
-                self._frame_q.put_nowait(None)
-            except Exception:
-                pass
-
-    def error(self) -> BaseException | None:
-        return self._error
-
-    def wait(self, timeout: float | None = None) -> bool:
-        """Block until acquisition finishes; True if it completed in time."""
-        return self._done.wait(timeout=timeout)
-
-    def get_dataset(self, timeout: float = 60.0):  # pragma: no cover - acq PC
-        """Return the Acquisition's live ndstorage ``Dataset`` (or None).
-
-        The dataset only exists once ``_run`` has entered ``with Acquisition``.
-        Poll until it's available (or the acquisition errored / finished with no
-        dataset), returning None on timeout so the caller can fall back instead
-        of crashing. The returned dataset is readable *while acquiring* — that's
-        what the NDTiff live source tails.
-        """
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self._error is not None:
-                return None
-            acq = self._acq
-            if acq is not None:
-                try:
-                    return acq.get_dataset()
-                except Exception:
-                    pass  # created but dataset not ready yet — keep polling
-            elif self._done.is_set():
-                return None  # finished/failed before an Acquisition existed
-            time.sleep(0.1)
-        return None
-
-    def close(self) -> None:
-        """Best-effort teardown of the acquisition thread."""
-        if self._thread is not None:  # pragma: no cover - acq PC only
-            self._thread.join(timeout=10.0)
-
-
 def _enable_signal_laser(illu, args) -> None:
     """Turn the imaging laser ON before acquiring (instrument mode only).
 
@@ -608,25 +466,25 @@ class _StallTimeout(Exception):
 def _image_queue_source_kwargs(args, driver, pixelsize_nm) -> dict:
     """Build the SOURCE_IMAGE_QUEUE kwargs for a driver-fed instrument FOV.
 
-    Shared by the clean FOV and the interlock-path FOVs so BOTH read the frames
-    pushed from the acquisition's ``image_process_fn`` (via the driver's queue)
-    with a full picasso ``camera_info`` — not the tiff-tail source, which globs
-    ``data_dir`` and can't find the queue-fed frames (that mismatch hung the
-    interlock paths on the first real run).
+    Thin adapter over the shared
+    :func:`PycroFlow.live_analysis.acquisition_driver.image_queue_source_kwargs`
+    that assembles the full picasso ``camera_info`` from the CLI flags. Shared by
+    the clean FOV and the interlock-path FOVs so BOTH read the queue-fed frames
+    (not the tiff-tail source, which globs ``data_dir`` and can't find them —
+    that mismatch hung the interlock paths on the first real run).
     """
-    return {
-        "frame_q": driver.get_frame_queue(),
+    camera_info = {
         # Full picasso camera_info: the fit needs the photon-conversion keys
         # (Baseline/Sensitivity/Gain/Qe), not just Pixelsize, or it raises.
-        "camera_info": {
-            "Baseline": args.baseline,
-            "Sensitivity": args.sensitivity,
-            "Gain": args.gain,
-            "Qe": args.qe,
-            "Pixelsize": pixelsize_nm or 130.0,
-        },
-        "first_frame_timeout_s": args.first_frame_timeout_s,
+        "Baseline": args.baseline,
+        "Sensitivity": args.sensitivity,
+        "Gain": args.gain,
+        "Qe": args.qe,
+        "Pixelsize": pixelsize_nm or 130.0,
     }
+    return image_queue_source_kwargs(
+        driver, camera_info, args.first_frame_timeout_s
+    )
 
 
 def run_clean_fov(args, registry, illu) -> FovRun:
@@ -649,7 +507,13 @@ def run_clean_fov(args, registry, illu) -> FovRun:
     svc.start_experiment()
     cfg = _make_fov_config(args)
 
-    driver = AcquisitionDriver(args)
+    driver = AcquisitionDriver(
+        args.data_dir,
+        args.n_frames,
+        args.exposure_ms,
+        enabled=(args.mode == MODE_INSTRUMENT),
+        name="gate2_raw",
+    )
     driver.start()
     _enable_signal_laser(illu, args)
 
@@ -1099,7 +963,13 @@ def _run_interlock_fov(args, illu, *, abort: bool):
     # Short-FOV driver: reuse the main driver against a small frame count.
     sub_args = argparse.Namespace(**vars(args))
     sub_args.n_frames = _INTERLOCK_N_FRAMES
-    driver = AcquisitionDriver(sub_args)
+    driver = AcquisitionDriver(
+        sub_args.data_dir,
+        sub_args.n_frames,
+        sub_args.exposure_ms,
+        enabled=(args.mode == MODE_INSTRUMENT),
+        name="gate2_raw",
+    )
     driver.start()
     if not abort:
         _enable_signal_laser(illu, args)

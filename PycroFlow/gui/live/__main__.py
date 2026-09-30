@@ -68,8 +68,103 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--loop",
         action="store_true",
-        help="demo: keep running fresh FOVs until the window is closed "
+        help="demo/live: keep running fresh FOVs until the window is closed "
         "(metrics/advisor keep animating).",
+    )
+
+    live = p.add_argument_group("live (real rig) — with --live")
+    live.add_argument(
+        "--live",
+        action="store_true",
+        help="Drive the shell with a REAL pycromanager acquisition + monet "
+        "laser feeding the WP-4 service (the Gate-2 clean-FOV path, GUI-"
+        "attached). Needs a running Micro-Manager (recent nightly) + the acq-PC "
+        "preconditions (PAINT_MONET_TOKEN set, sample loaded, laser calibrated).",
+    )
+    live.add_argument(
+        "--data-dir",
+        dest="data_dir",
+        help="live: directory for the NDTiff movie (a large data drive, NOT the "
+        "repo). Required with --live.",
+    )
+    live.add_argument(
+        "--monet-setup",
+        dest="monet_setup",
+        help="live: monet.CONFIGS key for this scope (e.g. Mercury_nopf). "
+        "Required with --live — the T3 interlock needs it to resolve lasers.",
+    )
+    live.add_argument(
+        "--monet-config-paths",
+        dest="monet_config_paths",
+        help="live: os.pathsep-separated monet config path(s); exported as "
+        "MONET_CONFIG_PATHS before monet imports.",
+    )
+    live.add_argument(
+        "--monet-protocol-paths",
+        dest="monet_protocol_paths",
+        help="live: monet protocol path(s); exported as MONET_PROTOCOL_PATHS.",
+    )
+    live.add_argument(
+        "--laser",
+        type=int,
+        help="live: laser line to enable for signal (e.g. 560). Omit to run "
+        "dark (no signal). The T3 interlock turns it off at end/abort/crash.",
+    )
+    live.add_argument(
+        "--exposure",
+        dest="exposure_ms",
+        type=float,
+        default=100.0,
+        help="live: per-frame exposure ms (default 100).",
+    )
+    live.add_argument(
+        "--pixelsize",
+        dest="pixelsize_nm",
+        type=float,
+        default=130.0,
+        help="live: camera pixel size nm for NeNA-in-nm (default 130).",
+    )
+    live.add_argument(
+        "--archive-dir",
+        dest="archive_dir",
+        default=None,
+        help="live: if set, move the movie here after each FOV; default None = "
+        "keep in place (a preview run does not archive).",
+    )
+    live.add_argument(
+        "--box-size",
+        dest="box_size",
+        type=int,
+        default=7,
+        help="live: picasso Box Size (default 7).",
+    )
+    live.add_argument(
+        "--baseline",
+        type=float,
+        default=100.0,
+        help="live: camera baseline/offset (ADU) for picasso photon conversion.",
+    )
+    live.add_argument(
+        "--sensitivity",
+        type=float,
+        default=1.0,
+        help="live: camera sensitivity (e-/ADU).",
+    )
+    live.add_argument(
+        "--gain", type=float, default=1.0, help="live: camera gain (1 sCMOS)."
+    )
+    live.add_argument(
+        "--qe",
+        type=float,
+        default=1.0,
+        help="live: camera quantum efficiency.",
+    )
+    live.add_argument(
+        "--first-frame-timeout",
+        dest="first_frame_timeout_s",
+        type=float,
+        default=120.0,
+        help="live: fail the FOV fast if no first frame arrives within N s.",
     )
     return p
 
@@ -93,6 +188,9 @@ def main(argv=None) -> int:
     # Give Qt only the program name — our flags are argparse's, not Qt's.
     app = QApplication(sys.argv[:1])
     apply_live_theme(app)  # V0.8 look: Fusion base + dark/gold stylesheet.
+
+    if args.live:
+        return _run_live(app, QMainWindow, args)
 
     if args.demo:
         return _run_demo(app, QMainWindow, args)
@@ -206,6 +304,156 @@ def _run_demo(app, QMainWindow, args) -> int:
     def _cleanup() -> None:
         stop.set()
         svc.request_abort()
+
+    app.aboutToQuit.connect(_cleanup)
+
+    win.show()
+    worker.start()
+    return app.exec()
+
+
+def _run_live(app, QMainWindow, args) -> int:
+    """Drive the shell with a REAL acquisition + monet laser (the acq PC).
+
+    The GUI-attached twin of the Gate-2 harness's clean FOV: a real pycromanager
+    MDA (via the shared AcquisitionDriver) streams frames through the WP-4
+    LiveAnalysisService's image-queue source; the T3 interlock (real monet) turns
+    the laser off at end/abort/window-close. Runs the FOV(s) on a background
+    thread so the GUI stays responsive; the Overview is fed the driver's latest
+    raw frame.
+    """
+    import os
+
+    # Export monet paths BEFORE importing the illumination system (monet reads
+    # them at import; override=False means an already-set env still wins).
+    if args.monet_config_paths:
+        os.environ["MONET_CONFIG_PATHS"] = args.monet_config_paths
+    if args.monet_protocol_paths:
+        os.environ["MONET_PROTOCOL_PATHS"] = args.monet_protocol_paths
+
+    if not args.data_dir or not args.monet_setup:
+        sys.stderr.write(
+            "--live needs --data-dir <movie dir> and --monet-setup <name>.\n"
+        )
+        return 2
+
+    from PyQt6.QtCore import QTimer
+
+    from PycroFlow.gui.live.shell import build_live_shell
+    from PycroFlow.illumination import IlluminationSystem
+    from PycroFlow.live_analysis.acquisition_driver import (
+        AcquisitionDriver,
+        image_queue_source_kwargs,
+    )
+    from PycroFlow.live_analysis.archive import WRITE_TARGET_LOCAL
+    from PycroFlow.live_analysis.frame_source import SOURCE_IMAGE_QUEUE
+    from PycroFlow.live_analysis.service import FovConfig, LiveAnalysisService
+
+    illu = IlluminationSystem(setup=args.monet_setup)
+    svc = LiveAnalysisService(
+        illumination_system=illu, lasers_off_finally=True
+    )
+    shell = build_live_shell(service=svc)
+    win = QMainWindow()
+    win.setWindowTitle("PycroFlow — Live QC (LIVE — real acquisition)")
+    win.setCentralWidget(shell)
+    win.resize(1200, 800)
+
+    svc.start_experiment()
+    stop = threading.Event()
+    driver_ref: dict = {"d": None}
+    camera_info = {
+        "Baseline": args.baseline,
+        "Sensitivity": args.sensitivity,
+        "Gain": args.gain,
+        "Qe": args.qe,
+        "Pixelsize": args.pixelsize_nm or 130.0,
+    }
+
+    def _enable_laser() -> None:
+        if args.laser is None:
+            return
+        try:
+            illu.set_laser_enabled(int(args.laser), True)
+            illu.beampath_open()
+        except Exception as exc:  # noqa: BLE001 - non-fatal; logged
+            print(
+                "WARNING: could not enable laser {}: {!r}".format(
+                    args.laser, exc
+                )
+            )
+
+    def _live_loop() -> None:
+        while not stop.is_set():
+            drv = AcquisitionDriver(
+                args.data_dir,
+                args.frames,
+                args.exposure_ms,
+                enabled=True,
+                name="live_raw",
+            )
+            driver_ref["d"] = drv
+            drv.start()
+            _enable_laser()
+            cfg = FovConfig(
+                source_kind=SOURCE_IMAGE_QUEUE,
+                source_kwargs=image_queue_source_kwargs(
+                    drv, camera_info, args.first_frame_timeout_s
+                ),
+                localize_params={
+                    "Box Size": args.box_size,
+                    "Min. Net Gradient": args.min_net_gradient,
+                },
+                batch_size=100,
+                use_processes=True,
+                pixelsize_nm=args.pixelsize_nm,
+                write_target=WRITE_TARGET_LOCAL,
+                movie_source_path=args.data_dir,
+                archive_dir=args.archive_dir,
+            )
+            try:
+                svc.run_fov(cfg)  # T3 interlock turns the laser off in finally
+            except (
+                Exception
+            ):  # noqa: BLE001 - a FOV error must not crash the UI
+                pass
+            drv.close()
+            if not args.loop or stop.is_set():
+                break
+
+    worker = threading.Thread(
+        target=_live_loop, name="live-acq-fov", daemon=True
+    )
+
+    # Overview: push the driver's latest raw frame as a thumbnail (~2 Hz). The
+    # service emits no thumbnails yet (a real WP-4 gap); this previews the frames
+    # actually being acquired.
+    def _push_thumb() -> None:
+        if stop.is_set():
+            return
+        drv = driver_ref["d"]
+        frame = drv.latest_frame() if drv is not None else None
+        if frame is None:
+            return
+        try:
+            svc.hub.push_kind(
+                "thumbnail",
+                svc.run_id,
+                data=frame.tobytes(),
+                shape=tuple(frame.shape),
+                dtype=str(frame.dtype),
+                pixelsize_nm=args.pixelsize_nm or 130.0,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    timer = QTimer()
+    timer.timeout.connect(_push_thumb)
+    timer.start(500)
+
+    def _cleanup() -> None:
+        stop.set()
+        svc.request_abort()  # aborts the FOV -> its finally fires the interlock
 
     app.aboutToQuit.connect(_cleanup)
 
