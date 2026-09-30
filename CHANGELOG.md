@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-30
+
+First deployable release of the live-analysis slice (C40 "release when useful").
+The WP-4 `LiveAnalysisService` + WP-GUI operator frontend + the pycromanager-1.0
+migration were validated together on the instrument — **Gate 2 passed all 7
+checks on the acq PC** (frames 2000/2000, real NeNA, T3 interlock on all paths,
+numpy-2 + pycromanager-1.0.2 + picasso coexist, archive). Depends on the B7
+picasso git-pin (until picassosr 0.11.3 hits PyPI) and `monet@v0.4.2` /
+`picasso-registry@v0.1.0` (neither on PyPI).
+
+### Added
+
+- **Gate-2 on-instrument integration harness** (`PycroFlow/perf/gate2_harness.py`):
+  a single-command, non-interactive harness with `--mode emulator` (hermetic) /
+  `--mode instrument` (real MDA + monet interlock) that writes a JSON verdict over
+  7 checks (keep-up · no-silent-subsample · live-metrics · registry · T3 interlock
+  · pycromanager-1.0 · archive). Full camera_info (`--baseline/--sensitivity/
+  --gain/--qe`) + tunable `--min-net-gradient/--box-size`. **Passed on the acq PC
+  2026-09-30.**
+- **Shared `AcquisitionDriver`** (`live_analysis/acquisition_driver.py`): drives a
+  real pycromanager MDA feeding the live pipeline via `image_process_fn` → queue;
+  shared by the Gate-2 harness and the GUI `--live` mode.
+- **WP-GUI: V0.8 look & feel** (`gui/live/theme.py`) — `setStyle("Fusion")` + the
+  V0.8 dark/gold stylesheet, applied app-wide + on the shell root.
+- **WP-GUI: `--demo` and `--live` launchers** (`python -m PycroFlow.gui.live`):
+  `--demo` animates every panel via a real service + `MockFrameSource` (no
+  instrument); `--live` runs a GUI-attached real acquisition (the Gate-2 clean-FOV
+  path). Both feed the Overview and draw **optional picasso-style localization
+  boxes** (`identify_in_image`, toggle checkbox).
+- **WP-GUI: explicit "inert" marking** (`gui/live/inert.py`) — planned/not-yet-
+  wired controls are dimmed+dashed+italic with a tooltip and an `inert` property;
+  a pinned test forces un-flagging when a control is wired.
+
+### Fixed
+
+- **Live NeNA silently always `None`** — `RunningMetrics` passed `None` as picasso
+  `info` to `nena()` and swallowed the error; now wires `camera_info` → `info`.
+- **Gate-2 instrument: `frames_localized=0`** — the frame source handed picasso
+  only `Pixelsize`; the fit needs the full photon-conversion keys
+  (Baseline/Sensitivity/Gain/Qe). Fixed; interlock-path FOVs also switched to the
+  driver-fed image queue (were on tiff-tail → hung).
+
 ### Added
 
 - **`IlluminationSystem.all_off()` — public T3 fail-safe primitive**
