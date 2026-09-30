@@ -530,5 +530,64 @@ class TestCrossThreadMarshalling(_QtTestCase):
         self.assertEqual(label.text(), "7")
 
 
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestInertControls(_QtTestCase):
+    """Pins the set of controls flagged inert (planned, not yet wired).
+
+    A FORCING FUNCTION: wiring a control along the plan means deleting its
+    ``mark_inert(...)`` call, which drops it from this set and fails this test
+    until :attr:`EXPECTED_INERT_BUTTONS` is updated to match. So the "inert" flag
+    can neither outlive the wiring (a wired-but-still-flagged control) nor linger
+    unnoticed — keeping the UI and these tests honest about what does something.
+    See :mod:`PycroFlow.gui.live.inert`.
+    """
+
+    EXPECTED_INERT_BUTTONS = {
+        # top bar (shell) — not wired to the service yet
+        "Start",
+        "Stop",
+        "Skip",
+        "Save locs",
+        "Update qc.json",
+        # sidebar core controls (emit signals nothing consumes yet)
+        "estimate",
+        "Undrift now",
+        "Filter preview",
+    }
+
+    def _inert_buttons(self, shell):
+        from PyQt6.QtWidgets import QPushButton
+
+        from PycroFlow.gui.live.inert import is_inert
+
+        return {
+            b.text() for b in shell.findChildren(QPushButton) if is_inert(b)
+        }
+
+    def test_inert_buttons_match_expected(self):
+        shell = self._make_shell()
+        self.assertEqual(
+            self._inert_buttons(shell), self.EXPECTED_INERT_BUTTONS
+        )
+
+    def test_wired_controls_are_not_flagged(self):
+        # Guard against over-marking: the working controls must NOT be inert.
+        from PycroFlow.gui.live.inert import is_inert
+
+        shell = self._make_shell()
+        self.assertFalse(is_inert(shell.sidebar.abort_btn))
+        self.assertFalse(is_inert(shell.overview.auto_btn))
+        self.assertFalse(is_inert(shell.overview.boxes_cb))
+
+    def test_placeholder_panels_are_flagged(self):
+        from PycroFlow.gui.live.inert import is_inert
+        from PycroFlow.gui.live.operator import _Placeholder
+
+        shell = self._make_shell()
+        placeholders = shell.findChildren(_Placeholder)
+        self.assertTrue(placeholders)  # there ARE placeholder analysis views
+        self.assertTrue(all(is_inert(p) for p in placeholders))
+
+
 if __name__ == "__main__":
     unittest.main()

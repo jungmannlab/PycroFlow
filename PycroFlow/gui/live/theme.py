@@ -95,6 +95,15 @@ LIVE_QSS = """
     QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
     QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 
+    /* Inert (planned, not-yet-wired) controls — see PycroFlow.gui.live.inert.
+       Dimmed + dashed + italic so a tester reads them as "not implemented yet",
+       never as broken. The tooltip names what will wire them. */
+    *[inert="true"] { color: #74777e; border: 1px dashed #4a4f5c;
+                      font-style: italic; }
+    QPushButton[inert="true"] { background-color: #1c1e23; }
+    QPushButton[inert="true"]:hover { background-color: #1c1e23;
+                                      border: 1px dashed #6b6f78; }
+
     /* Misc */
     QLabel { color: #d6d8de; background: transparent; }
     QStatusBar { color: #9aa0ac; background: #14151a; }

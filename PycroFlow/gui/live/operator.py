@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
 
 from PycroFlow.gui.live.advisor import SEVERITY_COLOR, FindingsAdapter
 from PycroFlow.gui.live.contribution import PanelSpec
+from PycroFlow.gui.live.inert import mark_inert
 
 
 class _Placeholder(QWidget):
@@ -42,13 +43,16 @@ class _Placeholder(QWidget):
     def __init__(self, title: str, note: str = "", parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        head = QLabel(title)
+        head = QLabel(title + "  (planned)")
         head.setStyleSheet("font-weight: bold;")
         layout.addWidget(head)
         layout.addWidget(
             QLabel(note or "Renders from the stream at a WP-4 run.")
         )
         layout.addStretch()
+        # Whole-panel placeholder: flag it so it reads as planned, not broken
+        # (C31 open sub-question — which V0.8 analysis views ship in the product).
+        mark_inert(self, "C31: analysis view scope")
 
     def on_update(self, update) -> None:  # pragma: no cover - inert panel
         pass

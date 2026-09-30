@@ -29,6 +29,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from PycroFlow.gui.live.inert import mark_inert
+
 from PycroFlow.gui.live.advisor import (
     SEVERITY_COLOR,
     FindingsAdapter,
@@ -155,10 +157,11 @@ class QcAtAGlance(QWidget):
         grad_row = QHBoxLayout()
         grad_row.addWidget(self.min_gradient)
         self.estimate_btn = QPushButton("estimate")
-        self.estimate_btn.setToolTip(
-            "Estimate min. net gradient from data (WP-ADVISOR)"
-        )
         self.estimate_btn.clicked.connect(self.estimate_requested)
+        # These emit signals nothing consumes yet — flag as planned, not broken.
+        # Remove the mark_inert() when the shell wires the signal to a handler
+        # (the pinned test then forces updating its expected set).
+        mark_inert(self.estimate_btn, "WP-ADVISOR: min-net-gradient estimate")
         grad_row.addWidget(self.estimate_btn)
         grad_w = QWidget()
         grad_w.setLayout(grad_row)
@@ -168,8 +171,10 @@ class QcAtAGlance(QWidget):
         btn_row = QHBoxLayout()
         self.undrift_btn = QPushButton("Undrift now")
         self.undrift_btn.clicked.connect(self.undrift_requested)
+        mark_inert(self.undrift_btn, "WP-6: live undrift action")
         self.filter_btn = QPushButton("Filter preview")
         self.filter_btn.clicked.connect(self.filter_preview_requested)
+        mark_inert(self.filter_btn, "WP-ADVISOR: filter preview")
         btn_row.addWidget(self.undrift_btn)
         btn_row.addWidget(self.filter_btn)
         btn_w = QWidget()

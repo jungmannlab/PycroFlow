@@ -45,6 +45,7 @@ from PycroFlow.gui.live.contribution import (
     iter_contributors,
     register_contributor,
 )
+from PycroFlow.gui.live.inert import mark_inert
 from PycroFlow.gui.live.operator import OperatorContributor
 from PycroFlow.gui.live.panels import OverviewZoom, QcAtAGlance
 from PycroFlow.gui.live.theme import LIVE_QSS
@@ -168,6 +169,17 @@ class LiveShell(QWidget):
         self.skip_btn = QPushButton("Skip")
         self.save_btn = QPushButton("Save locs")
         self.qc_btn = QPushButton("Update qc.json")
+        # Top-bar run controls are not wired to the service yet — flag them so
+        # they read as planned, not broken. Remove the mark_inert() when wired
+        # (the pinned test then forces updating its expected set). The working
+        # run control today is the sidebar Early-abort.
+        mark_inert(self.start_btn, "WP-GUI top-bar wiring")
+        mark_inert(
+            self.stop_btn, "WP-GUI top-bar wiring; use sidebar Early-abort"
+        )
+        mark_inert(self.skip_btn, "WP-GUI top-bar wiring")
+        mark_inert(self.save_btn, "WP-GUI: save-locs action")
+        mark_inert(self.qc_btn, "WP-GUI: update-qc.json action")
         for b in (
             self.start_btn,
             self.stop_btn,
