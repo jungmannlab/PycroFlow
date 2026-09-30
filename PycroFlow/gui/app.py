@@ -45,6 +45,11 @@ def main(argv=None):
     PycroFlow.setup_logging(clean_old=True)
 
     app = QApplication(argv if argv is not None else sys.argv)
+    # V0.8 look & feel across the whole acquisition GUI (Fusion + dark/gold QSS),
+    # so the Quality tab and every other tab match the live operator frontend.
+    from PycroFlow.gui.live.theme import apply_live_theme
+
+    apply_live_theme(app)
     window = build_main_window()
     window.show()
     # PyQt6 renamed QApplication.exec_() to exec() (exec_ is gone).

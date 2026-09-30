@@ -19,10 +19,18 @@ import sys
 from unittest.mock import MagicMock
 
 _HARDWARE_MODULES = [
+    # pycromanager 1.0 (B8/C41 numpy-2 harmonization): the submodule layout
+    # changed from the 0.29 era. The old shims (pycromanager.acquisitions /
+    # .acq_util / .zmq_bridge) no longer exist; 1.0 exposes .acquisition,
+    # .mm_java_classes and the split-out pyjavaz / ndstorage packages. No
+    # PycroFlow module imports these submodules directly (all use top-level
+    # `from pycromanager import ...`), so mocking the top-level name is what
+    # actually matters; the submodules are listed only to keep the shim honest.
     "pycromanager",
-    "pycromanager.acquisitions",
-    "pycromanager.acq_util",
-    "pycromanager.zmq_bridge",
+    "pycromanager.acquisition",
+    "pycromanager.mm_java_classes",
+    "pyjavaz",
+    "ndstorage",
     "monet",
     "monet.control",
     "monet.gui",

@@ -27,6 +27,17 @@ PycroFlow/
 │   └── legacy.py         #   hamilton_architecture.py)
 ├── hal/                  # Hardware Abstraction Layer ABCs
 ├── services/             # ExperimentService, SystemService, mm_core
+├── live_analysis/        # WP-4: acquire 1 FOV -> live-localize -> metrics ->
+│   ├── service.py        #   1 registry record. Headless LiveAnalysisService
+│   ├── frame_source.py   #   over a thin client seam; TIFF-tail/RAM-peek/mock
+│   ├── compute_backend.py#   frame sources; worker-process pool + bounded queue
+│   ├── worker.py         #   (lags, never subsamples); local-subprocess ships,
+│   ├── metrics.py        #   remote-worker stubbed (B5). NeNA/locs-per-frame/bg.
+│   ├── laser_interlock.py#   T3 lasers-off + shutter-close fail-safe (C21).
+│   ├── archive.py        #   checksummed movie move local->archive (fallback).
+│   ├── client_seam.py    #   update channel + early-abort control call.
+│   ├── registry_payload.py
+│   └── run_id.py         #   ULID run_id minted at experiment start.
 ├── imaging.py            # ImagingSystem (pycromanager)
 ├── illumination.py       # IlluminationSystem (monet)
 ├── mm_lock.py            # MM-Core single-process guard
@@ -35,7 +46,9 @@ PycroFlow/
 │   ├── app.py            #   entry point + monet Core sharing
 │   ├── main_window.py    #   PycroFlowMainWindow (tabbed)
 │   ├── qt_bridge.py      #   service observer -> Qt signals
-│   └── tabs/             #   experiment / fluid / imaging / monet tabs
+│   ├── tabs/             #   experiment / fluid / imaging / monet / quality tabs
+│   └── live/             #   WP-GUI: composable operator frontend over the
+│                         #   WP-4 seam (shell + panels + advisor adapter)
 ├── configs/              # YAML instrument configs
 ├── examples/             # demo protocols
 ├── pyHamilton/           # in-house Hamilton serial driver
