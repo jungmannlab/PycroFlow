@@ -1,0 +1,156 @@
+{
+  "checks": [
+    {
+      "criterion": "1: acquisition uncompromised / reader keeps up",
+      "detail": "dropped=0 submitted=20 completed=20 queue_max_depth=1/8",
+      "name": "keep_up",
+      "passed": true,
+      "values": {
+        "backend": "local-subprocess",
+        "completed": 20,
+        "dropped": 0,
+        "queue_max_depth": 1,
+        "queue_size": 8,
+        "submitted": 20,
+        "wall_s": 175.6653
+      }
+    },
+    {
+      "criterion": "2: no silent subsample \u2014 coverage block reconciles",
+      "detail": "frames_read=2000 frames_localized=2000 expected=2000 partial=False run_id=01M3RKNCFJA1Z64C0JHQHWWHEJ",
+      "name": "no_silent_subsample",
+      "passed": true,
+      "values": {
+        "errors": 0,
+        "expected_frames": 2000,
+        "frames_localized": 2000,
+        "frames_read": 2000,
+        "partial": false,
+        "run_id": "01M3RKNCFJA1Z64C0JHQHWWHEJ"
+      }
+    },
+    {
+      "criterion": "3: live NeNA / locs-per-frame / background are real",
+      "detail": "nena_px=0.048863 nena_nm=6.3521 spots_per_frame=0.0815 background=89.3458 n_locs=163",
+      "name": "live_metrics_real",
+      "passed": true,
+      "values": {
+        "background": 89.3458,
+        "n_locs": 163,
+        "nena_nm": 6.3521,
+        "nena_px": 0.048863,
+        "spots_per_frame": 0.0815
+      }
+    },
+    {
+      "criterion": "4: one per-FOV record reaches the registry",
+      "detail": "record present + coverage reconciles",
+      "name": "registry_record",
+      "passed": true,
+      "values": {
+        "acq_status": "live_localized",
+        "analysis_kind": "live_localize",
+        "fov_frame_count": 2000,
+        "raw_retained": true,
+        "registry_ids": {
+          "acquisition_run_id": "01M3RKNCFJA1Z64C0JHQHWWHEJ",
+          "analysis_run_id": "an-2",
+          "fov_id": "fov-1",
+          "metrics_id": "met-3"
+        }
+      }
+    },
+    {
+      "criterion": "5: T3 laser interlock \u2014 all three exit paths (safety)",
+      "detail": "paths safe: {'normal_end': True, 'early_abort': True, 'injected_exception': True}",
+      "name": "laser_interlock",
+      "passed": true,
+      "values": {
+        "paths": {
+          "early_abort": true,
+          "injected_exception": true,
+          "normal_end": true
+        }
+      }
+    },
+    {
+      "criterion": "6: pycromanager-1.0 acq-PC items (instrument-only)",
+      "detail": "numpy-2 + pycromanager-1.0 + picasso coexist; peek OK",
+      "name": "pycromanager_1_0",
+      "passed": true,
+      "values": {
+        "import_coexist": true,
+        "ram_peek_frames": 0,
+        "versions": {
+          "git_commit": "2a14311a8f5854de358f4cb97482e67074708d15",
+          "host": "wsju06",
+          "mm_version": "MMCore version 12.5.0",
+          "mode": "instrument",
+          "ndstorage": "0.1.18",
+          "ndtiff": "unknown",
+          "numpy": "2.2.6",
+          "numpy_has_trapezoid": true,
+          "os": "Windows-10-10.0.19045-SP0",
+          "picasso": "0.11.2",
+          "pycroflow": "0.1.1.dev252+g2a14311a8",
+          "pycromanager": "1.0.2",
+          "python": "3.10.20",
+          "schema_version": "1.0"
+        }
+      }
+    },
+    {
+      "criterion": "7: write-target-gated archive + checksum-before-delete",
+      "detail": "verified=True moved=True local_deleted=True dest_exists=True",
+      "name": "archive",
+      "passed": true,
+      "values": {
+        "checksum": "bd84529a11067e46cc460a9fbe057aad95ecee90c8baa2afd56e59fbb61719a1",
+        "dest": "C:\\Users\\miblab\\AppData\\Local\\Temp\\tmp_4zhno4k\\archive\\gate2_movie.tif",
+        "local_deleted": true,
+        "moved": true,
+        "verified": true
+      }
+    }
+  ],
+  "config": {
+    "archive_dir": null,
+    "batch_size": 100,
+    "data_dir": "C:\\Users\\miblab\\Desktop\\gate2_raw",
+    "exposure_ms": 100.0,
+    "laser": 560,
+    "mm_config": "C:\\Users\\miblab\\Desktop\\MMConfig_noDiaLamp_ASIXY.cfg",
+    "mode": "instrument",
+    "monet_host": null,
+    "n_frames": 2000,
+    "n_workers": 2,
+    "registry_url": null,
+    "timeout_s": 900.0
+  },
+  "failures": [],
+  "gate": "gate2",
+  "gate2_pass": true,
+  "mode": "instrument",
+  "schema_version": "1.0",
+  "stall_detail": "",
+  "stalled": false,
+  "stalled_phase": null,
+  "utc_end": "2026-09-30T07:36:40.117534+00:00",
+  "utc_start": "2026-09-30T07:32:13.812547+00:00",
+  "version_block": {
+    "git_commit": "2a14311a8f5854de358f4cb97482e67074708d15",
+    "host": "wsju06",
+    "mm_version": "MMCore version 12.5.0",
+    "mode": "instrument",
+    "ndstorage": "0.1.18",
+    "ndtiff": "unknown",
+    "numpy": "2.2.6",
+    "numpy_has_trapezoid": true,
+    "os": "Windows-10-10.0.19045-SP0",
+    "picasso": "0.11.2",
+    "pycroflow": "0.1.1.dev252+g2a14311a8",
+    "pycromanager": "1.0.2",
+    "python": "3.10.20",
+    "schema_version": "1.0"
+  }
+}
