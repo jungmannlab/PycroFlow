@@ -12,8 +12,9 @@ from __future__ import annotations
 from typing import Optional
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QDoubleSpinBox,
     QFormLayout,
     QFrame,
@@ -271,6 +272,8 @@ class OverviewZoom(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._pixmap: Optional[QPixmap] = None
+        self._boxes = None  # Nx2 (x, y) spot centres for the current frame
+        self._box_size = 7
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -280,6 +283,15 @@ class OverviewZoom(QWidget):
         head = QHBoxLayout()
         head.addWidget(QLabel("Overview / Zoom"))
         head.addStretch()
+        # Draw picasso-style spot-detection boxes over the frame (the identify
+        # boxes, sent on the thumbnail payload; drawing toggles here, no compute).
+        self.boxes_cb = QCheckBox("boxes")
+        self.boxes_cb.setChecked(True)
+        self.boxes_cb.setToolTip(
+            "Overlay picasso-style localization boxes on detected spots"
+        )
+        self.boxes_cb.toggled.connect(self._render)
+        head.addWidget(self.boxes_cb)
         self.auto_btn = QPushButton("Auto")
         self.auto_btn.setToolTip("Auto-contrast the displayed frame")
         self.auto_btn.clicked.connect(self._auto_contrast)
@@ -328,6 +340,13 @@ class OverviewZoom(QWidget):
         shape = payload.get("shape")
         # The seam may carry raw bytes ("data" + "shape" + "dtype") or, in the
         # minimal WP-4 slice, only a shape. Render bytes when present.
+        # Optional picasso-style detection boxes for THIS frame: a flat list of
+        # alternating x, y (JSON/transport-friendly) + the box size. Stored and
+        # drawn in _render; absent -> no overlay (older/minimal payloads).
+        boxes = payload.get("boxes")
+        if boxes is not None:
+            self._box_size = int(payload.get("box_size", self._box_size))
+            self._boxes = boxes  # [x0, y0, x1, y1, ...]
         data = payload.get("data")
         if data is not None and shape is not None:
             self._set_image_from_bytes(data, shape, payload.get("dtype"))
@@ -364,14 +383,43 @@ class OverviewZoom(QWidget):
         h, w = img8.shape
         qimg = QImage(img8.tobytes(), w, h, w, QImage.Format.Format_Grayscale8)
         self._pixmap = QPixmap.fromImage(qimg)
+        # Draw the boxes on the NATIVE-resolution pixmap, then scale image+boxes
+        # together — so the overlay tracks the frame with no coord mapping.
+        display = self._pixmap
+        if self.boxes_cb.isChecked() and self._boxes:
+            display = QPixmap(self._pixmap)
+            self._draw_boxes(display)
         self.image.setPixmap(
-            self._pixmap.scaled(
+            display.scaled(
                 self.image.size(),
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
         )
         self.magnifier.setText("magnifier: {}x{}".format(w, h))
+
+    def _draw_boxes(self, pixmap) -> None:
+        """Draw box-size squares centred on each spot (picasso Localize style).
+
+        ``self._boxes`` is a flat ``[x0, y0, x1, y1, ...]`` list in image pixels.
+        """
+        boxes = self._boxes
+        if not boxes:
+            return
+        b = max(2, int(self._box_size))
+        half = b / 2.0
+        painter = QPainter(pixmap)
+        try:
+            pen = QPen(QColor("#7ee081"))  # soft green, distinct on grayscale
+            pen.setWidth(1)
+            painter.setPen(pen)
+            coords = iter(boxes)
+            for x, y in zip(coords, coords):
+                painter.drawRect(
+                    int(round(x - half)), int(round(y - half)), b, b
+                )
+        finally:
+            painter.end()
 
     def _auto_contrast(self) -> None:
         raw = getattr(self, "_raw", None)

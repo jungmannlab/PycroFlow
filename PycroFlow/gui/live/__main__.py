@@ -224,6 +224,25 @@ def _synthetic_frame(rng, h: int = 128, w: int = 128):
     return np.clip(img, 0, 65535).astype(np.uint16)
 
 
+def _identify_boxes(frame, box, min_ng):
+    """Flat ``[x0, y0, x1, y1, ...]`` spot centres via picasso ``identify`` — the
+    same detection step picasso Localize draws boxes from — or None if
+    unavailable. Cheap: one frame. Kept launcher-side so the GUI stays picasso-
+    free (it only renders the coords it is handed).
+    """
+    try:
+        from picasso.localize import identify_in_image
+
+        ys, xs, _ng = identify_in_image(frame, float(min_ng), int(box))
+        out = []
+        for xi, yi in zip(xs, ys):
+            out.append(float(xi))
+            out.append(float(yi))
+        return out
+    except Exception:  # noqa: BLE001 - the overlay is best-effort
+        return None
+
+
 def _run_demo(app, QMainWindow, args) -> int:
     """Drive the shell with the real service + a synthetic stream (no hardware)."""
     import numpy as np
@@ -293,6 +312,8 @@ def _run_demo(app, QMainWindow, args) -> int:
                 shape=img.shape,
                 dtype=str(img.dtype),
                 pixelsize_nm=130.0,
+                boxes=_identify_boxes(img, 7, args.min_net_gradient),
+                box_size=7,
             )
         except Exception:  # noqa: BLE001
             pass
@@ -443,6 +464,10 @@ def _run_live(app, QMainWindow, args) -> int:
                 shape=tuple(frame.shape),
                 dtype=str(frame.dtype),
                 pixelsize_nm=args.pixelsize_nm or 130.0,
+                boxes=_identify_boxes(
+                    frame, args.box_size, args.min_net_gradient
+                ),
+                box_size=args.box_size,
             )
         except Exception:  # noqa: BLE001
             pass
