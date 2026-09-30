@@ -162,10 +162,10 @@ class ExperimentService:
         import PycroFlow
 
         design = self._experiment_design or {}
-        save_dir = os.path.abspath(design.get('save_dir') or '.')
+        save_dir = os.path.abspath(design.get("save_dir") or ".")
         try:
             PycroFlow.redirect_logging(save_dir)
-        except Exception as exc:   # never fail a load over logging
+        except Exception as exc:  # never fail a load over logging
             logger.warning("could not redirect logs: {!r}", exc)
 
     def save_run_record(self):
@@ -189,12 +189,13 @@ class ExperimentService:
             # from a file already exists on disk, and writing the record
             # relative to the cwd would scatter files wherever the app runs.
             logger.debug(
-                "no experiment design loaded; not saving a run record")
+                "no experiment design loaded; not saving a run record"
+            )
             return []
-        stamp = datetime.now().strftime('%y%m%d-%H%M%S')
-        base = design.get('base_name') or 'experiment'
-        save_dir = os.path.abspath(design.get('save_dir') or '.')
-        artifacts = [('design', design), ('run_sequence', self._protocol)]
+        stamp = datetime.now().strftime("%y%m%d-%H%M%S")
+        base = design.get("base_name") or "experiment"
+        save_dir = os.path.abspath(design.get("save_dir") or ".")
+        artifacts = [("design", design), ("run_sequence", self._protocol)]
         written = []
         try:
             os.makedirs(save_dir, exist_ok=True)
@@ -202,16 +203,18 @@ class ExperimentService:
                 if not data:
                     continue
                 path = os.path.join(
-                    save_dir, '{}_{}_{}.yaml'.format(base, stamp, kind))
-                with open(path, 'w') as f:
-                    yaml.dump(data, f, default_flow_style=False,
-                              sort_keys=False)
+                    save_dir, "{}_{}_{}.yaml".format(base, stamp, kind)
+                )
+                with open(path, "w") as f:
+                    yaml.dump(
+                        data, f, default_flow_style=False, sort_keys=False
+                    )
                 written.append(path)
-        except Exception as exc:   # never block a run over bookkeeping
+        except Exception as exc:  # never block a run over bookkeeping
             logger.warning("could not save the run record: {!r}", exc)
             return written
         if written:
-            logger.info("Saved run record: {}", ', '.join(written))
+            logger.info("Saved run record: {}", ", ".join(written))
         return written
 
     @property
@@ -305,13 +308,17 @@ class ExperimentService:
             system does not expose its reservoirs).
         """
         fluid = self._fluid_system
-        routable = getattr(fluid, 'reservoir_paths', None)
+        routable = getattr(fluid, "reservoir_paths", None)
         if fluid is None or not isinstance(routable, dict) or not routable:
             return []
-        entries = ((self._protocol or {}).get('fluid') or {}).get(
-            'protocol_entries') or []
-        needed = {e['reservoir_id'] for e in entries
-                  if isinstance(e, dict) and e.get('reservoir_id') is not None}
+        entries = ((self._protocol or {}).get("fluid") or {}).get(
+            "protocol_entries"
+        ) or []
+        needed = {
+            e["reservoir_id"]
+            for e in entries
+            if isinstance(e, dict) and e.get("reservoir_id") is not None
+        }
         return sorted(needed - set(routable))
 
     def start(self, system_steps: Optional[Dict] = None) -> None:
@@ -323,8 +330,10 @@ class ExperimentService:
                 "fluid system cannot route to (it has {}). The experiment "
                 "design changed after the hardware was connected — "
                 "reconnect the fluid system, then start again.".format(
-                    missing, sorted(
-                        getattr(self._fluid_system, 'reservoir_paths', {}))))
+                    missing,
+                    sorted(getattr(self._fluid_system, "reservoir_paths", {})),
+                )
+            )
         if self._state in (
             ExperimentState.LOADED,
             ExperimentState.FINISHED,
@@ -498,6 +507,18 @@ class ExperimentService:
         thread.
         """
         self._state_observers.append(fn)
+
+    def remove_state_observer(self, fn: StateObserver) -> None:
+        """Deregister a state observer added by :meth:`add_state_observer`.
+
+        No-op if it was never registered. Lets a transient subscriber (e.g. the
+        monitoring controller, re-attached when the setup changes) detach
+        cleanly instead of accumulating.
+        """
+        try:
+            self._state_observers.remove(fn)
+        except ValueError:
+            pass
 
     def add_log_observer(self, fn: LogObserver) -> None:
         """Register a callback fired for log lines the service decides to

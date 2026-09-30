@@ -22,6 +22,7 @@ Run it over the logs an acquisition left behind::
 Since the run's logs are written into the acquisition folder, that is the
 same folder as the images.
 """
+
 from __future__ import annotations
 
 import json
@@ -48,10 +49,10 @@ def parse_step_timings(*sources):
     records = []
     for source in sources:
         path = Path(source)
-        files = sorted(path.glob('*.log')) if path.is_dir() else [path]
+        files = sorted(path.glob("*.log")) if path.is_dir() else [path]
         for fname in files:
             try:
-                text = fname.read_text(errors='replace')
+                text = fname.read_text(errors="replace")
             except OSError:
                 continue
             for line in text.splitlines():
@@ -63,7 +64,7 @@ def parse_step_timings(*sources):
                 except ValueError:
                     continue
                 if isinstance(record, dict):
-                    record.setdefault('source', str(fname))
+                    record.setdefault("source", str(fname))
                     records.append(record)
     return records
 
@@ -82,12 +83,13 @@ def summarize(records):
     """
     groups = {}
     for record in records:
-        actual = record.get('actual_s')
+        actual = record.get("actual_s")
         if actual is None:
             continue
-        key = (record.get('system'), record.get('type'))
+        key = (record.get("system"), record.get("type"))
         groups.setdefault(key, []).append(
-            (float(actual), float(record.get('estimate_s') or 0.0)))
+            (float(actual), float(record.get("estimate_s") or 0.0))
+        )
 
     out = {}
     for key, pairs in sorted(groups.items(), key=lambda kv: str(kv[0])):
@@ -95,15 +97,16 @@ def summarize(records):
         estimates = [e for _, e in pairs]
         med_est = statistics.median(estimates)
         out[key] = {
-            'n': len(pairs),
-            'actual_mean': statistics.mean(actuals),
-            'actual_median': statistics.median(actuals),
-            'estimate_mean': statistics.mean(estimates),
-            'estimate_median': med_est,
-            'total_actual': sum(actuals),
-            'total_estimate': sum(estimates),
-            'ratio': (statistics.median(actuals) / med_est
-                      if med_est > 0 else None),
+            "n": len(pairs),
+            "actual_mean": statistics.mean(actuals),
+            "actual_median": statistics.median(actuals),
+            "estimate_mean": statistics.mean(estimates),
+            "estimate_median": med_est,
+            "total_actual": sum(actuals),
+            "total_estimate": sum(estimates),
+            "ratio": (
+                statistics.median(actuals) / med_est if med_est > 0 else None
+            ),
         }
     return out
 
@@ -111,30 +114,44 @@ def summarize(records):
 def _fmt(seconds):
     """Duration for the table: keep sub-minute resolution, then compact."""
     if seconds < 60:
-        return '{:.1f}s'.format(seconds)
+        return "{:.1f}s".format(seconds)
     return format_duration(seconds)
 
 
 def format_summary(summary):
     """Render :func:`summarize` output as a readable table."""
     header = "{:<7} {:<16} {:>4} {:>11} {:>11} {:>7}".format(
-        'system', 'step type', 'n', 'actual~med', 'est~med', 'ratio')
-    lines = [header, '-' * len(header)]
+        "system", "step type", "n", "actual~med", "est~med", "ratio"
+    )
+    lines = [header, "-" * len(header)]
     total_actual = total_estimate = 0.0
     for (system, type_), stat in summary.items():
-        ratio = stat['ratio']
-        lines.append("{:<7} {:<16} {:>4} {:>11} {:>11} {:>7}".format(
-            str(system), str(type_), stat['n'],
-            _fmt(stat['actual_median']), _fmt(stat['estimate_median']),
-            '{:.2f}'.format(ratio) if ratio is not None else '-'))
-        total_actual += stat['total_actual']
-        total_estimate += stat['total_estimate']
-    lines.append('-' * len(header))
-    lines.append("total measured {} vs estimated {}{}".format(
-        format_duration(total_actual), format_duration(total_estimate),
-        '' if total_estimate <= 0 else
-        '  (ratio {:.2f})'.format(total_actual / total_estimate)))
-    return '\n'.join(lines)
+        ratio = stat["ratio"]
+        lines.append(
+            "{:<7} {:<16} {:>4} {:>11} {:>11} {:>7}".format(
+                str(system),
+                str(type_),
+                stat["n"],
+                _fmt(stat["actual_median"]),
+                _fmt(stat["estimate_median"]),
+                "{:.2f}".format(ratio) if ratio is not None else "-",
+            )
+        )
+        total_actual += stat["total_actual"]
+        total_estimate += stat["total_estimate"]
+    lines.append("-" * len(header))
+    lines.append(
+        "total measured {} vs estimated {}{}".format(
+            format_duration(total_actual),
+            format_duration(total_estimate),
+            (
+                ""
+                if total_estimate <= 0
+                else "  (ratio {:.2f})".format(total_actual / total_estimate)
+            ),
+        )
+    )
+    return "\n".join(lines)
 
 
 def main(argv=None):
@@ -143,23 +160,32 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(
         description="Summarise measured vs estimated Run Sequence step "
-                    "durations from PycroFlow run logs.")
+        "durations from PycroFlow run logs."
+    )
     parser.add_argument(
-        'logs', nargs='+',
+        "logs",
+        nargs="+",
         help="log files, or folders to scan for *.log (e.g. an "
-             "acquisition folder)")
+        "acquisition folder)",
+    )
     args = parser.parse_args(argv)
 
     records = parse_step_timings(*args.logs)
     if not records:
-        print("No {} records found in {}".format(
-            STEP_TIMING_TAG, ', '.join(args.logs)))
+        print(
+            "No {} records found in {}".format(
+                STEP_TIMING_TAG, ", ".join(args.logs)
+            )
+        )
         return 1
-    print("{} timed steps from {} log(s)\n".format(
-        len(records), len({r.get('source') for r in records})))
+    print(
+        "{} timed steps from {} log(s)\n".format(
+            len(records), len({r.get("source") for r in records})
+        )
+    )
     print(format_summary(summarize(records)))
     return 0
 
 
-if __name__ == '__main__':   # pragma: no cover - CLI entry
+if __name__ == "__main__":  # pragma: no cover - CLI entry
     raise SystemExit(main())

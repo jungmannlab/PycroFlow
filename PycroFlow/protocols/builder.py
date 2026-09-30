@@ -1011,7 +1011,9 @@ class ProtocolBuilder:
                 name=f"{tgt} barcode (pre)",
             )
             self.create_stepset_reagent_post(
-                volumes, res_idcs, wait_after_pickup,
+                volumes,
+                res_idcs,
+                wait_after_pickup,
                 tgt_pars["BC_imager_pre"],
             )
 
@@ -1105,7 +1107,9 @@ class ProtocolBuilder:
                     name=f"{tgt} RESI round {resi_round + 1}",
                 )
                 self.create_stepset_reagent_post(
-                    volumes, res_idcs, wait_after_pickup,
+                    volumes,
+                    res_idcs,
+                    wait_after_pickup,
                     tgt_pars["RESI-imager"],
                 )
 
@@ -1215,7 +1219,9 @@ class ProtocolBuilder:
                 name=f"{tgt} barcode (post)",
             )
             self.create_stepset_reagent_post(
-                volumes, res_idcs, wait_after_pickup,
+                volumes,
+                res_idcs,
+                wait_after_pickup,
                 tgt_pars["BC_imager_post"],
             )
 

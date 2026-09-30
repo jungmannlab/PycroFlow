@@ -196,8 +196,12 @@ class TestVolumes(unittest.TestCase):
                 "parameters": {"extractionfactor": 6},
                 "protocol_entries": [
                     {"$type": "inject", "reservoir_id": 1, "volume": 100},
-                    {"$type": "inject", "reservoir_id": 1, "volume": 10,
-                     "extractionfactor": 0},
+                    {
+                        "$type": "inject",
+                        "reservoir_id": 1,
+                        "volume": 10,
+                        "extractionfactor": 0,
+                    },
                     {"$type": "pump_out", "volume": 5, "extractionfactor": 1},
                 ],
             }

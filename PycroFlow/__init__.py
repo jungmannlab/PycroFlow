@@ -91,9 +91,13 @@ def clean_old_logs(prefix="pycroflow.log", directory="."):
                 pass
 
 
-def setup_logging(logfile='pycroflow.log', clean_old=False,
-                  stderr_level='ERROR', hamilton_logfile='hamilton.log',
-                  error_logfile='errors.log'):
+def setup_logging(
+    logfile="pycroflow.log",
+    clean_old=False,
+    stderr_level="ERROR",
+    hamilton_logfile="hamilton.log",
+    error_logfile="errors.log",
+):
     """Configure loguru sinks for PycroFlow.
 
     Four sinks are installed:
@@ -133,8 +137,11 @@ def setup_logging(logfile='pycroflow.log', clean_old=False,
     """
     global _LOGGING_CONFIGURED
     _LOG_CONFIG.update(
-        logfile=logfile, stderr_level=stderr_level,
-        hamilton_logfile=hamilton_logfile, error_logfile=error_logfile)
+        logfile=logfile,
+        stderr_level=stderr_level,
+        hamilton_logfile=hamilton_logfile,
+        error_logfile=error_logfile,
+    )
     if clean_old:
         clean_old_logs(prefix=logfile)
         if hamilton_logfile:
@@ -167,7 +174,7 @@ def setup_logging(logfile='pycroflow.log', clean_old=False,
         logger.add(
             error_logfile,
             format=_LOG_FORMAT,
-            level='WARNING',
+            level="WARNING",
             rotation="1 MB",
             retention=5,
             enqueue=True,
@@ -197,21 +204,22 @@ def install_excepthooks():
     def _hook(exc_type, exc, tb):
         if not issubclass(exc_type, KeyboardInterrupt):
             logger.opt(exception=(exc_type, exc, tb)).error(
-                "Uncaught exception")
+                "Uncaught exception"
+            )
         previous(exc_type, exc, tb)
 
     sys.excepthook = _hook
 
-    if hasattr(threading, 'excepthook'):
+    if hasattr(threading, "excepthook"):
         previous_thread_hook = threading.excepthook
 
         def _thread_hook(args):
             if not issubclass(args.exc_type, SystemExit):
-                exc_info = (args.exc_type, args.exc_value,
-                            args.exc_traceback)
+                exc_info = (args.exc_type, args.exc_value, args.exc_traceback)
                 logger.opt(exception=exc_info).error(
                     "Uncaught exception in thread {}",
-                    getattr(args.thread, 'name', '?'))
+                    getattr(args.thread, "name", "?"),
+                )
             previous_thread_hook(args)
 
         threading.excepthook = _thread_hook
@@ -245,32 +253,40 @@ def redirect_logging(directory):
     if not _LOGGING_CONFIGURED:
         return None
     directory = os.path.abspath(directory)
-    logfile = os.path.join(directory, os.path.basename(
-        _LOG_CONFIG.get('logfile') or 'pycroflow.log'))
-    if os.path.abspath(_LOG_CONFIG.get('active_logfile') or '') == logfile:
-        return logfile   # already logging there
+    logfile = os.path.join(
+        directory,
+        os.path.basename(_LOG_CONFIG.get("logfile") or "pycroflow.log"),
+    )
+    if os.path.abspath(_LOG_CONFIG.get("active_logfile") or "") == logfile:
+        return logfile  # already logging there
 
     def _beside(key):
         name = _LOG_CONFIG.get(key)
-        return os.path.join(directory, os.path.basename(name)) if name \
-            else None
+        return (
+            os.path.join(directory, os.path.basename(name)) if name else None
+        )
 
     try:
         os.makedirs(directory, exist_ok=True)
-        previous = _LOG_CONFIG.get('active_logfile') or _LOG_CONFIG.get(
-            'logfile')
+        previous = _LOG_CONFIG.get("active_logfile") or _LOG_CONFIG.get(
+            "logfile"
+        )
         setup_logging(
-            logfile=logfile, clean_old=False,
-            stderr_level=_LOG_CONFIG.get('stderr_level', 'ERROR'),
-            hamilton_logfile=_beside('hamilton_logfile'),
-            error_logfile=_beside('error_logfile'))
+            logfile=logfile,
+            clean_old=False,
+            stderr_level=_LOG_CONFIG.get("stderr_level", "ERROR"),
+            hamilton_logfile=_beside("hamilton_logfile"),
+            error_logfile=_beside("error_logfile"),
+        )
     except OSError as exc:
         # A bad/unwritable save_dir must not take the logging down with it.
         logger.warning(
             "could not move logs to {}: {!r}; still logging to {}".format(
-                directory, exc, _LOG_CONFIG.get('active_logfile')))
+                directory, exc, _LOG_CONFIG.get("active_logfile")
+            )
+        )
         return None
-    _LOG_CONFIG['active_logfile'] = logfile
+    _LOG_CONFIG["active_logfile"] = logfile
     logger.info("Log continued from {}", previous)
     return logfile
 

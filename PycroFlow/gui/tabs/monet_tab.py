@@ -41,7 +41,8 @@ class MonetTab(QWidget):
             "  • monet's own Connect (below) — manual control between runs. "
             "It opens the lasers immediately.\n"
             "Only one may hold the laser ports at a time, so monet's "
-            "controls are disabled while an experiment runs.")
+            "controls are disabled while an experiment runs."
+        )
         self._explainer.setWordWrap(True)
         self._explainer.setStyleSheet("color: gray;")
         self._layout.addWidget(self._explainer)
@@ -64,10 +65,14 @@ class MonetTab(QWidget):
 
     def set_illumination_status(self, text):
         """Show the PycroFlow illumination-system connection status."""
-        scope = (" (monet config: {})".format(self._setup_name)
-                 if self._setup_name else "")
+        scope = (
+            " (monet config: {})".format(self._setup_name)
+            if self._setup_name
+            else ""
+        )
         self._illu_status.setText(
-            "PycroFlow illumination: {}{}".format(text, scope))
+            "PycroFlow illumination: {}{}".format(text, scope)
+        )
 
     def set_run_lock(self, locked):
         """Disable the embedded monet GUI during an experiment run.

@@ -159,9 +159,11 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             return
         ctx = self._form.context
         ctx.set_options(
-            'reservoir_ids', self._call_provider(self._reservoir_ids_provider))
+            "reservoir_ids", self._call_provider(self._reservoir_ids_provider)
+        )
         ctx.set_options(
-            'lasers', self._call_provider(self._laser_options_provider))
+            "lasers", self._call_provider(self._laser_options_provider)
+        )
 
     @staticmethod
     def _call_provider(provider):
@@ -334,9 +336,7 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             total = estimate_total_duration(protocol)
             volumes = estimate_volumes(protocol)
         except Exception:
-            self.estimate_label.setText(
-                "Estimated: — (design incomplete)"
-            )
+            self.estimate_label.setText("Estimated: — (design incomplete)")
             self.preview_text.setPlainText(
                 "The sequence preview appears once the design compiles."
             )
@@ -347,9 +347,9 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
                 format_volume(volumes["total_injected"]),
             )
         )
-        names = (
-            (design.get("fluid") or {}).get("settings") or {}
-        ).get("reservoir_names") or {}
+        names = ((design.get("fluid") or {}).get("settings") or {}).get(
+            "reservoir_names"
+        ) or {}
         self.preview_text.setPlainText(
             self._format_preview(protocol, volumes, names)
         )
@@ -363,9 +363,11 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
         lines = ["Volumes required:"]
         per = volumes["per_reservoir"]
         for rid in sorted(per, key=lambda r: (r is None, r)):
-            name = reservoir_names.get(rid) or reservoir_names.get(
-                str(rid)
-            ) or "reservoir {}".format(rid)
+            name = (
+                reservoir_names.get(rid)
+                or reservoir_names.get(str(rid))
+                or "reservoir {}".format(rid)
+            )
             lines.append("  {}: {}".format(name, format_volume(per[rid])))
         lines.append(
             "  Total into sample: {}   ·   Waste extracted: {}".format(

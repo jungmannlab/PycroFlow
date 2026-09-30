@@ -148,3 +148,14 @@ illumination:
   # EDIT: the monet CONFIGS key of the MICROSCOPE this fluidics setup runs on
   # — not this setup's name. Ships pointing at the Mercury microscope.
   config: Mercury
+
+monitoring:
+  output_dir: ./fluidics_cam
+  backend: dshow
+  fps: 5
+  retention_days: 14
+  # source: emulator   # inferred from `emulated: true`; set explicitly on a rig
+  cameras:
+    - {role: reservoir, device: 0, width: 320, height: 240}
+    - {role: pump,      device: 1, width: 320, height: 240}
+    - {role: sample,    device: 2, width: 320, height: 240}

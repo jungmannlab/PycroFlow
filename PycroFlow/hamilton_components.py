@@ -204,7 +204,9 @@ class TubingConfig:
                     raise KeyError(
                         "no tubing segment leaves {!r} on the way from {!r} "
                         "to {!r}; add it to the setup's fluid.tubing".format(
-                            segstart, res, path[1]))
+                            segstart, res, path[1]
+                        )
+                    )
                 segment = segment[0]
                 vol += self.config[segment]
                 if segment[1] == path[1]:

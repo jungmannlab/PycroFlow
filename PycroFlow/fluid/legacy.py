@@ -1842,7 +1842,9 @@ class LegacyArchitecture(AbstractSystem):
             if valve not in self.valve_a:
                 raise KeyError(
                     "valve {!r} is not wired in this system (have {})".format(
-                        valve, sorted(self.valve_a, key=str)))
+                        valve, sorted(self.valve_a, key=str)
+                    )
+                )
             self.valve_a[valve].set_valve(pos)
 
     def _flush(self, flushfactor=1):

@@ -40,6 +40,7 @@ Typical use in a test::
         mx.select(3)
         assert fake.channels[2] is True
 """
+
 from __future__ import annotations
 
 import re
@@ -174,7 +175,7 @@ class FakeIbidiSerial:
             if not (1 <= valve <= self.num_channels):
                 return "counterr;"
             target = list(self.channels)
-            target[valve - 1] = bit == 0   # 0 opens, 1 closes
+            target[valve - 1] = bit == 0  # 0 opens, 1 closes
             self._apply(target)
             return "OK;"
 
@@ -199,10 +200,13 @@ class FakeIbidiSerial:
         ``SETBATCHVALVES`` unreliable on the real unit. The device still
         answers ``OK;``, which is why the driver cannot detect it.
         """
-        changes = [i for i, (old, new) in enumerate(zip(self.channels, target))
-                   if old != new]
+        changes = [
+            i
+            for i, (old, new) in enumerate(zip(self.channels, target))
+            if old != new
+        ]
         if self.max_simultaneous is not None:
-            changes = changes[:self.max_simultaneous]
+            changes = changes[: self.max_simultaneous]
         for i in changes:
             self.channels[i] = target[i]
 
@@ -216,7 +220,8 @@ def patch_ibidi_serial(channels=24, max_simultaneous=None):
     ``max_simultaneous`` to emulate the unit's current limit.
     """
     fake = FakeIbidiSerial(
-        channels=channels, max_simultaneous=max_simultaneous)
+        channels=channels, max_simultaneous=max_simultaneous
+    )
 
     def _factory(*args, **kwargs):
         fake.port = args[0] if args else kwargs.get("port", fake.port)

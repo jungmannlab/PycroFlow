@@ -51,6 +51,7 @@ move. The sequential path issues one ``SET:Valve`` per channel spaced by
 ``switch_delay`` seconds. Set ``batch_valves=True`` to go back to the single
 atomic command once the hardware supports it.
 """
+
 from __future__ import annotations
 
 import threading
@@ -279,7 +280,8 @@ class IbidiMultiplexer(_ValveABC):
         """Forget the cached states after a command with unverified effect."""
         logger.debug(
             "ibidi {} sent; cached channel states are now unknown until the "
-            "next select()".format(command))
+            "next select()".format(command)
+        )
         self.channel_states = [None] * self.channels
 
     def set_channel(self, channel, open_):
@@ -327,8 +329,7 @@ class IbidiMultiplexer(_ValveABC):
                     self.channels, len(states)
                 )
             )
-        csv = ",".join(
-            str(WIRE_OPEN if s else WIRE_CLOSED) for s in states)
+        csv = ",".join(str(WIRE_OPEN if s else WIRE_CLOSED) for s in states)
         reply = self._command("SETBATCHVALVES={}".format(csv))
         if not self._ok(reply):
             raise RuntimeError(
@@ -358,7 +359,9 @@ class IbidiMultiplexer(_ValveABC):
         if len(states) != self.channels:
             raise ValueError(
                 "expected {} channel states, got {}".format(
-                    self.channels, len(states)))
+                    self.channels, len(states)
+                )
+            )
         if self.batch_valves:
             return self.set_batch(states)
         return self._apply_states_sequentially(states)
@@ -413,7 +416,8 @@ class IbidiMultiplexer(_ValveABC):
             if not channels:
                 raise ValueError(
                     "no channel given; a reservoir's ibidi valve_pos must "
-                    "name at least one channel")
+                    "name at least one channel"
+                )
         else:
             channels = [int(channel)]
         for ch in channels:

@@ -215,8 +215,15 @@ class _ChoiceEditor(QWidget):
     leave the field unchangeable.
     """
 
-    def __init__(self, options, value, allow_none, ann=str, parent=None,
-                 allow_custom=False):
+    def __init__(
+        self,
+        options,
+        value,
+        allow_none,
+        ann=str,
+        parent=None,
+        allow_custom=False,
+    ):
         super().__init__(parent)
         self.is_block = False
         self._allow_none = allow_none
@@ -384,10 +391,21 @@ class _MappingEditor(QGroupBox):
     the form was built before a setup was loaded.
     """
 
-    def __init__(self, key_ann, val_ann, value, title, *, columns=None,
-                 display_value_first=False, key_choices_key=None,
-                 value_choices_key=None, provides=None, context=None,
-                 parent=None):
+    def __init__(
+        self,
+        key_ann,
+        val_ann,
+        value,
+        title,
+        *,
+        columns=None,
+        display_value_first=False,
+        key_choices_key=None,
+        value_choices_key=None,
+        provides=None,
+        context=None,
+        parent=None,
+    ):
         super().__init__(title, parent)
         self.is_block = True
         self._key_ann = key_ann
@@ -410,28 +428,32 @@ class _MappingEditor(QGroupBox):
                 self._grid.addWidget(lbl, self._next_row, c)
             self._next_row += 1
         self._add_btn = QPushButton("Add")
-        self._add_btn.clicked.connect(lambda: self._add_row('', ''))
+        self._add_btn.clicked.connect(lambda: self._add_row("", ""))
         self._lay.addWidget(self._add_btn)
         for k, v in (value or {}).items():
             self._add_row(k, v)
         # Follow the option sources, so a setup loaded/switched after this
         # form was built still turns the column into a dropdown.
-        for key, side in ((self._key_choices_key, 'key'),
-                          (self._value_choices_key, 'value')):
-            if key and hasattr(self._ctx, 'subscribe'):
+        for key, side in (
+            (self._key_choices_key, "key"),
+            (self._value_choices_key, "value"),
+        ):
+            if key and hasattr(self._ctx, "subscribe"):
                 self._ctx.subscribe(
-                    key, lambda opts, s=side: self._refresh_choices(s, opts))
+                    key, lambda opts, s=side: self._refresh_choices(s, opts)
+                )
 
     def _choices(self, side):
-        key = (self._key_choices_key if side == 'key'
-               else self._value_choices_key)
+        key = (
+            self._key_choices_key if side == "key" else self._value_choices_key
+        )
         if not key or self._ctx is None:
             return None
         return self._ctx.get(key, [])
 
     def _refresh_choices(self, side, options):
         """Rebuild one column's cells against a new option set, in place."""
-        idx = 0 if side == 'key' else 1
+        idx = 0 if side == "key" else 1
         for row in list(self._rows):
             old = row[idx]
             new = self._make_cell(self._cell_text(old), options)
@@ -467,8 +489,8 @@ class _MappingEditor(QGroupBox):
     def _add_row(self, k, v):
         r = self._next_row
         self._next_row += 1
-        key_w = self._make_cell(k, self._choices('key'))
-        val_w = self._make_cell(v, self._choices('value'))
+        key_w = self._make_cell(k, self._choices("key"))
+        val_w = self._make_cell(v, self._choices("value"))
         rm = QPushButton("✕")
         rm.setFixedWidth(28)
         # Keep row-remove buttons out of the tab chain: tabbing out of an
@@ -747,12 +769,17 @@ def _make_editor(ann, optional, value, label, meta, context):
         if _is_model(vt):
             return _DictModelEditor(vt, value, label, context)
         return _MappingEditor(
-            kt, vt, value, label,
-            columns=meta.get('columns'),
-            display_value_first=meta.get('display_value_first', False),
-            key_choices_key=meta.get('key_choices_from'),
-            value_choices_key=meta.get('value_choices_from'),
-            provides=meta.get('provides'), context=context)
+            kt,
+            vt,
+            value,
+            label,
+            columns=meta.get("columns"),
+            display_value_first=meta.get("display_value_first", False),
+            key_choices_key=meta.get("key_choices_from"),
+            value_choices_key=meta.get("value_choices_from"),
+            provides=meta.get("provides"),
+            context=context,
+        )
     # A scalar with a declared option set -> a single dropdown.
     if _has_choices(meta):
         key = meta.get("choices_from")
@@ -760,9 +787,13 @@ def _make_editor(ann, optional, value, label, meta, context):
         if opts is None:
             opts = context.get(key, [])
         editor = _ChoiceEditor(
-            opts, value, meta.get('allow_none', False), ann,
-            allow_custom=meta.get('allow_custom', False))
-        if key is not None and hasattr(context, 'subscribe'):
+            opts,
+            value,
+            meta.get("allow_none", False),
+            ann,
+            allow_custom=meta.get("allow_custom", False),
+        )
+        if key is not None and hasattr(context, "subscribe"):
             context.subscribe(key, editor.set_options)
         return editor
     if ann in (int, float, str, bool):

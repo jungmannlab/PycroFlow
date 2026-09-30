@@ -446,15 +446,14 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._round_names = [
             self._acquire_label(e)
             for e in self._entries.get("img", [])
-            if isinstance(e, dict) and e.get("$type") == "acquire"
+            if isinstance(e, dict)
+            and e.get("$type") == "acquire"
+            and not self._is_dark(e)
         ]
         design = self._service.experiment_design or {}
         self._reservoir_names = (
-            ((design.get("fluid") or {}).get("settings") or {}).get(
-                "reservoir_names"
-            )
-            or {}
-        )
+            (design.get("fluid") or {}).get("settings") or {}
+        ).get("reservoir_names") or {}
         self._durations = estimate_durations(protocol)
         self._total_duration = estimate_total_duration(protocol)
         self._overall_sw.reset()
@@ -598,16 +597,35 @@ class ExperimentTab(YamlDropMixin, QWidget):
             lst.scrollToItem(lst.item(cur), _CENTER)
 
     @staticmethod
-    def _is_round_marker(entry):
-        """Whether an entry marks the end of a round for its subsystem.
+    def _is_dark(entry):
+        """Whether an entry belongs to a dark-frame acquisition.
 
-        Each PycroFlow round is one imaging acquisition; subsystems sync on it.
-        So a round closes at an ``acquire`` (imaging) or at the
-        ``wait for signal`` on the imaging subsystem (fluid/illumination wait
-        for imaging to finish before the next round). Both occur exactly once
-        per round, giving a consistent round count across subsystems.
+        Dark frames are recorded per imager for background/bleaching and are
+        *not* a separate exchange round: the builder tags them with ``dark`` in
+        the acquire ``name``/``message`` (e.g. ``'EGFR (dark frames)'`` /
+        ``'round_img-dark-0-EGFR'``) and in the fluid/illu ``wait for signal``
+        value (``'done imaging round dark-0'``). Grouping them with their imager
+        gives one round per exchange imager.
         """
         if not isinstance(entry, dict):
+            return False
+        text = " ".join(
+            str(entry.get(k, "")) for k in ("name", "message", "value")
+        ).lower()
+        return "dark" in text
+
+    @classmethod
+    def _is_round_marker(cls, entry):
+        """Whether an entry marks the end of a round for its subsystem.
+
+        Each PycroFlow round is one *exchange imager*; subsystems sync on its
+        imaging acquisition. So a round closes at an ``acquire`` (imaging) or at
+        the ``wait for signal`` on the imaging subsystem (fluid/illumination
+        wait for imaging to finish before the next round) -- but a dark-frame
+        acquisition (and its fluid/illu wait) is folded into the imager's round,
+        not counted separately.
+        """
+        if not isinstance(entry, dict) or cls._is_dark(entry):
             return False
         type_ = entry.get("$type")
         if type_ == "acquire":
@@ -752,8 +770,9 @@ class ExperimentTab(YamlDropMixin, QWidget):
     def _round_counts(self, img_prog):
         """(completed_rounds, total_rounds) from the imaging acquisitions.
 
-        Each ``acquire`` step is one round; the number already passed by the
-        imaging handler gives the completed-round count.
+        One round per *exchange imager*: dark-frame acquisitions are folded into
+        their imager's round, not counted separately. ``done_rounds`` is the
+        number of imager rounds fully behind the one currently imaging.
         """
         protocol = self._service.protocol or {}
         img = protocol.get("img", {})
@@ -763,13 +782,18 @@ class ExperimentTab(YamlDropMixin, QWidget):
         acquire_idx = [
             i
             for i, e in enumerate(entries)
-            if isinstance(e, dict) and e.get("$type") == "acquire"
+            if isinstance(e, dict)
+            and e.get("$type") == "acquire"
+            and not self._is_dark(e)
         ]
         total_rounds = len(acquire_idx)
         if not total_rounds:
             return 0, 0
         cur = img_prog[0] if img_prog else 0
-        done_rounds = sum(1 for i in acquire_idx if i < cur)
+        # The imager group cur is in = number of imager acquires reached
+        # (<= cur); the rounds fully behind it are that minus one.
+        started = sum(1 for i in acquire_idx if i <= cur)
+        done_rounds = max(0, started - 1)
         return done_rounds, total_rounds
 
     def _update_current_round_bar(self, prog, done_rounds, total_rounds):

@@ -1,0 +1,641 @@
+"""The camera-capture service -- runs in its own OS process.
+
+Spawned by :class:`PycroFlow.monitoring.controller.MonitoringController` (or run
+by hand for a smoke test), this process owns all camera I/O so nothing it does
+can block or perturb acquisition / fluidics -- the isolation invariant. It:
+
+* runs one :class:`CaptureThread` per camera, each reading its
+  :class:`~PycroFlow.monitoring.sources.FrameSource` into a bounded,
+  drop-oldest buffer; a slow / raising / downed camera degrades to "no current
+  frame" (a black tile panel) and is logged, never raised;
+* watches a filesystem control directory for ``round_begin`` / ``round_end`` /
+  ``stop`` commands the parent drops (atomically) to bind recording to the
+  fluidics round lifecycle;
+* while a round window is open, composites the cameras' latest frames into one
+  tile at the configured fps and writes them to a per-round ``.avi`` in the
+  pool via the wheel-only :class:`~PycroFlow.monitoring.avi.RawAviWriter`;
+* on round end, best-effort indexes the clip's URI onto the matching
+  ``fluidics_round`` in the registry.
+
+Run standalone::
+
+    python -m PycroFlow.monitoring.capture_service \\
+        --config cams.json --control-dir ctl --run-id RUN --emulator
+    python -m PycroFlow.monitoring.capture_service \\
+        --config cams.json --smoke --instrument   # one-shot camera check
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import sys
+import time
+from collections import deque
+from datetime import datetime, timezone
+from pathlib import Path
+from threading import Event, Lock, Thread
+from typing import Optional
+
+import numpy as np
+from loguru import logger
+
+from PycroFlow.monitoring.avi import RawAviWriter
+from PycroFlow.monitoring.config import CameraConfig, MonitoringConfig
+from PycroFlow.monitoring.registry_index import RegistryIndexWriter
+from PycroFlow.monitoring.sources import (
+    _backend_candidates,
+    _open_capture,
+    _quiet_cv2,
+    make_source,
+)
+from PycroFlow.monitoring.tiling import compose, plan_layout
+
+
+class CaptureThread(Thread):
+    """Continuously read one camera into a bounded, drop-oldest buffer.
+
+    Isolation lives here: :meth:`get_latest` never blocks and returns ``None``
+    when the camera is slow/down, so the compositor renders a black panel
+    instead of waiting. All source errors are caught and logged; the thread
+    keeps running (a transient hiccup recovers on the next read; a hard failure
+    stays a logged gap for the run).
+    """
+
+    def __init__(
+        self,
+        camera: CameraConfig,
+        mode: str,
+        *,
+        queue_size: int,
+        fps: int,
+        backend: Optional[str] = None,
+        fail_mode: Optional[str] = None,
+        fail_delay: float = 0.0,
+    ):
+        super().__init__(name="cam-{}".format(camera.role), daemon=True)
+        self.camera = camera
+        self._source = make_source(
+            camera,
+            mode,
+            backend=backend,
+            fail_mode=fail_mode,
+            delay=fail_delay,
+        )
+        self._fps = max(1, fps)
+        self._buf: deque = deque(maxlen=max(1, queue_size))
+        self._lock = Lock()
+        # NB: not ``_stop`` -- that name shadows threading.Thread's internal
+        # _stop() method and breaks join().
+        self._stopped = Event()
+        self._down = False  # last-known health, for edge-triggered logging
+
+    def run(self) -> None:
+        try:
+            self._source.open()
+        except Exception as exc:
+            logger.warning(
+                "monitoring: camera {} did not open ({!r}); recording a gap",
+                self.camera.role,
+                exc,
+            )
+            self._down = True
+            return
+        interval = 1.0 / self._fps
+        while not self._stopped.is_set():
+            t0 = time.monotonic()
+            try:
+                frame = self._source.read()
+            except Exception as exc:
+                self._note_gap(exc)
+                self._stopped.wait(interval)
+                continue
+            if frame is None:
+                self._note_gap(None)
+                self._stopped.wait(interval)
+                continue
+            if self._down:
+                logger.info(
+                    "monitoring: camera {} recovered", self.camera.role
+                )
+                self._down = False
+            with self._lock:
+                self._buf.append(frame)
+            # Pace reads to ~fps so a healthy emulator camera doesn't spin.
+            self._stopped.wait(max(0.0, interval - (time.monotonic() - t0)))
+
+    def _note_gap(self, exc: Optional[Exception]) -> None:
+        if not self._down:  # edge-triggered so a dead cam doesn't spam
+            logger.warning(
+                "monitoring: camera {} produced no frame ({}); recording a gap",
+                self.camera.role,
+                "unplugged" if exc is None else repr(exc),
+            )
+            self._down = True
+
+    def get_latest(self):
+        """Newest buffered frame, or ``None`` (never blocks)."""
+        with self._lock:
+            return self._buf[-1] if self._buf else None
+
+    def stop(self) -> None:
+        self._stopped.set()
+
+    def close(self) -> None:
+        try:
+            self._source.close()
+        except Exception:  # pragma: no cover - close must not raise
+            pass
+
+
+class CaptureService:
+    """Owns the camera threads, the control loop, and the per-round writer."""
+
+    def __init__(
+        self,
+        config: MonitoringConfig,
+        *,
+        control_dir: str,
+        run_id: str,
+        mode: str,
+        fail_mode: Optional[str] = None,
+        fail_delay: float = 0.0,
+    ):
+        self.config = config
+        self.control_dir = control_dir
+        self.run_id = run_id
+        self.mode = mode
+        self._layout = plan_layout(config.cameras, config.tile_cols)
+        self._threads: list[CaptureThread] = [
+            CaptureThread(
+                cam,
+                mode,
+                queue_size=config.queue_size,
+                fps=config.fps,
+                backend=config.backend,
+                fail_mode=fail_mode,
+                fail_delay=fail_delay,
+            )
+            for cam in config.cameras
+        ]
+        self._stop = Event()
+        self._writer: Optional[RawAviWriter] = None
+        self._clip_round: Optional[int] = None
+        self._clip_path: Optional[str] = None
+        self._clip_name: Optional[str] = None
+        self._clip_step: Optional[int] = None
+        self._clip_stamp: Optional[str] = None
+        self._last_frame = 0.0
+        # Live preview: publish the latest tile to a small file so the GUI can
+        # show a live view during a run (it can't open the held cameras itself).
+        self._live_path = (
+            os.path.join(control_dir, "live.ppm") if config.live else None
+        )
+        self._live_fps = min(max(1, config.fps), 5)
+        self._last_live = 0.0
+        # Create the pool dir before opening the registry buffer sqlite in it:
+        # output_dir defaults to a fresh <save_dir>/fluidics_cam, so without
+        # this the buffer connect fails and indexing is silently disabled.
+        os.makedirs(config.output_dir, exist_ok=True)
+        self._index = RegistryIndexWriter.from_env(
+            run_id,
+            buffer_path=os.path.join(
+                config.output_dir, "registry_buffer.sqlite"
+            ),
+        )
+
+    # -- lifecycle -------------------------------------------------------
+    def run(self) -> None:
+        os.makedirs(self.config.output_dir, exist_ok=True)
+        os.makedirs(self.control_dir, exist_ok=True)
+        _prune_retention(self.config.output_dir, self.config.retention_days)
+        for t in self._threads:
+            t.start()
+        tick = min(self.config.poll_interval, 1.0 / max(1, self.config.fps))
+        tick = max(0.005, tick / 2.0)
+        logger.info(
+            "monitoring: capture service up ({} cameras, {} mode, run {})",
+            len(self._threads),
+            self.mode,
+            self.run_id,
+        )
+        try:
+            while not self._stop.is_set():
+                self._drain_control()
+                if self._stop.is_set():
+                    break
+                self._tick_frame()
+                time.sleep(tick)
+        finally:
+            self._shutdown()
+
+    def request_stop(self, *_a) -> None:
+        self._stop.set()
+
+    # -- control channel -------------------------------------------------
+    def _drain_control(self) -> None:
+        try:
+            names = sorted(
+                n for n in os.listdir(self.control_dir) if n.endswith(".json")
+            )
+        except OSError:
+            return
+        for name in names:
+            path = os.path.join(self.control_dir, name)
+            try:
+                with open(path) as f:
+                    cmd = json.load(f)
+            except (OSError, ValueError):
+                # A half-written file (should not happen with atomic rename);
+                # leave it and retry next tick.
+                continue
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            self._handle(cmd)
+            if self._stop.is_set():
+                return
+
+    def _handle(self, cmd: dict) -> None:
+        kind = cmd.get("cmd")
+        if kind == "round_begin":
+            self._open_clip(
+                int(cmd.get("round_index", 0)),
+                cmd.get("unique_name"),
+                cmd.get("t_utc"),
+                cmd.get("protocol_step"),
+            )
+        elif kind == "round_end":
+            self._close_clip(cmd.get("protocol_step_end"))
+        elif kind == "stop":
+            self._stop.set()
+        else:
+            logger.warning("monitoring: unknown control command {!r}", cmd)
+
+    # -- recording -------------------------------------------------------
+    def _open_clip(
+        self,
+        round_index: int,
+        unique_name: Optional[str],
+        t_utc: Optional[str],
+        protocol_step: Optional[int] = None,
+    ) -> None:
+        if self._writer is not None:
+            # A begin without an intervening end (dropped end command): finalize
+            # the current clip first so we never leak an open writer.
+            self._close_clip()
+        stamp = t_utc or _utc_stamp()
+        # Named with the fluid step the exchange starts on; the end step is only
+        # known at close, when the file is renamed to a fluid-step<a>-<b> range.
+        name = _clip_filename(
+            self.run_id, round_index, protocol_step, None, stamp
+        )
+        path = os.path.join(self.config.output_dir, name)
+        try:
+            self._writer = RawAviWriter(
+                path,
+                width=self._layout.width,
+                height=self._layout.height,
+                fps=self.config.fps,
+            )
+        except Exception as exc:  # never let a write failure stall the child
+            logger.warning(
+                "monitoring: could not open clip {} ({!r}); skipping round {}",
+                path,
+                exc,
+                round_index,
+            )
+            self._writer = None
+            return
+        self._clip_round = round_index
+        self._clip_name = unique_name
+        self._clip_step = protocol_step
+        self._clip_stamp = stamp
+        self._clip_path = path
+        self._last_frame = 0.0
+        logger.info("monitoring: recording round {} -> {}", round_index, name)
+
+    def _tick_frame(self) -> None:
+        """Compose the current tile once and, as due, record it and/or publish
+        it for the live view (both fed from the same composite)."""
+        now = time.monotonic()
+        due_record = self._writer is not None and (
+            now - self._last_frame >= 1.0 / max(1, self.config.fps)
+        )
+        due_live = self._live_path is not None and (
+            now - self._last_live >= 1.0 / self._live_fps
+        )
+        if not (due_record or due_live):
+            return
+        tile = compose([t.get_latest() for t in self._threads], self._layout)
+        if due_record:
+            try:
+                self._writer.write(tile)
+            except (
+                Exception
+            ) as exc:  # a write hiccup drops a frame, not the run
+                logger.warning("monitoring: dropped a frame ({!r})", exc)
+            self._last_frame = now
+        if due_live:
+            self._publish_live(tile)
+            self._last_live = now
+
+    def _publish_live(self, tile) -> None:
+        """Write the (downscaled) tile to the live-preview file. Best-effort:
+        a slow/failed write drops a live frame, never disturbs capture."""
+        try:
+            _write_ppm_atomic(self._live_path, _downscale(tile, 480))
+        except Exception:  # pragma: no cover - best-effort
+            pass
+
+    def _close_clip(self, end_step: Optional[int] = None) -> None:
+        if self._writer is None:
+            return
+        writer, self._writer = self._writer, None
+        path, self._clip_path = self._clip_path, None
+        rnd, self._clip_round = self._clip_round, None
+        name, self._clip_name = self._clip_name, None
+        start, self._clip_step = self._clip_step, None
+        stamp, self._clip_stamp = self._clip_stamp, None
+        try:
+            writer.close()
+        except Exception as exc:  # pragma: no cover
+            logger.warning("monitoring: failed to finalize clip ({!r})", exc)
+            return
+        # Now the end step is known: rename to the fluid-step<start>-<end> range
+        # (best-effort; keep the start-only name if the rename fails).
+        if (
+            path is not None
+            and rnd is not None
+            and start is not None
+            and end_step is not None
+            and end_step != start
+        ):
+            new = os.path.join(
+                self.config.output_dir,
+                _clip_filename(self.run_id, rnd, start, end_step, stamp),
+            )
+            try:
+                os.replace(path, new)
+                path = new
+            except OSError as exc:  # pragma: no cover
+                logger.warning("monitoring: could not rename clip ({!r})", exc)
+        logger.info("monitoring: finished round {} clip {}", rnd, path)
+        if path is not None and rnd is not None:
+            uri = Path(path).resolve().as_uri()
+            self._index.index(
+                rnd,
+                uri,
+                round_name=name,
+                protocol_step=start,
+                protocol_step_end=end_step,
+            )
+
+    def _shutdown(self) -> None:
+        self._close_clip()
+        for t in self._threads:
+            t.stop()
+        for t in self._threads:
+            t.join(timeout=2.0)
+            t.close()
+        self._index.close()
+        logger.info("monitoring: capture service down")
+
+
+def _downscale(rgb: np.ndarray, max_w: int) -> np.ndarray:
+    """Nearest-neighbour shrink so the width is <= ``max_w`` (keeps the live
+    file small); returns the array unchanged when already small enough."""
+    w = rgb.shape[1]
+    if w <= max_w:
+        return rgb
+    step = (w + max_w - 1) // max_w
+    return rgb[::step, ::step]
+
+
+def _write_ppm_atomic(path: str, rgb: np.ndarray) -> None:
+    """Write an ``HxWx3`` RGB uint8 array as a binary PPM (P6), atomically.
+
+    PPM is a core Qt image format, so the GUI reads it with a plain
+    ``QImage(path)`` -- no OpenCV needed on either side.
+    """
+    h, w = rgb.shape[:2]
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(b"P6\n%d %d\n255\n" % (w, h))
+        f.write(np.ascontiguousarray(rgb, dtype=np.uint8).tobytes())
+    os.replace(tmp, path)
+
+
+def _utc_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _clip_filename(run_id, round_index, start, end, stamp) -> str:
+    """``run_<id>_round<NNN>_fluid-step<a>-<b>_<UTC>.avi``.
+
+    ``end`` (the fluid step the exchange finished on) is dropped when unknown or
+    equal to ``start`` (a single-step exchange -> ``fluid-step<a>``).
+    """
+    if start is None:
+        tag = ""
+    elif end is None or end == start:
+        tag = "_fluid-step{}".format(start)
+    else:
+        tag = "_fluid-step{}-{}".format(start, end)
+    return "run_{}_round{:03d}{}_{}.avi".format(
+        _sanitize(run_id), round_index, tag, stamp
+    )
+
+
+def _sanitize(text: str) -> str:
+    keep = "-_."
+    return "".join(c if c.isalnum() or c in keep else "-" for c in str(text))
+
+
+def _prune_retention(output_dir: str, retention_days: int) -> None:
+    """Delete clips older than ``retention_days`` (0 disables). Best-effort."""
+    if retention_days <= 0:
+        return
+    cutoff = time.time() - retention_days * 86400
+    try:
+        entries = os.listdir(output_dir)
+    except OSError:
+        return
+    for name in entries:
+        if not name.endswith(".avi"):
+            continue
+        path = os.path.join(output_dir, name)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+                logger.info("monitoring: pruned old clip {}", name)
+        except OSError:
+            pass
+
+
+def _run_smoke(config: MonitoringConfig, mode: str, run_id: str) -> int:
+    """Grab a few frames from each camera into one short clip; print the path.
+
+    A no-orchestration sanity check for the instrument leg -- confirms the
+    cameras open and frames flow before wiring monitoring into a real run.
+    """
+    os.makedirs(config.output_dir, exist_ok=True)
+    layout = plan_layout(config.cameras, config.tile_cols)
+    threads = [
+        CaptureThread(
+            c,
+            mode,
+            queue_size=config.queue_size,
+            fps=config.fps,
+            backend=config.backend,
+        )
+        for c in config.cameras
+    ]
+    for t in threads:
+        t.start()
+    time.sleep(0.5)  # let frames start flowing
+    name = "run_{}_smoke_{}.avi".format(_sanitize(run_id), _utc_stamp())
+    path = os.path.join(config.output_dir, name)
+    with RawAviWriter(
+        path, width=layout.width, height=layout.height, fps=config.fps
+    ) as w:
+        for _ in range(max(1, config.fps)):
+            w.write(compose([t.get_latest() for t in threads], layout))
+            time.sleep(1.0 / max(1, config.fps))
+    for t in threads:
+        t.stop()
+    for t in threads:
+        t.join(timeout=2.0)
+        t.close()
+    logger.info("monitoring: smoke clip written -> {}", path)
+    print(path)
+    return 0
+
+
+def _run_probe(max_index: int = 9) -> int:
+    """Report which (device index, backend) pairs open and yield a live frame.
+
+    The go-to diagnostic when the instrument preview is black: it scans camera
+    indices across the platform's capture backends, opens each, and prints
+    whether a real (non-black) frame arrives. Pick the index+backend whose mean
+    brightness is well above 0 and set it in the setup's ``monitoring:`` block.
+    """
+    try:
+        import cv2
+    except ImportError:
+        print('OpenCV not installed; run  pip install -e ".[monitoring]"')
+        return 2
+    _quiet_cv2(cv2)
+    backends = _backend_candidates(cv2, None)
+    print("index  backend  opened  frame            mean  (mean~0 = black)")
+    for idx in range(max_index + 1):
+        for name, flag in backends:
+            cap = _open_capture(cv2, idx, flag)
+            opened = bool(cap and cap.isOpened())
+            shape = None
+            mean = None
+            if opened:
+                for _ in range(10):
+                    ok, frame = cap.read()
+                    if ok and frame is not None:
+                        shape = "x".join(str(s) for s in frame.shape)
+                        mean = round(float(frame.mean()), 1)
+                        break
+                    time.sleep(0.05)
+            if cap is not None:
+                cap.release()
+            print(
+                "{:5d}  {:7s}  {:6s}  {:15s}  {}".format(
+                    idx,
+                    name,
+                    "yes" if opened else "no",
+                    shape or "-",
+                    "-" if mean is None else mean,
+                )
+            )
+    return 0
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="pycroflow-capture",
+        description="Fluidics monitoring camera-capture service.",
+    )
+    parser.add_argument("--config", help="path to the cameras config JSON")
+    parser.add_argument(
+        "--control-dir", help="directory the parent drops round commands into"
+    )
+    parser.add_argument("--run-id", default="run", help="run identifier")
+    src = parser.add_mutually_exclusive_group()
+    src.add_argument(
+        "--emulator",
+        dest="mode",
+        action="store_const",
+        const="emulator",
+        help="synthetic frame source (default; for CI / no hardware)",
+    )
+    src.add_argument(
+        "--instrument",
+        dest="mode",
+        action="store_const",
+        const="instrument",
+        help="real webcams via OpenCV (needs the [monitoring] extra)",
+    )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="grab a short clip from each camera and exit (no orchestration)",
+    )
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="scan camera indices x backends and report which yield a live "
+        "frame, then exit (diagnose a black preview; no --config needed)",
+    )
+    parser.add_argument(
+        "--max-index",
+        type=int,
+        default=9,
+        help="highest camera index --probe scans (default 9)",
+    )
+    # Fault injection for the isolation proof (emulator source only).
+    parser.add_argument("--fail-mode", choices=("slow", "raise", "unplug"))
+    parser.add_argument("--fail-delay", type=float, default=0.0)
+    args = parser.parse_args(argv)
+
+    if args.probe:
+        return _run_probe(args.max_index)
+
+    if not args.config:
+        parser.error("--config is required unless --probe is given")
+    with open(args.config) as f:
+        config = MonitoringConfig.from_dict(json.load(f))
+    mode = args.mode or config.source or "emulator"
+
+    if args.smoke:
+        return _run_smoke(config, mode, args.run_id)
+
+    if not args.control_dir:
+        parser.error("--control-dir is required unless --smoke is given")
+
+    service = CaptureService(
+        config,
+        control_dir=args.control_dir,
+        run_id=args.run_id,
+        mode=mode,
+        fail_mode=args.fail_mode,
+        fail_delay=args.fail_delay,
+    )
+    signal.signal(signal.SIGTERM, service.request_stop)
+    try:
+        service.run()
+    except KeyboardInterrupt:  # pragma: no cover
+        service.request_stop()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
