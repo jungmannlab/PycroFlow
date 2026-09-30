@@ -1,0 +1,94 @@
+{
+  "backend": {
+    "backend": "instrument",
+    "camera": "HamamatsuHam_DCAM",
+    "exposure_ms": 100.0,
+    "mm_version": "MMCore version 10.5.0",
+    "raw_data_dir": "C:\\tmp\\wp1_raw_reader_b100_20260831T204904",
+    "raw_data_kept": false,
+    "reader_frames_read": 25000,
+    "reader_mode": "process",
+    "roi": null
+  },
+  "batch_sizes": [
+    1,
+    10,
+    100
+  ],
+  "buffer_frames": 3950,
+  "buffer_mb": 10000.0,
+  "completed_configs": [
+    {
+      "batch_size": 0,
+      "reader": false
+    },
+    {
+      "batch_size": 1,
+      "reader": true
+    },
+    {
+      "batch_size": 10,
+      "reader": true
+    },
+    {
+      "batch_size": 100,
+      "reader": true
+    }
+  ],
+  "config": {
+    "batch_sizes": [
+      1,
+      10,
+      100
+    ],
+    "buffer_mb": 10000.0,
+    "bytes_per_pixel": 2,
+    "data_dir": "C:\\tmp",
+    "emulator": {
+      "contention": 0.1,
+      "read_cost_per_frame_s": 0.0002,
+      "tick_s": 0.001,
+      "write_speed_factor": 3.0
+    },
+    "exposure_ms": 100.0,
+    "frame_rate_hz": 10.0,
+    "image_height": 1152,
+    "image_width": 1152,
+    "include_baseline": true,
+    "keep_raw_data": false,
+    "label": "wp1",
+    "mode": "instrument",
+    "monitor_interval_s": 0.05,
+    "n_frames": 25000,
+    "output_dir": "results",
+    "reader_mode": "process",
+    "reader_poll_s": 0.05,
+    "reader_reopen_interval_s": 2.0,
+    "roi": null
+  },
+  "data_dir": "C:\\tmp",
+  "errors": [],
+  "exposure_ms": 100.0,
+  "frame_bytes": 2654208,
+  "frame_rate_hz": 10.0,
+  "git_commit": "c9eb4c8ad64cbbaf078080a09e3ae55a0b728619",
+  "host": "wsju06",
+  "mode": "instrument",
+  "monitor_interval_s": 0.05,
+  "n_frames": 25000,
+  "os": "Windows-10-10.0.19045-SP0",
+  "pycroflow_version": "0.0.1",
+  "pycromanager_version": "0.29.5",
+  "python_version": "3.10.20",
+  "reader_mode": "process",
+  "roi": null,
+  "schema_version": "1.1",
+  "status": "complete",
+  "thresholds": {
+    "max_dropped_fraction": 0.001,
+    "max_occupancy_fraction": 0.5,
+    "min_throughput_retention": 0.95
+  },
+  "utc_end": "2026-08-31T19:30:57.818113+00:00",
+  "utc_start": "2026-08-31T16:42:55.996781+00:00"
+}

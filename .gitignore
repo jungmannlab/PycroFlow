@@ -21,6 +21,14 @@ htmlcov/
 # Local test data (fixtures live under PycroFlow/tests/fixtures/)
 PycroFlow/TestData/*
 
+# WP-1 perf harness: raw NDTiff acquisitions are large (tens of GB) and must
+# never be committed. Only the small run dir (run_meta.json + *.csv) under
+# results/ is tracked; guard against a stray raw movie landing in the tree.
+wp1_raw_*/
+*.ndtiff
+results/**/*.tif
+results/**/*.tiff
+
 # Claude Code: CLAUDE.md (shared project instructions) IS committed; keep
 # local settings and personal notes out of version control.
 .claude/

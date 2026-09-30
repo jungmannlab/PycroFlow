@@ -38,6 +38,18 @@ import pandas as pd
 
 # import logging
 from loguru import logger
+
+# pycromanager 1.0 (B8 / Gate-2, decision C41 numpy-2 harmonization).
+# Requires a Micro-Manager 2.0 nightly build contemporaneous with (or newer
+# than) pycromanager 1.0.0 (2024-08-28): the Python ZMQ client and the Java
+# server bundled in the MM nightly share a version handshake, so an older MM
+# nightly raises a version-mismatch on connect. PycroFlow runs against the MM
+# Java backend (GUI + ZMQ bridge via Core()/Studio()), so the `Acquisition(...)`
+# factory routes to JavaBackendAcquisition, which still accepts `show_display`,
+# `image_process_fn`, `pre_hardware_hook_fn`, and the
+# `image_process_fn(img, meta, event_queue)` / `event_queue.put(None)` abort
+# contract used below — all unchanged from 0.29. The only 1.0 break (the
+# `Dataset` move to `ndstorage`) doesn't touch this module.
 from pycromanager import Acquisition, multi_d_acquisition_events
 
 from PycroFlow.mm_lock import MmCoreLock
