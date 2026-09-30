@@ -69,23 +69,29 @@ monitoring:
 
 ---
 
-## 3. Verify the cameras and set device indices (GUI Webcams tab)
+## 3. Configure the cameras (GUI Webcams tab)
 
-The **Webcams** tab in `pycroflow-gui` is the primary way to confirm the cameras
-are set up right — especially after plugging one in, since USB `VideoCapture`
-indices can shift on a re-plug.
+The **Webcams** tab in `pycroflow-gui` is the primary way to set up and confirm
+the cameras — no YAML editing needed. It edits the whole `monitoring:` block:
 
-1. Launch `pycroflow-gui` and select the camera-equipped **setup** in the
-   toolbar. Open the **Webcams** tab — it lists one row per camera (`role` +
-   a **device** index spinbox + resolution).
-2. Click **Start preview** for a live low-fps tiled view. Confirm each panel
-   shows the expected camera, live. A black panel = that index didn't open.
-3. If a camera is on the wrong index, change its spinbox and:
-   - **Apply** — uses the new indices immediately, for this session's next run
-     (in-memory; also restarts the preview).
-   - **Save to setup file** — writes the indices back to the setup YAML so they
-     persist across restarts (this rewrites that file and does **not** preserve
-     its comments; you'll be asked to confirm).
+1. Launch `pycroflow-gui` and select the **setup** in the toolbar, then open the
+   **Webcams** tab.
+2. **Save clips to** — the output path. Type it or click **Browse…**. Leave it
+   **blank** to save clips with the experiment (`<save_dir>/fluidics_cam/`).
+3. **Cameras** — one row each: `role` (dropdown/free text), `device` index, and
+   `width × height`. Use **+ Add camera** to add a row and **Remove** to drop
+   one, so you can match the number of rows to the cameras actually connected
+   (e.g. trim to a single webcam).
+4. Click **Start preview** for a live low-fps tiled view. Confirm each panel
+   shows the expected camera, live. A black panel = that index didn't open
+   (wrong index, camera in use, or no camera there — see §8).
+5. Persist your changes:
+   - **Apply** — uses the edited config immediately, for this session's next
+     run (in-memory; also restarts the preview).
+   - **Save to setup file** — writes the `monitoring:` block (output path +
+     cameras) back to the setup YAML so it persists across restarts (this
+     rewrites that file and does **not** preserve its comments; you'll be asked
+     to confirm).
 
 The preview uses the same capture pipeline the recorder uses, so what you see is
 what will be recorded. It is disabled while an experiment is running (the capture

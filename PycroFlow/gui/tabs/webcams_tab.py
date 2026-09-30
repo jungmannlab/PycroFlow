@@ -1,15 +1,22 @@
-"""Webcams tab: verify the fluidics monitoring cameras and set device indices.
+"""Webcams tab: set up the fluidics monitoring cameras from the GUI.
 
 A setup/verification surface for WP-FLUIDICS-CAM (not the Phase-1b review/scrub
-panel): it shows the setup's monitoring cameras, lets you edit each camera's
-device index, gives a live low-fps tiled preview to confirm the right camera is
-on the right index, and writes changes back to the setup YAML.
+panel). It edits the setup's ``monitoring:`` block without leaving the app:
+
+* the **save path** clips are written to (blank = the experiment folder),
+* the **camera list** -- add/remove cameras and set each one's role, device
+  index, and resolution,
+* a live low-fps tiled **preview** to confirm the right camera is on the right
+  index,
+
+then **Apply** (in-session, for the next run) or **Save to setup file** (writes
+the ``monitoring:`` block back to the setup YAML).
 
 The preview grabs frames in a background thread via the same
-:mod:`PycroFlow.monitoring.sources` used by the capture service (the emulator
-source for an emulated setup, so it works with no camera; the OpenCV instrument
-source otherwise). It is disabled while an experiment runs, because the capture
-subprocess then owns the cameras.
+:class:`~PycroFlow.monitoring.capture_service.CaptureThread` the recorder uses
+(the emulator source for an emulated setup, so it works with no camera; the
+OpenCV instrument source otherwise). It is disabled while an experiment runs,
+because the capture subprocess then owns the cameras.
 """
 
 from __future__ import annotations
@@ -20,9 +27,12 @@ import yaml
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
+    QComboBox,
+    QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -32,7 +42,7 @@ from PyQt6.QtWidgets import (
 
 from PycroFlow import configs
 from PycroFlow.monitoring.capture_service import CaptureThread
-from PycroFlow.monitoring.config import CameraConfig, load_monitoring_config
+from PycroFlow.monitoring.config import KNOWN_ROLES, CameraConfig
 from PycroFlow.monitoring.tiling import compose, plan_layout
 
 _PREVIEW_FPS = 8
@@ -94,54 +104,63 @@ class WebcamsTab(QWidget):
         super().__init__(parent)
         self._svc = system_service
         self._on_config_changed = on_config_changed
-        self._config = None
-        self._spins: list[QSpinBox] = []
+        # One dict per camera row: {"container", "role", "device", "w", "h"}.
+        self._rows: list[dict] = []
+        self._output_edit: Optional[QLineEdit] = None
         self._worker: Optional[_PreviewWorker] = None
         self._run_locked = False
         self._root = QVBoxLayout(self)
         self._rebuild()
 
     # -- construction ----------------------------------------------------
+    def _block(self) -> Optional[dict]:
+        """The setup's raw ``monitoring`` block (``None`` if no setup)."""
+        setup = getattr(self._svc, "setup", None)
+        if setup is None:
+            return None
+        return setup.get("monitoring") or {}
+
     def _rebuild(self):
-        """Rebuild the tab for the current setup's monitoring config."""
+        """Rebuild the editor from the current setup's monitoring block."""
         self.stop_preview()
         while self._root.count():
             item = self._root.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.deleteLater()
-        self._spins = []
+        self._rows = []
 
-        setup = getattr(self._svc, "setup", None)
-        self._config = load_monitoring_config(setup) if setup else None
-        if self._config is None:
-            self._root.addWidget(
-                QLabel(
-                    "This setup declares no monitoring cameras.\n"
-                    "Add a 'monitoring:' block with cameras to the setup YAML."
-                )
-            )
+        block = self._block()
+        if block is None:
+            self._root.addWidget(QLabel("Load a setup to configure webcams."))
             self._root.addStretch()
             return
 
-        cams_box = QGroupBox("Cameras")
-        cams_layout = QVBoxLayout(cams_box)
-        for cam in self._config.cameras:
-            row = QHBoxLayout()
-            row.addWidget(QLabel("{} — device".format(cam.role)))
-            spin = QSpinBox()
-            spin.setRange(0, 63)
-            try:
-                spin.setValue(int(cam.device))
-            except (TypeError, ValueError):
-                spin.setValue(0)
-            row.addWidget(spin)
-            row.addWidget(QLabel("{}x{}".format(cam.width, cam.height)))
-            row.addStretch()
-            self._spins.append(spin)
-            cams_layout.addLayout(row)
-        self._root.addWidget(cams_box)
+        # -- save path ---------------------------------------------------
+        out_box = QGroupBox("Output")
+        out_layout = QHBoxLayout(out_box)
+        out_layout.addWidget(QLabel("Save clips to:"))
+        self._output_edit = QLineEdit(block.get("output_dir") or "")
+        self._output_edit.setPlaceholderText(
+            "blank = the experiment folder (<save_dir>/fluidics_cam)"
+        )
+        out_layout.addWidget(self._output_edit, stretch=1)
+        self._browse_btn = QPushButton("Browse…")
+        self._browse_btn.clicked.connect(self._browse_output)
+        out_layout.addWidget(self._browse_btn)
+        self._root.addWidget(out_box)
 
+        # -- cameras -----------------------------------------------------
+        self._cams_box = QGroupBox("Cameras")
+        self._cams_layout = QVBoxLayout(self._cams_box)
+        for cam in block.get("cameras") or []:
+            self._add_camera_row(cam)
+        self._add_btn = QPushButton("+ Add camera")
+        self._add_btn.clicked.connect(lambda: self._add_camera_row())
+        self._cams_layout.addWidget(self._add_btn)
+        self._root.addWidget(self._cams_box)
+
+        # -- actions -----------------------------------------------------
         btns = QHBoxLayout()
         self.preview_btn = QPushButton("Start preview")
         self.preview_btn.clicked.connect(self._toggle_preview)
@@ -149,9 +168,8 @@ class WebcamsTab(QWidget):
         self.apply_btn.clicked.connect(self._apply)
         self.save_btn = QPushButton("Save to setup file")
         self.save_btn.clicked.connect(self._save)
-        btns.addWidget(self.preview_btn)
-        btns.addWidget(self.apply_btn)
-        btns.addWidget(self.save_btn)
+        for b in (self.preview_btn, self.apply_btn, self.save_btn):
+            btns.addWidget(b)
         btns.addStretch()
         self._root.addLayout(btns)
 
@@ -162,21 +180,116 @@ class WebcamsTab(QWidget):
 
         self.set_run_lock(self._run_locked)
 
-    # -- preview ---------------------------------------------------------
-    def _current_cameras(self):
-        """CameraConfigs with device indices taken from the spinboxes."""
+    def _add_camera_row(self, cam: Optional[dict] = None):
+        """Append an editable camera row (seeded from ``cam`` or defaults)."""
+        cam = cam or {}
+        container = QWidget()
+        row = QHBoxLayout(container)
+        row.setContentsMargins(0, 0, 0, 0)
+
+        row.addWidget(QLabel("role"))
+        role = QComboBox()
+        role.setEditable(True)
+        role.addItems(list(KNOWN_ROLES))
+        role.setCurrentText(str(cam.get("role", "")) or "sample")
+        row.addWidget(role)
+
+        row.addWidget(QLabel("device"))
+        device = QSpinBox()
+        device.setRange(0, 63)
+        try:
+            device.setValue(int(cam.get("device", len(self._rows))))
+        except (TypeError, ValueError):
+            device.setValue(len(self._rows))
+        row.addWidget(device)
+
+        row.addWidget(QLabel("size"))
+        w = QSpinBox()
+        w.setRange(16, 4096)
+        w.setValue(int(cam.get("width", 640)))
+        h = QSpinBox()
+        h.setRange(16, 4096)
+        h.setValue(int(cam.get("height", 480)))
+        row.addWidget(w)
+        row.addWidget(QLabel("x"))
+        row.addWidget(h)
+        row.addStretch()
+
+        remove = QPushButton("Remove")
+        entry = {
+            "container": container,
+            "role": role,
+            "device": device,
+            "w": w,
+            "h": h,
+            "remove": remove,
+        }
+        remove.clicked.connect(lambda: self._remove_camera_row(entry))
+        row.addWidget(remove)
+
+        # Insert above the "+ Add camera" button (always the last widget).
+        self._cams_layout.insertWidget(
+            self._cams_layout.count() - 1, container
+        )
+        self._rows.append(entry)
+        return entry
+
+    def _remove_camera_row(self, entry: dict):
+        if entry in self._rows:
+            self._rows.remove(entry)
+        entry["container"].setParent(None)
+        entry["container"].deleteLater()
+
+    def _browse_output(self):
+        start = self._output_edit.text() or ""
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Choose where to save monitoring clips", start
+        )
+        if chosen:
+            self._output_edit.setText(chosen)
+
+    # -- reading the UI --------------------------------------------------
+    def _camera_dicts(self) -> list:
+        """The edited cameras as plain dicts (setup/YAML shape)."""
         cams = []
-        for spin, cam in zip(self._spins, self._config.cameras):
+        for i, e in enumerate(self._rows):
             cams.append(
-                CameraConfig(
-                    role=cam.role,
-                    device=spin.value(),
-                    width=cam.width,
-                    height=cam.height,
-                )
+                {
+                    "role": e["role"].currentText().strip()
+                    or "cam{}".format(i),
+                    "device": e["device"].value(),
+                    "width": e["w"].value(),
+                    "height": e["h"].value(),
+                }
             )
         return cams
 
+    def _output_value(self) -> Optional[str]:
+        text = self._output_edit.text().strip() if self._output_edit else ""
+        return text or None
+
+    def _current_cameras(self):
+        """CameraConfigs for the preview, from the edited rows."""
+        return [
+            CameraConfig(
+                role=c["role"],
+                device=c["device"],
+                width=c["width"],
+                height=c["height"],
+            )
+            for c in self._camera_dicts()
+        ]
+
+    def _apply_into(self, block: dict):
+        """Write the edited output dir + cameras into a monitoring block."""
+        out = self._output_value()
+        if out:
+            block["output_dir"] = out
+        else:
+            block.pop("output_dir", None)
+        block["cameras"] = self._camera_dicts()
+
+    # -- preview ---------------------------------------------------------
     def _mode(self):
         setup = getattr(self._svc, "setup", None) or {}
         return "emulator" if setup.get("emulated") else "instrument"
@@ -188,17 +301,14 @@ class WebcamsTab(QWidget):
             self.start_preview()
 
     def start_preview(self):
-        if (
-            self._config is None
-            or self._run_locked
-            or self._worker is not None
-        ):
+        if self._run_locked or self._worker is not None or not self._rows:
             return
+        block = self._block() or {}
         self._worker = _PreviewWorker(
             self._current_cameras(),
             self._mode(),
-            self._config.tile_cols,
-            backend=self._config.backend,
+            block.get("tile_cols"),
+            backend=block.get("backend"),
         )
         self._worker.frame_ready.connect(self._show_frame)
         self._worker.start()
@@ -225,23 +335,16 @@ class WebcamsTab(QWidget):
             )
         )
 
-    # -- edits -----------------------------------------------------------
-    def _write_devices_into(self, cameras_list):
-        """Copy the spinbox device values into a cameras list (in place)."""
-        for i, spin in enumerate(self._spins):
-            if i < len(cameras_list):
-                cameras_list[i]["device"] = spin.value()
-
+    # -- apply / save ----------------------------------------------------
     def _apply(self):
-        """Apply device indices to the in-memory setup for the next run."""
-        setup = getattr(self._svc, "setup", None) or {}
-        cams = (setup.get("monitoring") or {}).get("cameras")
-        if not cams:
+        """Apply the edited config to the in-memory setup for the next run."""
+        setup = getattr(self._svc, "setup", None)
+        if setup is None:
             return
-        self._write_devices_into(cams)
+        self._apply_into(setup.setdefault("monitoring", {}))
         restart = self._worker is not None
         self.stop_preview()
-        # Reflect the change in the controller used by the next run.
+        # Rebuild the controller used by the next run from the updated setup.
         if self._on_config_changed is not None:
             self._on_config_changed()
         self._rebuild()
@@ -249,7 +352,7 @@ class WebcamsTab(QWidget):
             self.start_preview()
 
     def _save(self):
-        """Write the device indices back to the setup's YAML file."""
+        """Write the edited monitoring block back to the setup's YAML file."""
         name = getattr(self._svc, "setup_name", lambda: None)()
         if not name:
             return
@@ -257,8 +360,8 @@ class WebcamsTab(QWidget):
             QMessageBox.question(
                 self,
                 "Save to setup file",
-                "Write the camera device indices back to setup '{}'?\n\n"
-                "This rewrites the setup YAML and normalizes its "
+                "Write the monitoring cameras + output path back to setup "
+                "'{}'?\n\nThis rewrites the setup YAML and normalizes its "
                 "formatting (comments are not preserved).".format(name),
             )
             != QMessageBox.StandardButton.Yes
@@ -267,11 +370,8 @@ class WebcamsTab(QWidget):
         try:
             path = configs.setup_path(name)
             with open(path) as f:
-                raw = yaml.safe_load(f)
-            cams = (raw.get("monitoring") or {}).get("cameras")
-            if not cams:
-                raise ValueError("setup has no monitoring.cameras block")
-            self._write_devices_into(cams)
+                raw = yaml.safe_load(f) or {}
+            self._apply_into(raw.setdefault("monitoring", {}))
             with open(path, "w") as f:
                 yaml.safe_dump(raw, f, sort_keys=False)
         except Exception as exc:
@@ -289,12 +389,22 @@ class WebcamsTab(QWidget):
         self._run_locked = locked
         if locked:
             self.stop_preview()
-        for w in getattr(self, "_spins", []):
-            w.setEnabled(not locked)
-        for name in ("preview_btn", "apply_btn", "save_btn"):
-            btn = getattr(self, name, None)
-            if btn is not None:
-                btn.setEnabled(not locked)
+        widgets = [
+            getattr(self, n, None)
+            for n in (
+                "preview_btn",
+                "apply_btn",
+                "save_btn",
+                "_add_btn",
+                "_browse_btn",
+                "_output_edit",
+            )
+        ]
+        for e in self._rows:
+            widgets += [e["role"], e["device"], e["w"], e["h"], e["remove"]]
+        for w in widgets:
+            if w is not None:
+                w.setEnabled(not locked)
 
     def refresh(self):
         """Rebuild for the current setup (called on setup change)."""

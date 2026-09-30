@@ -2350,17 +2350,41 @@ class TestWebcamsTab(unittest.TestCase):
 
         return WebcamsTab(svc, on_config_changed=on_changed), svc
 
-    def test_rows_apply_and_placeholder(self):
+    def test_rows_apply_and_empty_setup(self):
         tab, svc = self._tab()
-        self.assertEqual(len(tab._spins), 3)  # EmulatorCam has 3 cameras
-        tab._spins[1].setValue(5)
+        self.assertEqual(len(tab._rows), 3)  # EmulatorCam has 3 cameras
+        tab._rows[1]["device"].setValue(5)
         tab._apply()
         self.assertEqual(svc.setup["monitoring"]["cameras"][1]["device"], 5)
         self.assertGreaterEqual(self._changed, 1)
-        # A setup with no cameras -> placeholder, no rows.
+        # A setup with no monitoring block -> editor with zero camera rows.
         svc.load_setup("Emulator")
         tab.refresh()
-        self.assertEqual(len(tab._spins), 0)
+        self.assertEqual(len(tab._rows), 0)
+
+    def test_add_and_remove_camera(self):
+        tab, svc = self._tab()
+        self.assertEqual(len(tab._rows), 3)
+        tab._add_camera_row()  # -> 4
+        tab._rows[-1]["role"].setCurrentText("sample")
+        tab._rows[-1]["device"].setValue(7)
+        self.assertEqual(len(tab._rows), 4)
+        tab._remove_camera_row(tab._rows[0])  # -> 3
+        self.assertEqual(len(tab._rows), 3)
+        tab._apply()
+        cams = svc.setup["monitoring"]["cameras"]
+        self.assertEqual(len(cams), 3)
+        self.assertEqual(cams[-1]["device"], 7)
+
+    def test_output_path_applies_and_clears(self):
+        tab, svc = self._tab()
+        tab._output_edit.setText("/data/mycam")
+        tab._apply()
+        self.assertEqual(svc.setup["monitoring"]["output_dir"], "/data/mycam")
+        # Blank -> the key is dropped (falls back to the experiment folder).
+        tab._output_edit.setText("")
+        tab._apply()
+        self.assertNotIn("output_dir", svc.setup["monitoring"])
 
     def test_emulated_preview_yields_a_frame(self):
         import time
@@ -2383,9 +2407,9 @@ class TestWebcamsTab(unittest.TestCase):
         tab.set_run_lock(True)
         self.assertIsNone(tab._worker)  # preview stopped
         self.assertFalse(tab.apply_btn.isEnabled())
-        self.assertFalse(tab._spins[0].isEnabled())
+        self.assertFalse(tab._rows[0]["device"].isEnabled())
 
-    def test_save_writes_devices_to_yaml(self):
+    def test_save_writes_block_to_yaml(self):
         import shutil
         import tempfile
         import unittest.mock as mock
@@ -2394,7 +2418,8 @@ class TestWebcamsTab(unittest.TestCase):
         from PyQt6.QtWidgets import QMessageBox
 
         tab, svc = self._tab()
-        tab._spins[0].setValue(4)
+        tab._rows[0]["device"].setValue(4)
+        tab._output_edit.setText("/data/mycam")
         # Copy the shipped setup so we never overwrite the real file.
         src = configs.setup_path("EmulatorCam")
         tmp = os.path.join(tempfile.mkdtemp(), "EmulatorCam.yaml")
@@ -2411,6 +2436,7 @@ class TestWebcamsTab(unittest.TestCase):
         with open(tmp) as f:
             written = _yaml.safe_load(f)
         self.assertEqual(written["monitoring"]["cameras"][0]["device"], 4)
+        self.assertEqual(written["monitoring"]["output_dir"], "/data/mycam")
 
 
 if __name__ == "__main__":
