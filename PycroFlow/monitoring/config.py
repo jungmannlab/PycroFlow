@@ -88,6 +88,10 @@ class MonitoringConfig:
         OpenCV capture backend for the instrument source: ``dshow`` / ``msmf`` /
         ``v4l2`` / ``any``. ``None`` auto-selects (DirectShow first on Windows,
         which is far more reliable than the default MSMF for UVC webcams).
+    live : bool
+        Publish the latest composite tile to a small file while running, so the
+        GUI can show a live view during an acquisition (the cameras are held by
+        the capture process, so the GUI can't open them itself). Default ``True``.
     """
 
     cameras: list[CameraConfig]
@@ -100,6 +104,7 @@ class MonitoringConfig:
     poll_interval: float = 0.05
     tile_cols: Optional[int] = None
     backend: Optional[str] = None
+    live: bool = True
 
     def to_dict(self) -> dict:
         """Serialise to a plain dict (written to the child's config file)."""
@@ -113,6 +118,7 @@ class MonitoringConfig:
             "poll_interval": self.poll_interval,
             "tile_cols": self.tile_cols,
             "backend": self.backend,
+            "live": self.live,
             "cameras": [
                 {
                     "role": c.role,
@@ -148,6 +154,7 @@ class MonitoringConfig:
             poll_interval=float(data.get("poll_interval", 0.05)),
             tile_cols=data.get("tile_cols"),
             backend=data.get("backend"),
+            live=bool(data.get("live", True)),
         )
 
 

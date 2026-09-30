@@ -21,10 +21,11 @@ because the capture subprocess then owns the cameras.
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 import yaml
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -110,6 +111,9 @@ class WebcamsTab(QWidget):
         self._worker: Optional[_PreviewWorker] = None
         self._run_locked = False
         self._content: Optional[QWidget] = None
+        # Live view (during a run): poll the file the capture process publishes.
+        self._live_timer: Optional[QTimer] = None
+        self._live_path: Optional[str] = None
         self._root = QVBoxLayout(self)
         self._rebuild()
 
@@ -390,12 +394,48 @@ class WebcamsTab(QWidget):
             return
         self._apply()  # also apply in-session so the next run matches the file
 
+    # -- live view (during a run) ---------------------------------------
+    def _start_live_view(self, path):
+        """Poll the capture process's published live-tile file and show it."""
+        self._stop_live_view()
+        self._live_path = path
+        if not path or not hasattr(self, "preview_label"):
+            return
+        self.preview_label.setText("Live view — waiting for stream…")
+        self._live_timer = QTimer(self)
+        self._live_timer.timeout.connect(self._poll_live)
+        self._live_timer.start(200)  # ~5 fps
+
+    def _stop_live_view(self):
+        if self._live_timer is not None:
+            self._live_timer.stop()
+            self._live_timer.deleteLater()
+            self._live_timer = None
+        self._live_path = None
+
+    def _poll_live(self):
+        path = self._live_path
+        if not path or not os.path.exists(path):
+            return
+        img = QImage(path)  # PPM is a core Qt format -> no OpenCV needed
+        if img.isNull():
+            return
+        self._show_frame(img)
+
     # -- coordinator hooks ----------------------------------------------
-    def set_run_lock(self, locked):
-        """Disable editing + preview while an experiment owns the cameras."""
+    def set_run_lock(self, locked, live_path=None):
+        """Lock editing while an experiment owns the cameras.
+
+        The camera preview is stopped (the capture process holds the cameras),
+        but if ``live_path`` is given the preview area switches to a live view
+        fed by the file the capture process publishes.
+        """
         self._run_locked = locked
         if locked:
             self.stop_preview()
+            self._start_live_view(live_path)
+        else:
+            self._stop_live_view()
         widgets = [
             getattr(self, n, None)
             for n in (

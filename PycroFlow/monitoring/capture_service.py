@@ -39,6 +39,7 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Optional
 
+import numpy as np
 from loguru import logger
 
 from PycroFlow.monitoring.avi import RawAviWriter
@@ -187,6 +188,13 @@ class CaptureService:
         self._clip_step: Optional[int] = None
         self._clip_stamp: Optional[str] = None
         self._last_frame = 0.0
+        # Live preview: publish the latest tile to a small file so the GUI can
+        # show a live view during a run (it can't open the held cameras itself).
+        self._live_path = (
+            os.path.join(control_dir, "live.ppm") if config.live else None
+        )
+        self._live_fps = min(max(1, config.fps), 5)
+        self._last_live = 0.0
         # Create the pool dir before opening the registry buffer sqlite in it:
         # output_dir defaults to a fresh <save_dir>/fluidics_cam, so without
         # this the buffer connect fails and indexing is silently disabled.
@@ -218,7 +226,7 @@ class CaptureService:
                 self._drain_control()
                 if self._stop.is_set():
                     break
-                self._maybe_write_frame()
+                self._tick_frame()
                 time.sleep(tick)
         finally:
             self._shutdown()
@@ -310,19 +318,38 @@ class CaptureService:
         self._last_frame = 0.0
         logger.info("monitoring: recording round {} -> {}", round_index, name)
 
-    def _maybe_write_frame(self) -> None:
-        if self._writer is None:
-            return
+    def _tick_frame(self) -> None:
+        """Compose the current tile once and, as due, record it and/or publish
+        it for the live view (both fed from the same composite)."""
         now = time.monotonic()
-        if now - self._last_frame < 1.0 / max(1, self.config.fps):
+        due_record = self._writer is not None and (
+            now - self._last_frame >= 1.0 / max(1, self.config.fps)
+        )
+        due_live = self._live_path is not None and (
+            now - self._last_live >= 1.0 / self._live_fps
+        )
+        if not (due_record or due_live):
             return
-        frames = [t.get_latest() for t in self._threads]
-        tile = compose(frames, self._layout)
+        tile = compose([t.get_latest() for t in self._threads], self._layout)
+        if due_record:
+            try:
+                self._writer.write(tile)
+            except (
+                Exception
+            ) as exc:  # a write hiccup drops a frame, not the run
+                logger.warning("monitoring: dropped a frame ({!r})", exc)
+            self._last_frame = now
+        if due_live:
+            self._publish_live(tile)
+            self._last_live = now
+
+    def _publish_live(self, tile) -> None:
+        """Write the (downscaled) tile to the live-preview file. Best-effort:
+        a slow/failed write drops a live frame, never disturbs capture."""
         try:
-            self._writer.write(tile)
-        except Exception as exc:  # a write hiccup drops a frame, not the run
-            logger.warning("monitoring: dropped a frame ({!r})", exc)
-        self._last_frame = now
+            _write_ppm_atomic(self._live_path, _downscale(tile, 480))
+        except Exception:  # pragma: no cover - best-effort
+            pass
 
     def _close_clip(self, end_step: Optional[int] = None) -> None:
         if self._writer is None:
@@ -376,6 +403,30 @@ class CaptureService:
             t.close()
         self._index.close()
         logger.info("monitoring: capture service down")
+
+
+def _downscale(rgb: np.ndarray, max_w: int) -> np.ndarray:
+    """Nearest-neighbour shrink so the width is <= ``max_w`` (keeps the live
+    file small); returns the array unchanged when already small enough."""
+    w = rgb.shape[1]
+    if w <= max_w:
+        return rgb
+    step = (w + max_w - 1) // max_w
+    return rgb[::step, ::step]
+
+
+def _write_ppm_atomic(path: str, rgb: np.ndarray) -> None:
+    """Write an ``HxWx3`` RGB uint8 array as a binary PPM (P6), atomically.
+
+    PPM is a core Qt image format, so the GUI reads it with a plain
+    ``QImage(path)`` -- no OpenCV needed on either side.
+    """
+    h, w = rgb.shape[:2]
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(b"P6\n%d %d\n255\n" % (w, h))
+        f.write(np.ascontiguousarray(rgb, dtype=np.uint8).tobytes())
+    os.replace(tmp, path)
 
 
 def _utc_stamp() -> str:

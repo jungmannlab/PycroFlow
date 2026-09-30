@@ -126,6 +126,15 @@ class MonitoringController:
         self._svc.add_state_observer(self._on_state)
         return self
 
+    def live_frame_path(self) -> Optional[str]:
+        """Path the capture process publishes the live tile to while running,
+        or ``None`` when no capture is active / live preview is off."""
+        if not self._spawned or not self._control_dir:
+            return None
+        if not self._config.live:
+            return None
+        return os.path.join(self._control_dir, "live.ppm")
+
     def detach(self) -> None:
         """Stop any active capture and deregister the state observer.
 

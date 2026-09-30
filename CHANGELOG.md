@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Fluidics monitoring: **live view during a run**. Because the capture process
+  owns the cameras while recording, it now also publishes its latest composite
+  tile to a small file a few times a second; the GUI Webcams tab shows that as a
+  live view for the whole acquisition (the editing controls stay locked). On by
+  default; disable per rig with `monitoring.live: false`.
+
 ### Changed
 
 - Progress bar counts **one round per exchange imager**: an imager's dark-frame

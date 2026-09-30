@@ -295,6 +295,23 @@ class TestFrameSources(unittest.TestCase):
         self.assertIsInstance(src, InstrumentFrameSource)
         self.assertEqual(src._backend, "dshow")
 
+    def test_live_defaults_true_and_round_trips(self):
+        cfg = load_monitoring_config(
+            {"monitoring": {"output_dir": "x", "cameras": [{"role": "p"}]}}
+        )
+        self.assertTrue(cfg.live)
+        off = load_monitoring_config(
+            {
+                "monitoring": {
+                    "output_dir": "x",
+                    "live": False,
+                    "cameras": [{"role": "p"}],
+                }
+            }
+        )
+        self.assertFalse(off.live)
+        self.assertFalse(MonitoringConfig.from_dict(off.to_dict()).live)
+
     def test_backend_round_trips_through_config(self):
         cfg = load_monitoring_config(
             {
@@ -576,6 +593,72 @@ class TestOutputDirResolution(unittest.TestCase):
                 os.path.join("", "fluidics_cam")
             )
         )
+
+    def test_live_frame_path_none_before_spawn(self):
+        ctrl = self._controller(None, None)
+        self.assertIsNone(ctrl.live_frame_path())  # not spawned yet
+
+    def test_live_frame_path_none_when_live_off(self):
+        import types
+
+        svc = types.SimpleNamespace(experiment_design=None)
+        cfg = MonitoringConfig(
+            cameras=[CameraConfig("pump", 0)], output_dir="/x", live=False
+        )
+        ctrl = MonitoringController(svc, cfg, mode="emulator")
+        ctrl._spawned = True
+        ctrl._control_dir = "/tmp/ctl"
+        self.assertIsNone(ctrl.live_frame_path())  # live disabled
+
+    def test_live_frame_path_when_spawned(self):
+        ctrl = self._controller(None, None)
+        ctrl._spawned = True
+        ctrl._control_dir = "/tmp/ctl"
+        self.assertEqual(
+            ctrl.live_frame_path(), os.path.join("/tmp/ctl", "live.ppm")
+        )
+
+
+class TestLivePublish(unittest.TestCase):
+    def test_capture_publishes_a_valid_live_ppm(self):
+        d = tempfile.mkdtemp()
+        out = os.path.join(d, "clips")
+        os.makedirs(out)
+        ctl = os.path.join(d, "ctl")
+        os.makedirs(ctl)
+        cfg = _mon_config(out, fps=10, live=True)
+        cfg_path = os.path.join(d, "cams.json")
+        with open(cfg_path, "w") as f:
+            json.dump(cfg.to_dict(), f)
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "PycroFlow.monitoring.capture_service",
+                "--config",
+                cfg_path,
+                "--control-dir",
+                ctl,
+                "--run-id",
+                "LV",
+                "--emulator",
+            ]
+        )
+        try:
+            live = os.path.join(ctl, "live.ppm")
+            t0 = time.time()
+            while not os.path.exists(live) and time.time() - t0 < 5:
+                time.sleep(0.05)
+            self.assertTrue(os.path.exists(live), "no live.ppm published")
+            time.sleep(0.3)
+            with open(live, "rb") as f:
+                self.assertEqual(f.read(2), b"P6")  # valid PPM magic
+        finally:
+            p = os.path.join(ctl, "000000000001.json")
+            with open(p + ".tmp", "w") as f:
+                json.dump({"cmd": "stop"}, f)
+            os.replace(p + ".tmp", p)
+            proc.wait(timeout=10)
 
 
 # --------------------------------------------------------------------------

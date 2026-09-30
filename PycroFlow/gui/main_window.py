@@ -187,7 +187,14 @@ class PycroFlowMainWindow(QMainWindow):
         self.act_disconnect.setEnabled(not locked)
         self.fluid_tab.set_run_lock(locked)
         self.imaging_tab.set_run_lock(locked)
-        self.webcams_tab.set_run_lock(locked)
+        # While locked (a run owns the cameras), feed the Webcams tab the live
+        # tile the capture process publishes so it can show a live view.
+        live = (
+            self._monitoring.live_frame_path()
+            if locked and self._monitoring is not None
+            else None
+        )
+        self.webcams_tab.set_run_lock(locked, live_path=live)
         self.monet_tab.set_run_lock(locked)
         if not locked:
             # Restore real connection statuses after the run lock lifts.

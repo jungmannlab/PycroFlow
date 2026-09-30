@@ -2471,6 +2471,24 @@ class TestWebcamsTab(unittest.TestCase):
         self.assertFalse(tab.apply_btn.isEnabled())
         self.assertFalse(tab._rows[0]["device"].isEnabled())
 
+    def test_live_view_shows_published_frame(self):
+        import tempfile
+
+        import numpy as np
+
+        from PycroFlow.monitoring.capture_service import _write_ppm_atomic
+
+        tab, _ = self._tab()
+        ppm = os.path.join(tempfile.mkdtemp(), "live.ppm")
+        _write_ppm_atomic(ppm, np.full((20, 30, 3), (0, 128, 255), np.uint8))
+        tab.set_run_lock(True, live_path=ppm)
+        self.assertIsNotNone(tab._live_timer)  # live polling started
+        tab._poll_live()  # tick once
+        self.assertIsNotNone(tab.preview_label.pixmap())
+        self.assertFalse(tab.preview_label.pixmap().isNull())
+        tab.set_run_lock(False)
+        self.assertIsNone(tab._live_timer)  # stopped on unlock
+
     def test_save_writes_block_to_yaml(self):
         import shutil
         import tempfile

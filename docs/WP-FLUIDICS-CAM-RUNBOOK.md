@@ -94,9 +94,17 @@ the cameras — no YAML editing needed. It edits the whole `monitoring:` block:
      to confirm).
 
 The preview uses the same capture pipeline the recorder uses, so what you see is
-what will be recorded. It is disabled while an experiment is running (the capture
-process owns the cameras then). For an emulated setup the preview shows synthetic
-frames, so you can exercise the tab with no hardware.
+what will be recorded. For an emulated setup the preview shows synthetic frames,
+so you can exercise the tab with no hardware.
+
+### Live view during a run
+
+While an experiment is running, the capture process owns the cameras, so the tab
+can't open them itself — instead the preview area shows a **live view fed by the
+capture process** (it publishes its latest tile a few times a second). This is
+**on by default**, so you can watch the fluidics live during an acquisition
+without any extra step. The editing controls are disabled during the run. To
+turn the live view off for a rig, set `live: false` in the `monitoring:` block.
 
 ### CLI alternative (no GUI)
 
