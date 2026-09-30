@@ -2489,6 +2489,29 @@ class TestWebcamsTab(unittest.TestCase):
         tab.set_run_lock(False)
         self.assertIsNone(tab._live_timer)  # stopped on unlock
 
+    def test_live_view_resolves_path_provider_lazily(self):
+        # Reproduces the spawn-vs-lock race: the provider returns None at lock
+        # time (capture not spawned yet), then the real path a moment later.
+        import tempfile
+
+        import numpy as np
+
+        from PycroFlow.monitoring.capture_service import _write_ppm_atomic
+
+        tab, _ = self._tab()
+        ppm = os.path.join(tempfile.mkdtemp(), "live.ppm")
+        box = {"path": None}  # provider starts empty (not spawned)
+        tab.set_run_lock(True, live_path=lambda: box["path"])
+        self.assertIsNotNone(tab._live_timer)  # polling despite no path yet
+        tab._poll_live()  # no path -> stays on the waiting message, no crash
+        # Capture "spawns": path + file appear; the next poll shows the frame.
+        _write_ppm_atomic(ppm, np.full((10, 16, 3), (10, 200, 30), np.uint8))
+        box["path"] = ppm
+        tab._poll_live()
+        self.assertIsNotNone(tab.preview_label.pixmap())
+        self.assertFalse(tab.preview_label.pixmap().isNull())
+        tab.set_run_lock(False)
+
     def test_save_writes_block_to_yaml(self):
         import shutil
         import tempfile

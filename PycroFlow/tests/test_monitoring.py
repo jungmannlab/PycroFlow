@@ -588,10 +588,23 @@ class TestOutputDirResolution(unittest.TestCase):
 
     def test_no_design_falls_back_to_cwd(self):
         ctrl = self._controller(None, None)
-        self.assertTrue(
-            ctrl._resolve_output_dir().endswith(
-                os.path.join("", "fluidics_cam")
-            )
+        self.assertIn("fluidics_cam", ctrl._resolve_output_dir())
+
+    def test_numbering_avoids_existing_dirs(self):
+        save = tempfile.mkdtemp()
+        ctrl = self._controller(None, {"save_dir": save})
+        # First run -> fluidics_cam.
+        self.assertEqual(
+            ctrl._resolve_output_dir(), os.path.join(save, "fluidics_cam")
+        )
+        # With that dir present, the next run picks fluidics_cam_1, then _2.
+        os.makedirs(os.path.join(save, "fluidics_cam"))
+        self.assertEqual(
+            ctrl._resolve_output_dir(), os.path.join(save, "fluidics_cam_1")
+        )
+        os.makedirs(os.path.join(save, "fluidics_cam_1"))
+        self.assertEqual(
+            ctrl._resolve_output_dir(), os.path.join(save, "fluidics_cam_2")
         )
 
     def test_live_frame_path_none_before_spawn(self):

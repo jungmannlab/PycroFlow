@@ -112,8 +112,11 @@ class WebcamsTab(QWidget):
         self._run_locked = False
         self._content: Optional[QWidget] = None
         # Live view (during a run): poll the file the capture process publishes.
+        # The source is a path or a callable returning one (polled each tick, so
+        # it works even though the capture process spawns slightly after the run
+        # locks the tab).
         self._live_timer: Optional[QTimer] = None
-        self._live_path: Optional[str] = None
+        self._live_source = None
         self._root = QVBoxLayout(self)
         self._rebuild()
 
@@ -395,11 +398,15 @@ class WebcamsTab(QWidget):
         self._apply()  # also apply in-session so the next run matches the file
 
     # -- live view (during a run) ---------------------------------------
-    def _start_live_view(self, path):
-        """Poll the capture process's published live-tile file and show it."""
+    def _start_live_view(self, source):
+        """Poll the capture process's published live-tile file and show it.
+
+        ``source`` is a path or a callable returning one (or ``None`` until the
+        capture process has spawned); it is resolved on every poll.
+        """
         self._stop_live_view()
-        self._live_path = path
-        if not path or not hasattr(self, "preview_label"):
+        self._live_source = source
+        if source is None or not hasattr(self, "preview_label"):
             return
         self.preview_label.setText("Live view — waiting for stream…")
         self._live_timer = QTimer(self)
@@ -411,10 +418,19 @@ class WebcamsTab(QWidget):
             self._live_timer.stop()
             self._live_timer.deleteLater()
             self._live_timer = None
-        self._live_path = None
+        self._live_source = None
+
+    def _live_path(self):
+        src = self._live_source
+        if callable(src):
+            try:
+                return src()
+            except Exception:
+                return None
+        return src
 
     def _poll_live(self):
-        path = self._live_path
+        path = self._live_path()
         if not path or not os.path.exists(path):
             return
         img = QImage(path)  # PPM is a core Qt format -> no OpenCV needed

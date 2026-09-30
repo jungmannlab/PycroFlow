@@ -221,14 +221,21 @@ class MonitoringController:
         )
 
     def _resolve_output_dir(self) -> str:
-        """Where clips land: the setup's ``output_dir`` if set, else
-        ``<experiment save_dir>/fluidics_cam`` so clips travel with the run's
-        outputs (the design load has already chdir'd there)."""
+        """Where clips land: the setup's ``output_dir`` if set, else the first
+        free ``<experiment save_dir>/fluidics_cam`` / ``fluidics_cam_1`` / ... so
+        clips travel with the run's outputs and multiple runs into one save_dir
+        don't mix -- mirroring the acquisition folder's ``_N`` numbering
+        (``imaging.create_savedir``)."""
         if self._config.output_dir:
             return self._config.output_dir
         design = getattr(self._svc, "experiment_design", None) or {}
         base = os.path.abspath(design.get("save_dir") or ".")
-        return os.path.join(base, "fluidics_cam")
+        root = os.path.join(base, "fluidics_cam")
+        path, n = root, 0
+        while os.path.exists(path):
+            n += 1
+            path = "{}_{}".format(root, n)
+        return path
 
     def _spawn(self) -> None:
         self._control_dir = tempfile.mkdtemp(prefix="pycroflow-cam-")

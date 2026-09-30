@@ -143,7 +143,10 @@ changes.
 Unless the setup pins an explicit `output_dir`, clips are written to
 **`<experiment save_dir>/fluidics_cam/`** — i.e. beside the run's design, Run
 Sequence, logs, and acquisition data. (`save_dir` comes from the loaded
-experiment design; the app already `chdir`s there on load.)
+experiment design; the app already `chdir`s there on load.) Multiple runs into
+the same `save_dir` don't mix: the dir gets the first free `_N` suffix
+(`fluidics_cam`, `fluidics_cam_1`, `fluidics_cam_2`, …), mirroring the
+acquisition folder's own `_N` numbering (`<base_name>`, `<base_name>_1`, …).
 
 ### Clip names
 

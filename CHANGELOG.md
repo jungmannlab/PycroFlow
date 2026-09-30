@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fluidics monitoring **live view now actually starts** during a run. The GUI
+  read the capture process's live-frame path once, at the moment the run locked
+  the tab — but the capture process spawns a hair later, so the path was still
+  `None` and the tab stayed on "Preview stopped". The tab now polls a resolver
+  each tick, so the live view appears as soon as the stream is up.
+
+### Changed
+
+- Monitoring clips default to a **numbered** `<save_dir>/fluidics_cam[_N]` (first
+  free suffix) instead of a fixed `fluidics_cam`, so multiple runs into one
+  `save_dir` don't mix — mirroring the acquisition folder's `_N` numbering.
+
 ### Added
 
 - Fluidics monitoring: **live view during a run**. Because the capture process

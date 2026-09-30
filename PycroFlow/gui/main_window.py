@@ -188,9 +188,11 @@ class PycroFlowMainWindow(QMainWindow):
         self.fluid_tab.set_run_lock(locked)
         self.imaging_tab.set_run_lock(locked)
         # While locked (a run owns the cameras), feed the Webcams tab the live
-        # tile the capture process publishes so it can show a live view.
+        # tile the capture process publishes so it can show a live view. Pass
+        # the resolver (not a snapshot): the capture process spawns just after
+        # this fires, so the path is None now and becomes valid a moment later.
         live = (
-            self._monitoring.live_frame_path()
+            self._monitoring.live_frame_path
             if locked and self._monitoring is not None
             else None
         )
