@@ -13,6 +13,7 @@ entry, then dispatch on the typed class via ``functools.singledispatch``.
 Callers that still pass raw dicts work because the orchestration code
 parses lazily and falls back to the original ``$type`` string dispatch.
 """
+
 from PycroFlow.schemas import validate_protocol
 from PycroFlow.schemas.protocol_schema import (
     AcquireEntry,
@@ -33,23 +34,22 @@ from PycroFlow.schemas.protocol_schema import (
     WaitForSignalEntry,
 )
 
-
 # Mapping ``$type`` value -> entry model. Used by :func:`parse_entry` so a
 # raw dict can be coerced without going through the full Protocol model
 # (which requires a fully-formed protocol dict).
 ENTRY_MODELS_BY_TYPE = {
-    'inject': InjectEntry,
-    'incubate': IncubateEntry,
-    'flush': FlushEntry,
-    'pump_out': PumpOutEntry,
-    'await_acquisition': AwaitAcquisitionEntry,
-    'signal': SignalEntry,
-    'wait for signal': WaitForSignalEntry,
-    'acquire': AcquireEntry,
-    'power': PowerEntry,
-    'set power': SetPowerEntry,
-    'set shutter': SetShutterEntry,
-    'laser enable': LaserEnableEntry,
+    "inject": InjectEntry,
+    "incubate": IncubateEntry,
+    "flush": FlushEntry,
+    "pump_out": PumpOutEntry,
+    "await_acquisition": AwaitAcquisitionEntry,
+    "signal": SignalEntry,
+    "wait for signal": WaitForSignalEntry,
+    "acquire": AcquireEntry,
+    "power": PowerEntry,
+    "set power": SetPowerEntry,
+    "set shutter": SetShutterEntry,
+    "laser enable": LaserEnableEntry,
 }
 
 
@@ -76,20 +76,21 @@ def parse_entry(raw):
     Raises :class:`KeyError` for unknown ``$type``s and the underlying
     ``pydantic.ValidationError`` for malformed fields.
     """
-    type_key = raw['$type']
+    type_key = raw["$type"]
     model = ENTRY_MODELS_BY_TYPE.get(type_key)
     if model is None and isinstance(type_key, str):
         model = ENTRY_MODELS_BY_TYPE.get(type_key.lower())
     if model is None:
         raise KeyError(
             "unknown protocol entry $type {!r}; known types: {}".format(
-                type_key, sorted(ENTRY_MODELS_BY_TYPE),
+                type_key,
+                sorted(ENTRY_MODELS_BY_TYPE),
             )
         )
     # Lowercase the dispatch field in the input so the Literal discriminator
     # matches. The pydantic model preserves all other fields verbatim.
     if isinstance(type_key, str) and type_key not in ENTRY_MODELS_BY_TYPE:
-        raw = dict(raw, **{'$type': type_key.lower()})
+        raw = dict(raw, **{"$type": type_key.lower()})
     return model.model_validate(raw)
 
 

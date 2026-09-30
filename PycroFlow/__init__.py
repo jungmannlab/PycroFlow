@@ -9,16 +9,24 @@ handler, so code that logs before :func:`setup_logging` runs (e.g. building
 a protocol in a startup script) does not flood the terminal. Until
 ``setup_logging`` installs the real sinks, records simply go nowhere.
 """
+
 from loguru import logger
 import os
 import sys
 
+# Version comes from the git tag via setuptools-scm, which writes the
+# resolved value into the generated ``_version.py`` at build/install time.
+# Fall back to importlib.metadata (installed dist) and finally a sentinel so
+# importing from an uninstalled source tree without a build never crashes.
 try:
-    from importlib.metadata import PackageNotFoundError, version
+    from ._version import version as __version__
+except ImportError:  # no generated file (uninstalled source tree)
+    try:
+        from importlib.metadata import PackageNotFoundError, version
 
-    __version__ = version("PycroFlow")
-except (ImportError, PackageNotFoundError):  # not installed (e.g. source tree)
-    __version__ = "0.0.0"
+        __version__ = version("PycroFlow")
+    except (ImportError, PackageNotFoundError):
+        __version__ = "0.0.0"
 
 
 # loguru auto-installs a DEBUG->stderr handler (id 0) on import. Drop it so
@@ -43,7 +51,7 @@ _LOGGING_CONFIGURED = False
 
 def log_filter(record):
     """Exclude subpackage logs (pyHamilton, monet) from the main log file."""
-    subpackages = ['pyHamilton', 'monet']
+    subpackages = ["pyHamilton", "monet"]
     if any(sp in record["name"] for sp in subpackages):
         return False
     return True
@@ -59,7 +67,7 @@ def logging_configured():
     return _LOGGING_CONFIGURED
 
 
-def clean_old_logs(prefix='pycroflow.log', directory='.'):
+def clean_old_logs(prefix="pycroflow.log", directory="."):
     """Delete rotated log files matching ``prefix`` in ``directory``.
 
     Previously called ``rem_old_logfiles`` and run at import time, which
@@ -78,8 +86,12 @@ def clean_old_logs(prefix='pycroflow.log', directory='.'):
                 pass
 
 
-def setup_logging(logfile='pycroflow.log', clean_old=False,
-                  stderr_level='ERROR', hamilton_logfile='hamilton.log'):
+def setup_logging(
+    logfile="pycroflow.log",
+    clean_old=False,
+    stderr_level="ERROR",
+    hamilton_logfile="hamilton.log",
+):
     """Configure loguru sinks for PycroFlow.
 
     Three sinks are installed:

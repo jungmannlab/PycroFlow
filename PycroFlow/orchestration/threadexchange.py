@@ -22,6 +22,7 @@ fires/waits through ``tx.signal_registry``; the legacy list-of-strings
 path is preserved in the per-subsystem ``list[str]`` for substring-
 matching semantics that callers still depend on.
 """
+
 from __future__ import annotations
 
 import queue
@@ -30,8 +31,7 @@ from typing import List
 
 from PycroFlow.orchestration.signal_registry import SignalRegistry
 
-
-_SUBSYSTEMS = ('fluid', 'img', 'illu')
+_SUBSYSTEMS = ("fluid", "img", "illu")
 
 
 class ThreadExchange(dict):
@@ -49,20 +49,20 @@ class ThreadExchange(dict):
     """
 
     @classmethod
-    def create(cls) -> 'ThreadExchange':
+    def create(cls) -> "ThreadExchange":
         """Build a fresh exchange with all primitives newly allocated."""
         tx = cls()
         for sub in _SUBSYSTEMS:
-            tx[f'{sub}_lock'] = threading.Lock()
+            tx[f"{sub}_lock"] = threading.Lock()
             tx[sub] = []  # list[str]: legacy message log
-            tx[f'{sub}_finished'] = threading.Event()
-        tx['fluid_queue'] = queue.Queue()
-        tx['start_protocol_flag'] = threading.Event()
-        tx['pause_protocol_flag'] = threading.Event()
-        tx['abort_protocol_flag'] = threading.Event()
-        tx['abort_flag'] = threading.Event()
-        tx['graceful_stop_flag'] = threading.Event()
-        tx['signal_registry'] = SignalRegistry()
+            tx[f"{sub}_finished"] = threading.Event()
+        tx["fluid_queue"] = queue.Queue()
+        tx["start_protocol_flag"] = threading.Event()
+        tx["pause_protocol_flag"] = threading.Event()
+        tx["abort_protocol_flag"] = threading.Event()
+        tx["abort_flag"] = threading.Event()
+        tx["graceful_stop_flag"] = threading.Event()
+        tx["signal_registry"] = SignalRegistry()
         return tx
 
     # --- Typed accessors. Read-only — modifying through the typed name
@@ -70,64 +70,64 @@ class ThreadExchange(dict):
 
     @property
     def signal_registry(self) -> SignalRegistry:
-        return self['signal_registry']
+        return self["signal_registry"]
 
     @property
     def fluid_lock(self) -> threading.Lock:
-        return self['fluid_lock']
+        return self["fluid_lock"]
 
     @property
     def img_lock(self) -> threading.Lock:
-        return self['img_lock']
+        return self["img_lock"]
 
     @property
     def illu_lock(self) -> threading.Lock:
-        return self['illu_lock']
+        return self["illu_lock"]
 
     @property
     def fluid(self) -> List[str]:
-        return self['fluid']
+        return self["fluid"]
 
     @property
     def img(self) -> List[str]:
-        return self['img']
+        return self["img"]
 
     @property
     def illu(self) -> List[str]:
-        return self['illu']
+        return self["illu"]
 
     @property
     def abort_flag(self) -> threading.Event:
-        return self['abort_flag']
+        return self["abort_flag"]
 
     @property
     def abort_protocol_flag(self) -> threading.Event:
-        return self['abort_protocol_flag']
+        return self["abort_protocol_flag"]
 
     @property
     def pause_protocol_flag(self) -> threading.Event:
-        return self['pause_protocol_flag']
+        return self["pause_protocol_flag"]
 
     @property
     def start_protocol_flag(self) -> threading.Event:
-        return self['start_protocol_flag']
+        return self["start_protocol_flag"]
 
     @property
     def graceful_stop_flag(self) -> threading.Event:
-        return self['graceful_stop_flag']
+        return self["graceful_stop_flag"]
 
     @property
     def fluid_finished(self) -> threading.Event:
-        return self['fluid_finished']
+        return self["fluid_finished"]
 
     @property
     def img_finished(self) -> threading.Event:
-        return self['img_finished']
+        return self["img_finished"]
 
     @property
     def illu_finished(self) -> threading.Event:
-        return self['illu_finished']
+        return self["illu_finished"]
 
     @property
     def fluid_queue(self) -> queue.Queue:
-        return self['fluid_queue']
+        return self["fluid_queue"]

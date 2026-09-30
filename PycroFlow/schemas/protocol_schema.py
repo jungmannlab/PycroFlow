@@ -16,6 +16,7 @@ here (e.g. ``wait_time`` on inject, ``round`` on acquire). The strictness
 of the discriminated union still catches typos in ``$type`` and missing
 required fields.
 """
+
 from __future__ import annotations
 
 import sys
@@ -31,14 +32,13 @@ else:
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-
 # Configure each entry model so:
 #   - the ``$type`` JSON key maps to the model field named ``kind`` via alias
 #   - extra fields are preserved rather than rejected (back-compat)
 #   - models can be constructed from Python attribute names OR JSON aliases
 _ENTRY_CONFIG = ConfigDict(
     populate_by_name=True,
-    extra='allow',
+    extra="allow",
 )
 
 
@@ -50,16 +50,17 @@ class SchemaValidationError(ValueError):
 
 # --- Fluid-subsystem entries ---------------------------------------------
 
+
 class InjectEntry(BaseModel):
     model_config = _ENTRY_CONFIG
-    kind: Literal['inject'] = Field(alias='$type')
+    kind: Literal["inject"] = Field(alias="$type")
     reservoir_id: int
     volume: float
 
 
 class IncubateEntry(BaseModel):
     model_config = _ENTRY_CONFIG
-    kind: Literal['incubate'] = Field(alias='$type')
+    kind: Literal["incubate"] = Field(alias="$type")
     # orchestration.run_protocol coerces with float(), so str values are
     # accepted in practice (test_protocols.test_06 even asserts a string).
     duration: Union[float, str]
@@ -67,35 +68,37 @@ class IncubateEntry(BaseModel):
 
 class FlushEntry(BaseModel):
     model_config = _ENTRY_CONFIG
-    kind: Literal['flush'] = Field(alias='$type')
+    kind: Literal["flush"] = Field(alias="$type")
     flushfactor: float
 
 
 class PumpOutEntry(BaseModel):
     """Pump-out-only step (no aspirate). ProtocolBuilder produces this for
     'remove before wash' segments of Exchange-PAINT protocols."""
+
     model_config = _ENTRY_CONFIG
-    kind: Literal['pump_out'] = Field(alias='$type')
+    kind: Literal["pump_out"] = Field(alias="$type")
     volume: float
 
 
 class AwaitAcquisitionEntry(BaseModel):
     model_config = _ENTRY_CONFIG
-    kind: Literal['await_acquisition'] = Field(alias='$type')
+    kind: Literal["await_acquisition"] = Field(alias="$type")
 
 
 # --- Cross-subsystem coordination entries --------------------------------
 
+
 class SignalEntry(BaseModel):
     model_config = _ENTRY_CONFIG
-    kind: Literal['signal'] = Field(alias='$type')
+    kind: Literal["signal"] = Field(alias="$type")
     value: str
     target: Optional[str] = None
 
 
 class WaitForSignalEntry(BaseModel):
     model_config = _ENTRY_CONFIG
-    kind: Literal['wait for signal'] = Field(alias='$type')
+    kind: Literal["wait for signal"] = Field(alias="$type")
     target: str
     value: str
     timeout: Optional[float] = None
@@ -103,38 +106,41 @@ class WaitForSignalEntry(BaseModel):
 
 # --- Imaging-subsystem entries -------------------------------------------
 
+
 class AcquireEntry(BaseModel):
     model_config = _ENTRY_CONFIG
-    kind: Literal['acquire'] = Field(alias='$type')
+    kind: Literal["acquire"] = Field(alias="$type")
     frames: int
     t_exp: float
 
 
 # --- Illumination-subsystem entries --------------------------------------
 
+
 class PowerEntry(BaseModel):
     """Legacy demo type — single-value power adjustment."""
+
     model_config = _ENTRY_CONFIG
-    kind: Literal['power'] = Field(alias='$type')
+    kind: Literal["power"] = Field(alias="$type")
     value: float
 
 
 class SetPowerEntry(BaseModel):
     model_config = _ENTRY_CONFIG
-    kind: Literal['set power'] = Field(alias='$type')
+    kind: Literal["set power"] = Field(alias="$type")
     laser: int
     power: float
 
 
 class SetShutterEntry(BaseModel):
     model_config = _ENTRY_CONFIG
-    kind: Literal['set shutter'] = Field(alias='$type')
+    kind: Literal["set shutter"] = Field(alias="$type")
     state: bool
 
 
 class LaserEnableEntry(BaseModel):
     model_config = _ENTRY_CONFIG
-    kind: Literal['laser enable'] = Field(alias='$type')
+    kind: Literal["laser enable"] = Field(alias="$type")
     laser: object  # int OR the string 'all'; tighten in Stage 4
     state: bool
 
@@ -157,13 +163,14 @@ ProtocolEntry = Annotated[
         SetShutterEntry,
         LaserEnableEntry,
     ],
-    Field(discriminator='kind'),
+    Field(discriminator="kind"),
 ]
 
 
 class SubsystemProtocol(BaseModel):
     """One subsystem's slice of the protocol."""
-    model_config = ConfigDict(extra='allow')
+
+    model_config = ConfigDict(extra="allow")
     protocol_entries: List[ProtocolEntry]
     parameters: Optional[dict] = None
 
@@ -171,7 +178,8 @@ class SubsystemProtocol(BaseModel):
 class Protocol(BaseModel):
     """Top-level protocol model. Every subsystem is optional; absent means
     that subsystem doesn't participate in the experiment."""
-    model_config = ConfigDict(extra='allow')
+
+    model_config = ConfigDict(extra="allow")
     fluid: Optional[SubsystemProtocol] = None
     img: Optional[SubsystemProtocol] = None
     illu: Optional[SubsystemProtocol] = None

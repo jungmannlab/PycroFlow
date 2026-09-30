@@ -16,6 +16,7 @@ inputinterrupt(qu, "write 'continue' to continue")
 sense_edge()
 qu.put(True)
 """
+
 import sys
 import queue
 import time
@@ -23,14 +24,15 @@ import time
 DEFAULT_TIMEOUT = 30.0
 INTERVAL = 0.05
 
-SP = ' '
-CR = '\r'
-LF = '\n'
+SP = " "
+CR = "\r"
+LF = "\n"
 CRLF = CR + LF
 
 
 class TimeoutOccurred(Exception):
     pass
+
 
 class InterruptOccurred(Exception):
     pass
@@ -41,7 +43,7 @@ def echo(string):
     sys.stdout.flush()
 
 
-def posix_inputimeout(qu, prompt='', timeout=DEFAULT_TIMEOUT):
+def posix_inputimeout(qu, prompt="", timeout=DEFAULT_TIMEOUT):
     echo(prompt)
     sel = selectors.DefaultSelector()
     sel.register(sys.stdin, selectors.EVENT_READ)
@@ -49,7 +51,7 @@ def posix_inputimeout(qu, prompt='', timeout=DEFAULT_TIMEOUT):
     begin = time.monotonic()
     end = begin + timeout
 
-    while.time.monotonic() < end:
+    while time.monotonic() < end:
         events = sel.select(INTERVAL)
 
         if events:
@@ -71,11 +73,11 @@ def posix_inputimeout(qu, prompt='', timeout=DEFAULT_TIMEOUT):
     raise TimeoutOccurred
 
 
-def win_inputimeout(qu, prompt='', timeout=DEFAULT_TIMEOUT):
+def win_inputimeout(qu, prompt="", timeout=DEFAULT_TIMEOUT):
     echo(prompt)
     begin = time.monotonic()
     end = begin + timeout
-    line = ''
+    line = ""
 
     while time.monotonic() < end:
         if msvcrt.kbhit():
@@ -83,12 +85,12 @@ def win_inputimeout(qu, prompt='', timeout=DEFAULT_TIMEOUT):
             if c in (CR, LF):
                 echo(CRLF)
                 return line
-            if c == '\003':
+            if c == "\003":
                 raise KeyboardInterrupt
-            if c == '\b':
+            if c == "\b":
                 line = line[:-1]
                 cover = SP * len(prompt + line + SP)
-                echo(''.join([CR, cover, CR, prompt, line]))
+                echo("".join([CR, cover, CR, prompt, line]))
             else:
                 line += c
         try:

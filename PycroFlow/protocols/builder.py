@@ -117,18 +117,32 @@ class ProtocolBuilder:
         """
         steps, reservoir_vols = self.create_steps(config)
         protocol = {}
-        if "fluid" in config.keys():
-            protocol["fluid"] = {"protocol_entries": steps["fluid"]}
-            if "parameters" in config["fluid"].keys():
-                protocol["fluid"]["parameters"] = config["fluid"]["parameters"]
-        if "img" in config.keys():
-            protocol["img"] = {"protocol_entries": steps["img"]}
-            if "parameters" in config["img"].keys():
-                protocol["img"]["parameters"] = config["img"]["parameters"]
-        if "illu" in config.keys():
-            protocol["illu"] = {"protocol_entries": steps["illu"]}
-            if "parameters" in config["illu"].keys():
-                protocol["illu"]["parameters"] = config["illu"]["parameters"]
+        for system in ("fluid", "img", "illu"):
+            section = config.get(system)
+            # Skip subsystems that are absent or deselected in the design
+            # (``enabled: false``). All step lists are still generated above so
+            # the round structure is intact; deselected ones are simply not
+            # emitted, and orphaned cross-subsystem waits are pruned below.
+            if not section or section.get("enabled", True) in (False, "false"):
+                continue
+            protocol[system] = {"protocol_entries": steps[system]}
+            if "parameters" in section.keys():
+                protocol[system]["parameters"] = section["parameters"]
+
+        # Dropping a subsystem leaves the survivors with 'wait for signal'
+        # entries whose partner 'signal' lived in the removed subsystem; those
+        # would never be satisfied. Remove them (a wait is orphaned iff its
+        # ``target`` names a subsystem not in the emitted protocol).
+        self._prune_orphan_waits(protocol)
+
+        # An empty protocol means every subsystem was absent or deselected;
+        # this would otherwise validate and run as a silent no-op that reports
+        # success without doing anything. Fail loudly instead.
+        if not protocol:
+            raise ValueError(
+                "No subsystems selected: enable at least one of "
+                "fluid / img / illu in the experiment design."
+            )
 
         # Pin the wire format: catch malformed entries (unknown $type, missing
         # required fields, typos in field names) here before the orchestrator
@@ -136,6 +150,32 @@ class ProtocolBuilder:
         # unchanged.
         validate_protocol(protocol)
         return protocol
+
+    @staticmethod
+    def _prune_orphan_waits(protocol):
+        """Drop 'wait for signal' entries targeting a dropped subsystem.
+
+        A ``wait for signal`` is satisfied by its ``target`` subsystem sending
+        the matching value; if that subsystem is not part of the emitted
+        protocol its signal never comes, so the wait must be removed. Signal
+        entries are left untouched — an unconsumed signal is inert.
+
+        Parameters
+        ----------
+        protocol : dict
+            The compiled protocol, mutated in place.
+        """
+        present = set(protocol.keys())
+        for system in protocol.values():
+            entries = system["protocol_entries"]
+            system["protocol_entries"] = [
+                entry
+                for entry in entries
+                if not (
+                    entry.get("$type") == "wait for signal"
+                    and entry.get("target") not in present
+                )
+            ]
 
     def create_protocol(self, config):
         """Compile a config and write the Run Sequence to a YAML file.
@@ -175,7 +215,15 @@ class ProtocolBuilder:
                 default_style='"',
             )
 
-        return fname, self.steps
+        # Derive the returned step lists from the compiled ``protocol`` rather
+        # than ``self.steps``: the former reflects deselected-subsystem drops
+        # and orphan-wait pruning, so callers see exactly what was written to
+        # disk instead of the raw (pre-prune) step lists.
+        steps = {
+            system: content["protocol_entries"]
+            for system, content in protocol.items()
+        }
+        return fname, steps
 
     # Registry mapping the user-facing experiment type (case-insensitive)
     # to the ProtocolBuilder method that knows how to expand it. New
@@ -221,7 +269,12 @@ class ProtocolBuilder:
         return getattr(self, method_name)(config)
 
     def create_stepset_acquisition(
-        self, illusttg, imgsttg, unique_name, readable_name, fluid_wait=True,
+        self,
+        illusttg,
+        imgsttg,
+        unique_name,
+        readable_name,
+        fluid_wait=True,
         name=None,
     ):
         """Create the step set for an acquisition.
@@ -494,7 +547,7 @@ class ProtocolBuilder:
             "frames": config["img"]["settings"]["darkframes"],
             "t_exp": config["img"]["settings"]["t_exp"],
         }
-        illusttg = config.get("illu", {}).get("settings")
+        illusttg = (config.get("illu") or {}).get("settings")
 
         # check that all mentioned sources acqually exist
         assert experiment["wash_buffer"] in reservoirs.values()
@@ -783,7 +836,7 @@ class ProtocolBuilder:
         initial_imager_present = experiment.get("initial_imager_present")
 
         general_imgsttg = config["img"]["settings"]
-        illusttg = config.get("illu", {}).get("settings")
+        illusttg = (config.get("illu") or {}).get("settings")
 
         # check that all mentioned sources acqually exist
         assert experiment["wash_buffer_1"] in reservoirs.values()

@@ -5,6 +5,7 @@ existing :class:`PycroFlow.hamilton_components.Pump` (Hamilton PSD) and
 :class:`PycroFlow.peristaltic_drifton.DriftonPump` (Drifton peristaltic)
 already match this duck-typed interface; the ABC pins the contract.
 """
+
 from __future__ import annotations
 
 import abc

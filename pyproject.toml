@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=64", "wheel"]
+requires = ["setuptools>=64", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "PycroFlow"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Microscopy and Fluid automation coordination"
 readme = "README.md"
 license = { text = "MIT" }
@@ -21,20 +21,67 @@ classifiers = [
 
 # Runtime deps that are needed even for basic library use.
 # Heavy hardware-specific deps live in the [hardware] extra so test/dev
-# environments don't have to install them.
+# environments don't have to install them. numpy / pandas / openpyxl are here
+# (not in [hardware]) because the core, hardware-free modules import them at
+# module load: fluid/legacy.py does the pump-stroke arithmetic with numpy, and
+# imaging.py builds its PFS log as a pandas DataFrame and writes it via
+# DataFrame.to_excel(...xlsx) (which needs openpyxl). All three ship manylinux
+# wheels, so the base install stays wheel-only, and the unit suite can import
+# those modules on a plain `pip install -e .` (no [hardware] SDKs).
 dependencies = [
     "pyserial>=3.5",
     "loguru",
-    "pyyaml>=6.0",
+    "pyyaml>=6.0.3,<7",
     "pydantic>=2,<3",
+    # WP-4: PycroFlow is now a picasso consumer (live localize_frames wrapper).
+    # TEMP bridge: pinned to the picasso commit that carries localize_frames
+    # (PR#705) until picassosr 0.11.3 hits PyPI — then revert to
+    # "picassosr>=0.11.3". Tracked as planning Open-Decisions B7. This is the
+    # one flagged non-wheel git-URL dependency; the base install is otherwise
+    # wheel-only. (Dev/CI use the already-editable-installed picasso, which has
+    # localize_frames; picasso pulls picasso_registry's client transitively is
+    # not the case — the registry client is a separate install.)
+    "picassosr @ git+https://github.com/jungmannlab/picasso.git@e5c91196",
+    # WP-4: append-only provenance/metrics DB client (per-FOV record sink).
+    # picasso-registry is NOT on PyPI (like monet's dep, C39/C40) -- pin the
+    # released tag with the [client] extra (requests + python-ulid). A bare
+    # name fails a fresh install (only worked in the dev container because the
+    # registry is editable-installed there). Bump the tag as new registry
+    # releases land; move to a PyPI version spec if it's ever published.
+    "picasso-registry[client] @ git+https://github.com/jungmannlab/picasso-registry.git@v0.1.0",
+    # WP-4: sortable run_id minting (matches the registry's ULID convention;
+    # also pulled by picasso-registry[client], kept explicit for clarity).
+    "python-ulid>=2",
+    # Stack-wide dependency harmonization (decision C41): picasso is the anchor,
+    # so the shared numeric/IO libs adopt picasso 0.11.3's shared-lib ranges
+    # everywhere. numpy is no longer capped below 2 for pycromanager — the
+    # [hardware] stack is bumped to pycromanager 1.0 (B8), which supports numpy 2.
+    "numpy>=2.2.6,<3",
+    "pandas>=2.3.3,<3",
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]
 # Everything required to actually drive the microscope and fluid handler.
 # Installed on the lab Windows box.
 hardware = [
-    "pycromanager==0.29.5",
-    "ndtiff==2.2.1",
+    # numpy-2 harmonization (C41): pycromanager 1.0 is the numpy-2-compatible
+    # line. This is a MAJOR bump — the acquisition-code migration, Micro-Manager
+    # compatibility, and on-instrument validation are tracked as B8 / Gate-2 and
+    # are NOT done here (the acquisition code is not exercised in dev/CI tests).
+    # pycromanager 1.0 pulls its NDTiff reader (ndstorage) transitively, so no
+    # explicit ndtiff/ndstorage pin is needed here; the WP-1 reader already
+    # resolves ndstorage → ndtiff → pycromanager in turn.
+    "pycromanager>=1.0,<2",
+    # The T3 laser interlock (PycroFlow.illumination) controls lasers via monet's
+    # in-process API (`import monet`) -- the safe path for a fail-safe (no network
+    # hop). monet is NOT on PyPI (git tag v0.4.2, like the registry dep, C40); pin
+    # the released tag with [hardware] so its laser SDKs resolve. A fresh acq-PC
+    # env caught the missing dep (`ModuleNotFoundError: monet`) -- it was masked in
+    # the editable dev container where monet is installed. (monet[hardware]'s SDKs
+    # overlap this extra's; pip dedups. A later cleanup could fold this extra's
+    # laser SDKs into monet[hardware].)
+    "monet[hardware] @ git+https://github.com/jungmannlab/monet.git@v0.4.2",
     "PyHamiltonPSD==1.1.0",
     "ThorlabsPM100>=1.2.2",
     "pyvisa>=1.15",
@@ -48,14 +95,10 @@ hardware = [
     # Left unpinned here only because the SHA must be resolved against GitHub
     # (no network access during this edit).
     "pycobolt @ git+https://github.com/cobolt-lasers/pycobolt.git",
-    # numpy was pinned to ==1.24.4; loosened to the 1.x line so bugfix
-    # releases are allowed. Capped below 2.0 because pycromanager 0.29.5 /
-    # ndtiff 2.2.1 predate numpy 2's ABI break and are not validated against
-    # it. Revisit when bumping pycromanager.
-    "numpy>=1.24,<2",
-    "pandas>=2.3",
-    "openpyxl>=3.1",
-    "matplotlib>=3.10",
+    # numpy / pandas / openpyxl moved to the base `dependencies` (core
+    # fluid/imaging modules import them at load time); numpy is harmonized to
+    # the C41 anchor range there.
+    "matplotlib>=3.10.7,<4",
     "lmfit>=1.3",
     "icecream>=2.1",
     "inputimeout==1.0.4",
@@ -64,7 +107,9 @@ hardware = [
 # Stage 5: Qt GUI frontend that embeds monet's MonetMainWindow as a tab.
 # PyQt6 binding, matching monet (also on PyQt6) so its window embeds in-process.
 gui = [
-    "PyQt6",
+    # C41 harmonization: match the anchor PyQt6 range (and monet's, so its
+    # window embeds in-process).
+    "PyQt6>=6.10.2,<7",
 ]
 
 # Test and dev tooling. Sufficient to run the unit tests under CI without
@@ -82,6 +127,19 @@ dev = [
 [project.scripts]
 pycroflow = "PycroFlow.frontend_cli:main"
 pycroflow-gui = "PycroFlow.gui.app:main"
+pycroflow-perf = "PycroFlow.perf.cli:main"
+pycroflow-perf-analyze = "PycroFlow.perf.analyze_perf:main"
+pycroflow-perf-reader = "PycroFlow.perf.reader_process:main"
+
+[tool.setuptools_scm]
+# Version is derived from the latest reachable git tag (single source of
+# truth — no static number in this file). The resolved version is written
+# into an importable module so it survives an install from a wheel/sdist
+# (no .git present at runtime); PycroFlow.__init__ imports it with a fallback.
+write_to = "PycroFlow/_version.py"
+# Shown when built outside a git repo with no reachable tag (e.g. a shallow
+# checkout, or a branch that predates the first tag).
+fallback_version = "0.1.0"
 
 [tool.setuptools.packages.find]
 include = ["PycroFlow*"]
@@ -91,6 +149,7 @@ PycroFlow = [
     "TestData/*.yaml",
     "configs/*.yaml",
     "configs/setups/*.yaml",
+    "perf/configs/*.yaml",
     "examples/*.yaml",
     "tests/fixtures/configs/*.py",
     "tests/fixtures/snapshots/*.json",
@@ -118,3 +177,31 @@ exclude_also = [
     "raise NotImplementedError",
     "if TYPE_CHECKING:",
 ]
+
+[tool.black]
+# Pin target-version so Black doesn't infer an open-ended range from
+# requires-python (which triggers a warning). line-length matches .flake8's
+# historical 79 and the shared stack convention.
+target-version = ["py310"]
+line-length = 79
+# Keep the vendored upstream PyHamiltonPSD package snapshot pristine (it ships
+# its own LICENSE/CHANGELOG); don't reformat it. Regex on the file path.
+extend-exclude = "/pyHamiltonPSD_packagefiles/"
+
+[tool.flake8]
+# Read by flake8 via the Flake8-pyproject plugin (no separate .flake8 file).
+# Black owns line wrapping, so E501 (line too long) is ignored here to match
+# picasso-workflow's rule — long strings/comments Black can't split are
+# intentional. E203 (whitespace before ':') and W503 (line break before
+# binary operator) are the standard Black-compatibility ignores. The generated
+# _version.py is excluded (it's machine-written by setuptools-scm).
+max-line-length = 79
+extend-ignore = "E203,E501,W503"
+# Excluded from flake8 (all still Black-formatted):
+#   _version.py           - machine-generated by setuptools-scm
+#   PycroFlow/pyHamilton  - in-house serial driver; uses `from x import *`
+#                           as its idiom (F403/F405), like picasso's ext/
+#   snippets, scripts, example_experiment - throwaway/example scripts, not
+#                           part of the shipped package (see packages.find),
+#                           carry WIP F-codes (undefined names, bare excepts)
+extend-exclude = "PycroFlow/_version.py,PycroFlow/pyHamilton,snippets,scripts,example_experiment"

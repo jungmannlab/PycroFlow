@@ -3,8 +3,14 @@
 Read-only view for now — live preview and a graphical acquisition editor are
 explicitly out of scope for the initial GUI (see the plan's Stage 5 notes).
 """
+
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox, QFormLayout,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QGroupBox,
+    QFormLayout,
     QPushButton,
 )
 
@@ -24,7 +30,8 @@ class ImagingTab(QWidget):
         status_row = QHBoxLayout()
         connected = self._svc.imaging_system is not None
         self.status_label = QLabel(
-            "connected" if connected else "not connected")
+            "connected" if connected else "not connected"
+        )
         status_row.addWidget(self.status_label)
         status_row.addStretch()
         self.connect_btn = QPushButton("Connect")
@@ -61,11 +68,12 @@ class ImagingTab(QWidget):
         """
         imaging = self._svc.imaging_system
         self.status_label.setText(
-            "connected" if imaging is not None else "not connected")
+            "connected" if imaging is not None else "not connected"
+        )
         if imaging is None:
             return
         # Best-effort, defensive: hardware attributes may be absent under
         # mocks or before the first acquisition.
-        pfs = getattr(imaging, 'last_pfs_status', None)
+        pfs = getattr(imaging, "last_pfs_status", None)
         if pfs is not None:
             self.pfs_label.setText(str(pfs))

@@ -15,6 +15,7 @@ Stage 3 introduces the abstraction; later stages may move high-level
 fluid code (``hamilton_architecture``) to call HAL methods instead of
 talking to ``pyHamilton`` directly.
 """
+
 from PycroFlow.hal.pumps import Pump
 from PycroFlow.hal.valves import Valve
 from PycroFlow.hal.sensors import SpillSensor
@@ -30,21 +31,25 @@ def _register_existing_implementations():
     """
     try:
         from PycroFlow.hamilton_components import Pump as _HamiltonPump
+
         Pump.register(_HamiltonPump)
     except Exception:
         pass
     try:
         from PycroFlow.hamilton_components import Valve as _HamiltonValve
+
         Valve.register(_HamiltonValve)
     except Exception:
         pass
     try:
         from PycroFlow.peristaltic_drifton import DriftonPump as _DriftonPump
+
         Pump.register(_DriftonPump)
     except Exception:
         pass
     try:
         from PycroFlow.spill_sensor_arduino import ArduinoSensorInterface
+
         SpillSensor.register(ArduinoSensorInterface)
     except Exception:
         pass

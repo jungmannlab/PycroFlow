@@ -18,10 +18,11 @@ approximate (the GUI prefixes them with ``~``). The per-entry inject/pump_out
 model mirrors
 :meth:`PycroFlow.fluid.legacy.LegacyFluidHandler._estimate_entry_duration`.
 """
+
 from __future__ import annotations
 
 # Subsystems that may carry timed work, in display order.
-_SYSTEMS = ('fluid', 'img', 'illu')
+_SYSTEMS = ("fluid", "img", "illu")
 
 
 def estimate_entry_duration(entry, parameters=None):
@@ -41,27 +42,27 @@ def estimate_entry_duration(entry, parameters=None):
     if not isinstance(entry, dict):
         return 0.0
     parameters = parameters or {}
-    type_ = entry.get('$type')
-    if type_ == 'acquire':
-        frames = entry.get('frames') or 0
-        t_exp = entry.get('t_exp') or 0  # milliseconds per frame
+    type_ = entry.get("$type")
+    if type_ == "acquire":
+        frames = entry.get("frames") or 0
+        t_exp = entry.get("t_exp") or 0  # milliseconds per frame
         return float(frames) * float(t_exp) / 1000.0
-    if type_ == 'incubate':
+    if type_ == "incubate":
         try:
-            return max(float(entry.get('duration') or 0), 0.0)
+            return max(float(entry.get("duration") or 0), 0.0)
         except (TypeError, ValueError):
             return 0.0
-    if type_ in ('inject', 'pump_out'):
-        vol = entry.get('volume')
-        velocity = entry.get('velocity') or parameters.get('max_velocity')
+    if type_ in ("inject", "pump_out"):
+        vol = entry.get("volume")
+        velocity = entry.get("velocity") or parameters.get("max_velocity")
         if not vol or not velocity:
             return 0.0
         # Pick the volume up and dispense it: ~2 * volume / velocity minutes.
         seconds = 120.0 * float(vol) / float(velocity)
-        if type_ == 'inject':
-            seconds += parameters.get('inject_in_to_out_delay', 0) or 0
-            seconds += parameters.get('inject_out_to_in_delay', 0) or 0
-            seconds += 2 * (entry.get('delay', 0) or 0)
+        if type_ == "inject":
+            seconds += parameters.get("inject_in_to_out_delay", 0) or 0
+            seconds += parameters.get("inject_out_to_in_delay", 0) or 0
+            seconds += 2 * (entry.get("delay", 0) or 0)
         return max(seconds, 0.0)
     return 0.0
 
@@ -87,8 +88,8 @@ def estimate_durations(protocol):
         sub = protocol.get(system)
         if not isinstance(sub, dict):
             continue
-        entries = sub.get('protocol_entries') or []
-        params = sub.get('parameters') or {}
+        entries = sub.get("protocol_entries") or []
+        params = sub.get("parameters") or {}
         out[system] = [estimate_entry_duration(e, params) for e in entries]
     return out
 
@@ -112,7 +113,7 @@ def estimate_remaining(durations, current):
     remaining = 0.0
     for system, durs in durations.items():
         cur = current.get(system, (0, 0))[0] if current else 0
-        remaining += sum(durs[max(cur, 0):])
+        remaining += sum(durs[max(cur, 0) :])
     return remaining
 
 
@@ -123,14 +124,14 @@ def format_duration(seconds):
     """
     seconds = max(float(seconds or 0), 0.0)
     if seconds <= 0:
-        return '0s'
+        return "0s"
     if seconds < 60:
-        return '{:d}s'.format(int(round(seconds)))
+        return "{:d}s".format(int(round(seconds)))
     mins = int(seconds // 60)
     if mins < 60:
-        return '{:d}m'.format(mins)
+        return "{:d}m".format(mins)
     hrs, mins = divmod(mins, 60)
     if hrs < 24:
-        return '{:d}h {:d}m'.format(hrs, mins)
+        return "{:d}h {:d}m".format(hrs, mins)
     days, hrs = divmod(hrs, 24)
-    return '{:d}d {:d}h'.format(days, hrs)
+    return "{:d}d {:d}h".format(days, hrs)

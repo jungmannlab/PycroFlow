@@ -29,7 +29,7 @@ class YamlDropMixin:
         if len(urls) != 1:
             return None
         path = urls[0].toLocalFile()
-        if path.lower().endswith(('.yaml', '.yml')):
+        if path.lower().endswith((".yaml", ".yml")):
             return path
         return None
 

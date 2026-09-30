@@ -21,6 +21,7 @@ Usage:
 To upload only one page, pass its file as an argument:
     python docs/confluence/upload_to_confluence.py pycroflow-overview.confluence.html
 """
+
 import base64
 import json
 import os
@@ -61,8 +62,9 @@ def _request(method, url, token_header, payload=None):
 
 
 def _find_page(base, auth, space, title):
-    q = urllib.parse.urlencode({
-        "title": title, "spaceKey": space, "expand": "version"})
+    q = urllib.parse.urlencode(
+        {"title": title, "spaceKey": space, "expand": "version"}
+    )
     res = _request("GET", "{}/rest/api/content?{}".format(base, q), auth)
     results = res.get("results", [])
     return results[0] if results else None
@@ -76,23 +78,32 @@ def upload(base, auth, space, parent, fname, title):
         page_id = existing["id"]
         version = existing["version"]["number"] + 1
         payload = {
-            "id": page_id, "type": "page", "title": title,
+            "id": page_id,
+            "type": "page",
+            "title": title,
             "space": {"key": space},
             "body": {"storage": storage},
             "version": {"number": version},
         }
-        _request("PUT", "{}/rest/api/content/{}".format(base, page_id),
-                 auth, payload)
+        _request(
+            "PUT",
+            "{}/rest/api/content/{}".format(base, page_id),
+            auth,
+            payload,
+        )
         print("updated  '{}'  (v{}, id {})".format(title, version, page_id))
     else:
         payload = {
-            "type": "page", "title": title,
+            "type": "page",
+            "title": title,
             "space": {"key": space},
             "body": {"storage": storage},
         }
         if parent:
             payload["ancestors"] = [{"id": parent}]
-        res = _request("POST", "{}/rest/api/content".format(base), auth, payload)
+        res = _request(
+            "POST", "{}/rest/api/content".format(base), auth, payload
+        )
         print("created  '{}'  (id {})".format(title, res["id"]))
 
 
@@ -103,14 +114,19 @@ def main(argv):
     space = _env("CONFLUENCE_SPACE")
     parent = os.environ.get("CONFLUENCE_PARENT")
 
-    auth = "Basic " + base64.b64encode(
-        "{}:{}".format(email, token).encode()).decode()
+    auth = (
+        "Basic "
+        + base64.b64encode("{}:{}".format(email, token).encode()).decode()
+    )
 
     files = argv[1:] or list(PAGES)
     for fname in files:
         if fname not in PAGES:
-            sys.exit("Unknown page file: {} (known: {})".format(
-                fname, ", ".join(PAGES)))
+            sys.exit(
+                "Unknown page file: {} (known: {})".format(
+                    fname, ", ".join(PAGES)
+                )
+            )
         upload(base, auth, space, parent, fname, PAGES[fname])
 
 

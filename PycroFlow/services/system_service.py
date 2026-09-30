@@ -5,6 +5,7 @@ GUI) can drive them without reaching into private attributes. Previous
 ``frontend_cli`` poked ``self.fluid_system._pump`` directly — that's the
 sort of leakage this service eliminates.
 """
+
 from __future__ import annotations
 
 from loguru import logger
@@ -25,6 +26,7 @@ def _load_yaml_or_dict(config):
     """
     if isinstance(config, str):
         import yaml
+
         with open(config) as f:
             return yaml.full_load(f)
     return config
@@ -69,8 +71,8 @@ class SystemService:
         from PycroFlow.configs import load_setup
 
         self._setup = load_setup(name)
-        self._setup_name = self._setup.get('setup', name)
-        if self._setup.get('emulated'):
+        self._setup_name = self._setup.get("setup", name)
+        if self._setup.get("emulated"):
             # Warm the emulator import on THIS (main) thread. Importing the
             # tests package runs install_hardware_mocks(), whose subprocess
             # imports deadlock if first triggered from a worker thread; doing
@@ -88,7 +90,7 @@ class SystemService:
 
     def is_emulated(self) -> bool:
         """Whether the loaded setup runs against emulated hardware."""
-        return bool(self._setup and self._setup.get('emulated'))
+        return bool(self._setup and self._setup.get("emulated"))
 
     def reservoir_ids(self) -> list:
         """Reservoir ids wired in the current setup's manifold (sorted).
@@ -98,10 +100,10 @@ class SystemService:
         """
         if not self._setup:
             return []
-        manifold = (self._setup.get('hamilton', {})
-                    or {}).get('reservoir_a_manifold', [])
-        ids = [e['id'] for e in manifold
-               if isinstance(e, dict) and 'id' in e]
+        manifold = (self._setup.get("hamilton", {}) or {}).get(
+            "reservoir_a_manifold", []
+        )
+        ids = [e["id"] for e in manifold if isinstance(e, dict) and "id" in e]
         return sorted(ids)
 
     def laser_options(self) -> list:
@@ -118,11 +120,14 @@ class SystemService:
             import monet
         except Exception:
             return []
-        configs = getattr(monet, 'CONFIGS', None)
+        configs = getattr(monet, "CONFIGS", None)
         if not isinstance(configs, dict):
             return []
-        lasers = (configs.get(name) or {}).get('lasers') \
-            if isinstance(configs.get(name), dict) else None
+        lasers = (
+            (configs.get(name) or {}).get("lasers")
+            if isinstance(configs.get(name), dict)
+            else None
+        )
         if not isinstance(lasers, dict):
             return []
         return sorted(lasers.keys())
@@ -139,9 +144,9 @@ class SystemService:
             (True when that subsystem object has been built/connected).
         """
         return {
-            'fluid': self.fluid_system is not None,
-            'imaging': self.imaging_system is not None,
-            'illumination': self.illumination_system is not None,
+            "fluid": self.fluid_system is not None,
+            "imaging": self.imaging_system is not None,
+            "illumination": self.illumination_system is not None,
         }
 
     def connect_fluid(self, fluid):
@@ -173,33 +178,37 @@ class SystemService:
         from PycroFlow.configs import assemble_hamilton_config
         import PycroFlow.hamilton_architecture as ha
 
-        if 'settings' in fluid:
-            settings = fluid['settings']
-            parameters = fluid.get('parameters', {})
+        if "settings" in fluid:
+            settings = fluid["settings"]
+            parameters = fluid.get("parameters", {})
         else:  # a bare settings dict
             settings = fluid
             parameters = {}
 
         hamilton, tubing = assemble_hamilton_config(self._setup, settings)
-        if hamilton.get('system_type') != 'legacy':
+        if hamilton.get("system_type") != "legacy":
             raise NotImplementedError(
                 "system_type {!r} is not implemented".format(
-                    hamilton.get('system_type')))
-        interface = hamilton['interface']
+                    hamilton.get("system_type")
+                )
+            )
+        interface = hamilton["interface"]
 
         if self.is_emulated():
             from PycroFlow.tests.emulators import patch_serial
+
             with patch_serial():
-                ha.connect(interface['COM'], interface['baud'])
+                ha.connect(interface["COM"], interface["baud"])
                 self.fluid_system = ha.LegacyArchitecture(hamilton, tubing)
         else:
-            ha.connect(interface['COM'], interface['baud'])
+            ha.connect(interface["COM"], interface["baud"])
             self.fluid_system = ha.LegacyArchitecture(hamilton, tubing)
 
         # Seed parameters so manual fill/clean/pump work before a Run
         # Sequence is loaded; translate later re-assigns the full protocol.
         self.fluid_system._assign_protocol(
-            {'parameters': dict(parameters), 'protocol_entries': []})
+            {"parameters": dict(parameters), "protocol_entries": []}
+        )
         return self.fluid_system
 
     def connect_imaging(self, imaging_config=None):
@@ -223,11 +232,14 @@ class SystemService:
         """
         if self.is_emulated():
             from PycroFlow.tests.emulators import EmulatedImagingSystem
+
             self.imaging_system = EmulatedImagingSystem()
         else:
             import PycroFlow.imaging as im
+
             self.imaging_system = im.ImagingSystem(
-                _load_yaml_or_dict(imaging_config))
+                _load_yaml_or_dict(imaging_config)
+            )
         return self.imaging_system
 
     def connect_illumination(self):
@@ -245,11 +257,14 @@ class SystemService:
         """
         if self.is_emulated():
             from PycroFlow.tests.emulators import EmulatedIlluminationSystem
+
             self.illumination_system = EmulatedIlluminationSystem()
         else:
             import PycroFlow.illumination as il
+
             self.illumination_system = il.IlluminationSystem(
-                setup=self.get_monet_setup())
+                setup=self.get_monet_setup()
+            )
         return self.illumination_system
 
     # --- Disconnection -------------------------------------------------
@@ -260,8 +275,10 @@ class SystemService:
             return
         try:
             import PycroFlow.hamilton_architecture as ha
+
             if self.is_emulated():
                 from PycroFlow.tests.emulators import patch_serial
+
                 with patch_serial():
                     ha.disconnect()
             else:
@@ -275,7 +292,7 @@ class SystemService:
         if self.imaging_system is None:
             return
         try:
-            if hasattr(self.imaging_system, 'close'):
+            if hasattr(self.imaging_system, "close"):
                 self.imaging_system.close()
         except Exception as exc:
             logger.warning("imaging disconnect failed: {!r}".format(exc))
@@ -286,7 +303,7 @@ class SystemService:
         if self.illumination_system is None:
             return
         try:
-            for name in ('close', 'shutdown', 'disconnect'):
+            for name in ("close", "shutdown", "disconnect"):
                 fn = getattr(self.illumination_system, name, None)
                 if callable(fn):
                     fn()
@@ -298,9 +315,9 @@ class SystemService:
     def disconnect(self, key: str) -> None:
         """Disconnect one subsystem ('fluid'/'imaging'/'illumination')."""
         {
-            'fluid': self.disconnect_fluid,
-            'imaging': self.disconnect_imaging,
-            'illumination': self.disconnect_illumination,
+            "fluid": self.disconnect_fluid,
+            "imaging": self.disconnect_imaging,
+            "illumination": self.disconnect_illumination,
         }[key]()
 
     def disconnect_all(self) -> None:
@@ -312,22 +329,22 @@ class SystemService:
     # --- Fluid ---------------------------------------------------------
 
     def fill_tubings(self) -> None:
-        self._require('fluid_system')
+        self._require("fluid_system")
         self.fluid_system.fill_tubings()
 
     def clean_tubings(self) -> None:
         # confirm=False: no terminal prompt — GUI callers confirm via a
         # dialog before calling, and there is no stdin to block on.
-        self._require('fluid_system')
+        self._require("fluid_system")
         self.fluid_system.clean_tubings(confirm=False)
 
     def deliver_fluid(self, reservoir_id: int, volume: float) -> None:
-        self._require('fluid_system')
+        self._require("fluid_system")
         self.fluid_system.deliver_fluid(reservoir_id, volume)
 
     def set_valves(self, reservoir_id: int) -> None:
         """Route the manifold valves to access ``reservoir_id`` (manual)."""
-        self._require('fluid_system')
+        self._require("fluid_system")
         self.fluid_system._set_valves(reservoir_id)
 
     def stop_all_moves(self) -> None:
@@ -346,14 +363,15 @@ class SystemService:
         ``pump_name`` is one of the keys exposed by the fluid system
         (e.g. ``'pump_a'``, ``'pump_out'``). Extra args are forwarded.
         """
-        self._require('fluid_system')
-        pump_method = getattr(self.fluid_system, '_pump', None)
+        self._require("fluid_system")
+        pump_method = getattr(self.fluid_system, "_pump", None)
         if pump_method is None:
             raise RuntimeError("fluid_system has no _pump method")
         pump_obj = getattr(self.fluid_system, pump_name, None)
         if pump_obj is None:
             raise KeyError(
-                "no such pump on fluid_system: {!r}".format(pump_name))
+                "no such pump on fluid_system: {!r}".format(pump_name)
+            )
         return pump_method(pump_obj, *args, **kwargs)
 
     # --- Imaging -------------------------------------------------------
@@ -362,21 +380,21 @@ class SystemService:
         """Release the MM Core lock (Stage 1) and any other resources."""
         if self.imaging_system is None:
             return
-        if hasattr(self.imaging_system, 'close'):
+        if hasattr(self.imaging_system, "close"):
             self.imaging_system.close()
 
     # --- Illumination --------------------------------------------------
 
     def set_laser(self, laser: int) -> None:
-        self._require('illumination_system')
+        self._require("illumination_system")
         self.illumination_system.set_laser(laser)
 
     def set_laser_enabled(self, laser: int, enabled: bool = True) -> None:
-        self._require('illumination_system')
+        self._require("illumination_system")
         self.illumination_system.set_laser_enabled(laser, enabled=enabled)
 
     def set_sample_power(self, power: float, warmup_delay: float = 0) -> None:
-        self._require('illumination_system')
+        self._require("illumination_system")
         self.illumination_system.set_sample_power(power, warmup_delay)
 
     # --- Cleanup -------------------------------------------------------
@@ -392,6 +410,6 @@ class SystemService:
         if getattr(self, attr, None) is None:
             raise RuntimeError(
                 "SystemService.{} is None; no {} configured".format(
-                    attr, attr.replace('_system', '')
+                    attr, attr.replace("_system", "")
                 )
             )

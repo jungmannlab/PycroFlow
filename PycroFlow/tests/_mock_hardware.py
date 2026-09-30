@@ -13,32 +13,40 @@ Hardware-specific behavior must therefore NOT be tested through these mocks;
 keep hardware integration tests gated on real-SDK availability with
 ``unittest.skipUnless``.
 """
+
 import importlib
 import sys
 from unittest.mock import MagicMock
 
-
 _HARDWARE_MODULES = [
-    'pycromanager',
-    'pycromanager.acquisitions',
-    'pycromanager.acq_util',
-    'pycromanager.zmq_bridge',
-    'monet',
-    'monet.control',
-    'monet.gui',
-    'monet.beampath',
-    'pycobolt',
-    'nidaqmx',
-    'ThorlabsPM100',
-    'pyvisa',
-    'msl',
-    'msl.equipment',
-    'Arduino',
-    'pandas',
-    'lmfit',
-    'matplotlib',
-    'matplotlib.pyplot',
-    'PyHamiltonPSD',
+    # pycromanager 1.0 (B8/C41 numpy-2 harmonization): the submodule layout
+    # changed from the 0.29 era. The old shims (pycromanager.acquisitions /
+    # .acq_util / .zmq_bridge) no longer exist; 1.0 exposes .acquisition,
+    # .mm_java_classes and the split-out pyjavaz / ndstorage packages. No
+    # PycroFlow module imports these submodules directly (all use top-level
+    # `from pycromanager import ...`), so mocking the top-level name is what
+    # actually matters; the submodules are listed only to keep the shim honest.
+    "pycromanager",
+    "pycromanager.acquisition",
+    "pycromanager.mm_java_classes",
+    "pyjavaz",
+    "ndstorage",
+    "monet",
+    "monet.control",
+    "monet.gui",
+    "monet.beampath",
+    "pycobolt",
+    "nidaqmx",
+    "ThorlabsPM100",
+    "pyvisa",
+    "msl",
+    "msl.equipment",
+    "Arduino",
+    "pandas",
+    "lmfit",
+    "matplotlib",
+    "matplotlib.pyplot",
+    "PyHamiltonPSD",
 ]
 
 

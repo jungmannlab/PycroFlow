@@ -10,13 +10,21 @@ All commands go through
 :class:`PycroFlow.services.system_service.SystemService` so the tab never
 reaches into private attributes of the fluid system.
 """
+
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
-    QGroupBox, QFormLayout, QComboBox, QMessageBox,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QLineEdit,
+    QGroupBox,
+    QFormLayout,
+    QComboBox,
+    QMessageBox,
 )
 
 from PycroFlow.gui.widgets.worker import run_in_background
-
 
 _STOP_STYLE = (
     "background-color: #b00000; color: white; font-weight: bold; "
@@ -34,8 +42,11 @@ class FluidTab(QWidget):
         # Buttons disabled while a fluid op runs in the background (the serial
         # bus serves one operation at a time). STOP stays enabled.
         self._busy_buttons = [
-            self.fill_btn, self.clean_btn, self.stroke_btn,
-            self.move_btn, self.valve_btn,
+            self.fill_btn,
+            self.clean_btn,
+            self.stroke_btn,
+            self.move_btn,
+            self.valve_btn,
         ]
 
     def _build_ui(self):
@@ -46,7 +57,8 @@ class FluidTab(QWidget):
         status_row = QHBoxLayout(status_box)
         connected = self._svc.fluid_system is not None
         self.status_label = QLabel(
-            "connected" if connected else "not connected")
+            "connected" if connected else "not connected"
+        )
         status_row.addWidget(self.status_label)
         status_row.addStretch()
         self.connect_btn = QPushButton("Connect")
@@ -147,7 +159,8 @@ class FluidTab(QWidget):
         """Update the connection label from the fluid system."""
         connected = self._svc.fluid_system is not None
         self.status_label.setText(
-            "connected" if connected else "not connected")
+            "connected" if connected else "not connected"
+        )
 
     def set_status_text(self, text):
         """Set the status label (e.g. 'connecting…') from the coordinator."""
@@ -175,11 +188,13 @@ class FluidTab(QWidget):
 
     def _on_clean(self):
         reply = QMessageBox.question(
-            self, "Clean tubings",
+            self,
+            "Clean tubings",
             "Start the tubing cleaning procedure?\n\n"
             "Make sure the input and output needles are in the same "
             "container (fluidly connected) and cleaning reservoirs are "
-            "connected to their tanks.")
+            "connected to their tanks.",
+        )
         if reply == QMessageBox.StandardButton.Yes:
             self._run(self._svc.clean_tubings, "Clean tubings")
 
@@ -196,11 +211,13 @@ class FluidTab(QWidget):
             dispense_dir=self.stroke_dispense.currentText(),
         )
         if vel is not None:
-            kwargs['velocity'] = vel
+            kwargs["velocity"] = vel
         self._run(
             lambda: self._svc.manual_pump(
-                self.stroke_pump.currentText(), **kwargs),
-            "Pump stroke")
+                self.stroke_pump.currentText(), **kwargs
+            ),
+            "Pump stroke",
+        )
 
     def _on_move(self):
         vol, ok = self._num(self.move_vol, "Volume", True, float)
@@ -210,11 +227,13 @@ class FluidTab(QWidget):
         if not ok:
             return
         pres, ok = self._num(
-            self.move_pickup_res, "Pickup reservoir", False, int)
+            self.move_pickup_res, "Pickup reservoir", False, int
+        )
         if not ok:
             return
         dres, ok = self._num(
-            self.move_dispense_res, "Dispense reservoir", False, int)
+            self.move_dispense_res, "Dispense reservoir", False, int
+        )
         if not ok:
             return
         kwargs = dict(
@@ -223,15 +242,17 @@ class FluidTab(QWidget):
             dispense_dir=self.move_dispense_dir.currentText(),
         )
         if vel is not None:
-            kwargs['velocity'] = vel
+            kwargs["velocity"] = vel
         if pres is not None:
-            kwargs['pickup_res'] = pres
+            kwargs["pickup_res"] = pres
         if dres is not None:
-            kwargs['dispense_res'] = dres
+            kwargs["dispense_res"] = dres
         self._run(
             lambda: self._svc.manual_pump(
-                self.move_pump.currentText(), **kwargs),
-            "Pump move")
+                self.move_pump.currentText(), **kwargs
+            ),
+            "Pump move",
+        )
 
     def _on_set_valves(self):
         rid, ok = self._num(self.valve_res, "Reservoir id", True, int)
@@ -252,18 +273,19 @@ class FluidTab(QWidget):
         that fails ``conv`` -> a warning + (None, False).
         """
         text = edit.text().strip()
-        if text == '':
+        if text == "":
             if required:
                 QMessageBox.warning(
-                    self, "Invalid input", "{} is required.".format(name))
+                    self, "Invalid input", "{} is required.".format(name)
+                )
                 return None, False
             return None, True
         try:
             return conv(text), True
         except ValueError:
             QMessageBox.warning(
-                self, "Invalid input",
-                "{} must be a number.".format(name))
+                self, "Invalid input", "{} must be a number.".format(name)
+            )
             return None, False
 
     def _run(self, call, what):
@@ -276,14 +298,17 @@ class FluidTab(QWidget):
             return
         self._set_busy(True)
         run_in_background(
-            self, call,
+            self,
+            call,
             on_done=lambda _: self._set_busy(False),
-            on_error=lambda exc: self._on_op_error(exc, what))
+            on_error=lambda exc: self._on_op_error(exc, what),
+        )
 
     def _on_op_error(self, exc, what):
         self._set_busy(False)
         QMessageBox.critical(
-            self, "{} failed".format(what), "{!r}".format(exc))
+            self, "{} failed".format(what), "{!r}".format(exc)
+        )
 
     def _set_busy(self, busy):
         self._busy = busy

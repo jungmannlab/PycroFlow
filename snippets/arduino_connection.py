@@ -1,13 +1,14 @@
 #!/usr/bin/env python
 """
-    PycroFlow/arduino_connection.py
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+PycroFlow/arduino_connection.py
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    do the arduino connection. simple functions to begin with.
+do the arduino connection. simple functions to begin with.
 
-    :authors: Heinrich Grabmayr, 2022
-    :copyright: Copyright (c) 2022 Jungmann Lab, MPI of Biochemistry
+:authors: Heinrich Grabmayr, 2022
+:copyright: Copyright (c) 2022 Jungmann Lab, MPI of Biochemistry
 """
+
 import logging
 from icecream import ic
 import time
@@ -17,7 +18,7 @@ import itertools
 from Arduino import Arduino
 
 
-class AriaTrigger():
+class AriaTrigger:
     def __init__(self, parameters={}):
         """
         Args:
@@ -29,10 +30,10 @@ class AriaTrigger():
                     TTL_duration : float, default 0.3 (both directions)
                     max_flowstep : float, default 30 min, timeout for aria TTL
         """
-        self.pulse_pin = parameters.get('pulse_pin', 13)
-        self.sense_pin = parameters.get('sense_pin', 12)
-        self.pulse_duration = parameters.get('TTL_duration', .3)
-        self.pulse_timeout = parameters.get('max_flowstep', 30*60)
+        self.pulse_pin = parameters.get("pulse_pin", 13)
+        self.sense_pin = parameters.get("sense_pin", 12)
+        self.pulse_duration = parameters.get("TTL_duration", 0.3)
+        self.pulse_timeout = parameters.get("max_flowstep", 30 * 60)
 
         self.board = Arduino()
         self.board.pinMode(self.pulse_pin, "OUTPUT")
@@ -45,8 +46,14 @@ class AriaTrigger():
         time.sleep(self.pulse_duration)
         self.board.digitalWrite(self.pulse_pin, "LOW")
 
-    def sense_trigger(self, timeout=None, baseline=False, refresh_rate=.01,
-                    min_duration=None, max_duration=None):
+    def sense_trigger(
+        self,
+        timeout=None,
+        baseline=False,
+        refresh_rate=0.01,
+        min_duration=None,
+        max_duration=None,
+    ):
         """
         TODO: in a thread, read input and return sense_pulse if 'continue'
         is entered..
@@ -68,42 +75,48 @@ class AriaTrigger():
         if timeout is None:
             timeout = self.pulse_timeout
         if min_duration is None:
-            min_duration = max([self.pulse_duration - .1, .02])
+            min_duration = max([self.pulse_duration - 0.1, 0.02])
         if max_duration is None:
-            max_duration = self.pulse_duration + .1
+            max_duration = self.pulse_duration + 0.1
         tstart = time.time()
         triggered = False
         edge_times_rising, edge_times_falling = [], []
-        while time.time()-tstart < timeout:
-            tleft = timeout - (time.time()-tstart)
+        while time.time() - tstart < timeout:
+            tleft = timeout - (time.time() - tstart)
             triggered, edge_detected = self.sense_edge(
-                tleft, 'both', refresh_rate)
+                tleft, "both", refresh_rate
+            )
             tic = time.time()
-            if edge_detected=='falling':
+            if edge_detected == "falling":
                 edge_times_falling.append(tic)
-            elif edge_detected=='rising':
+            elif edge_detected == "rising":
                 edge_times_rising.append(tic)
-            elif edge_detected=='none':
+            elif edge_detected == "none":
                 # timeout
                 break
             # print('edge_times_rising', edge_times_rising)
             # print('edge_times_falling', edge_times_falling)
             # find a pulse
             time_deltas = np.fromiter(
-                (f-r
-                 for f, r in
-                 itertools.product(edge_times_falling, edge_times_rising)),
-                dtype=np.float64)
-            if baseline==True:
-                time_deltas = - time_deltas
-            if np.any((time_deltas>=min_duration) &
-                      (time_deltas<=max_duration)):
+                (
+                    f - r
+                    for f, r in itertools.product(
+                        edge_times_falling, edge_times_rising
+                    )
+                ),
+                dtype=np.float64,
+            )
+            if baseline == True:
+                time_deltas = -time_deltas
+            if np.any(
+                (time_deltas >= min_duration) & (time_deltas <= max_duration)
+            ):
                 triggered = True
                 break
         # print('sense pulse time deltas:', time_deltas)
         return triggered
 
-    def sense_edge(self, timeout=10, edge='rising', refresh_rate=.01):
+    def sense_edge(self, timeout=10, edge="rising", refresh_rate=0.01):
         """
         Args:
             timeout : int
@@ -117,24 +130,27 @@ class AriaTrigger():
         previous_state = self.board.digitalRead(self.sense_pin)
         while not triggered:
             state = self.board.digitalRead(self.sense_pin)
-            if edge=='rising' or edge=='both':
+            if edge == "rising" or edge == "both":
                 if (not previous_state) and state:
                     triggered = True
-                    edge_detected = 'rising'
-            if edge=='falling' or edge=='both':
+                    edge_detected = "rising"
+            if edge == "falling" or edge == "both":
                 if previous_state and (not state):
                     triggered = True
-                    edge_detected = 'falling'
+                    edge_detected = "falling"
             if triggered:
                 break
-            if time.time()-tic > timeout:
-                print('Sensing TTL pulse timed out after {:.1f}s.'.format(timeout))
-                edge_detected = 'none'
+            if time.time() - tic > timeout:
+                print(
+                    "Sensing TTL pulse timed out after {:.1f}s.".format(
+                        timeout
+                    )
+                )
+                edge_detected = "none"
                 break
             time.sleep(refresh_rate)
             previous_state = state
         return triggered, edge_detected
-
 
     def close(self):
         self.board.close()

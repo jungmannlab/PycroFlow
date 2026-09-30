@@ -1,0 +1,44 @@
+# Applies to every hook below. Keep the vendored upstream PyHamiltonPSD
+# snapshot pristine, and leave the regression snapshot fixtures byte-exact
+# (they are written without a trailing newline by the snapshot regenerator and
+# compared via json.loads, so the end-of-file-fixer must not touch them).
+exclude: >
+  (?x)^(
+      PycroFlow/pyHamilton/pyHamiltonPSD_packagefiles/
+      |PycroFlow/tests/fixtures/snapshots/
+  )
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+  # Use the maintained black mirror, pinned to the version the team runs
+  # locally so pre-commit and a manual `black` agree (keep in sync via
+  # `pre-commit autoupdate`). black reads line-length from [tool.black].
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 25.9.0
+    hooks:
+      - id: black
+  # flake8 reads its config from pyproject.toml [tool.flake8] via the
+  # Flake8-pyproject plugin (no separate .flake8 file). The exclude below
+  # mirrors [tool.flake8].extend-exclude; it is repeated here because
+  # pre-commit passes an explicit file list that flake8's own directory-walk
+  # excludes do not filter (the generated _version.py, the pyHamilton driver's
+  # star-import idiom, and the throwaway snippets/scripts/example scripts).
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.1.1
+    hooks:
+      - id: flake8
+        additional_dependencies: [Flake8-pyproject]
+        exclude: >
+          (?x)^(
+              PycroFlow/_version\.py
+              |PycroFlow/pyHamilton/
+              |snippets/
+              |scripts/
+              |example_experiment/
+          )

@@ -14,9 +14,16 @@ subsystem's connection state.
 Owns the :class:`QtBridge` that marshals ExperimentService observer callbacks
 onto the GUI thread.
 """
+
 from PyQt6.QtWidgets import (
-    QMainWindow, QTabWidget, QToolBar, QLabel, QComboBox, QMessageBox,
+    QMainWindow,
+    QTabWidget,
+    QToolBar,
+    QLabel,
+    QComboBox,
+    QMessageBox,
 )
+
 # Qt6 moved QAction out of QtWidgets into QtGui.
 from PyQt6.QtGui import QAction
 
@@ -29,7 +36,6 @@ from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
 from PycroFlow.gui.tabs.fluid_tab import FluidTab
 from PycroFlow.gui.tabs.imaging_tab import ImagingTab
 from PycroFlow.gui.tabs.monet_tab import MonetTab
-
 
 # Experiment states during which hardware must not be touched manually (the
 # orchestrator owns the instruments).
@@ -50,6 +56,7 @@ class PycroFlowMainWindow(QMainWindow):
         self._connecting = set()
 
         from PycroFlow import __version__
+
         self.setWindowTitle("PycroFlow {}".format(__version__))
         self._build_toolbar()
         self._build_tabs()
@@ -84,15 +91,19 @@ class PycroFlowMainWindow(QMainWindow):
             on_translated=self._on_translated,
             on_design_loaded=self._on_design_changed,
             reservoir_ids_provider=self._system_service.reservoir_ids,
-            laser_options_provider=self._system_service.laser_options)
+            laser_options_provider=self._system_service.laser_options,
+        )
         self.run_sequence_tab = ExperimentTab(
-            self._experiment_service, self._bridge)
+            self._experiment_service, self._bridge
+        )
         self.fluid_tab = FluidTab(
             self._system_service,
-            on_connect=lambda: self._connect_system('fluid'))
+            on_connect=lambda: self._connect_system("fluid"),
+        )
         self.imaging_tab = ImagingTab(
             self._system_service,
-            on_connect=lambda: self._connect_system('imaging'))
+            on_connect=lambda: self._connect_system("imaging"),
+        )
         self.monet_tab = MonetTab()
 
         self.tabs.addTab(self.design_tab, "Experiment Design")
@@ -165,7 +176,7 @@ class PycroFlowMainWindow(QMainWindow):
     def _autoconnect(self):
         if self._system_service.setup is None:
             return
-        for key in ('illumination', 'imaging', 'fluid'):
+        for key in ("illumination", "imaging", "fluid"):
             if not self._is_connected(key):
                 self._connect_system(key, warn_missing=False)
 
@@ -180,9 +191,10 @@ class PycroFlowMainWindow(QMainWindow):
         """
         if self._system_service.setup is None:
             QMessageBox.warning(
-                self, "No setup", "Select a microscope setup first.")
+                self, "No setup", "Select a microscope setup first."
+            )
             return
-        for key in ('illumination', 'imaging', 'fluid'):
+        for key in ("illumination", "imaging", "fluid"):
             self._connect_system(key, warn_missing=False)
 
     def _disconnect_all(self):
@@ -195,7 +207,8 @@ class PycroFlowMainWindow(QMainWindow):
         if self._system_service.setup is None:
             if warn_missing:
                 QMessageBox.warning(
-                    self, "No setup", "Select a microscope setup first.")
+                    self, "No setup", "Select a microscope setup first."
+                )
             return
         if key in self._connecting:
             return
@@ -218,13 +231,15 @@ class PycroFlowMainWindow(QMainWindow):
             self._connecting.discard(key)
             self._refresh_status()
             QMessageBox.critical(
-                self, "Connection failed",
-                "Could not connect the {} system:\n\n{!r}".format(key, exc))
+                self,
+                "Connection failed",
+                "Could not connect the {} system:\n\n{!r}".format(key, exc),
+            )
 
         # Imaging touches the Micro-Manager Core (pycromanager/ZMQ): keep it
         # on the GUI thread. Fluid (serial) and illumination run in the
         # background so the UI stays responsive.
-        if key == 'imaging':
+        if key == "imaging":
             try:
                 call()
             except Exception as exc:
@@ -236,40 +251,42 @@ class PycroFlowMainWindow(QMainWindow):
 
     def _connect_call(self, key, warn_missing):
         svc = self._system_service
-        if key == 'fluid':
+        if key == "fluid":
             design = self._experiment_service.experiment_design
-            fluid = (design or {}).get('fluid')
-            if not fluid or not fluid.get('settings'):
+            fluid = (design or {}).get("fluid")
+            if not fluid or not fluid.get("settings"):
                 if warn_missing:
                     QMessageBox.warning(
-                        self, "No experiment design",
+                        self,
+                        "No experiment design",
                         "Load an experiment design first — the fluid system "
-                        "needs its reservoir list.")
+                        "needs its reservoir list.",
+                    )
                 return None
             return lambda: svc.connect_fluid(fluid)
-        if key == 'imaging':
+        if key == "imaging":
             if svc.is_emulated():
                 return svc.connect_imaging
             design = self._experiment_service.experiment_design or {}
             cfg = configs.assemble_imaging_config(svc.setup, design)
             return lambda: svc.connect_imaging(cfg)
-        if key == 'illumination':
+        if key == "illumination":
             return svc.connect_illumination
         return None
 
     def _is_connected(self, key):
         return {
-            'fluid': self._system_service.fluid_system,
-            'imaging': self._system_service.imaging_system,
-            'illumination': self._system_service.illumination_system,
+            "fluid": self._system_service.fluid_system,
+            "imaging": self._system_service.imaging_system,
+            "illumination": self._system_service.illumination_system,
         }.get(key) is not None
 
     def _set_tab_connecting(self, key):
-        if key == 'fluid':
+        if key == "fluid":
             self.fluid_tab.set_status_text("connecting…")
-        elif key == 'imaging':
+        elif key == "imaging":
             self.imaging_tab.set_status_text("connecting…")
-        elif key == 'illumination':
+        elif key == "illumination":
             self.monet_tab.set_illumination_status("connecting…")
         self._update_statusbar()
 
@@ -277,8 +294,10 @@ class PycroFlowMainWindow(QMainWindow):
         self.fluid_tab.refresh()
         self.imaging_tab.refresh()
         self.monet_tab.set_illumination_status(
-            "connected" if self._is_connected('illumination')
-            else "not connected")
+            "connected"
+            if self._is_connected("illumination")
+            else "not connected"
+        )
         self._update_statusbar()
 
     def _status_word(self, key):
@@ -294,8 +313,11 @@ class PycroFlowMainWindow(QMainWindow):
         parts = ["Setup: {}".format(self.setup_combo.currentText())]
         if self._system_service.is_emulated():
             parts[0] += " (emulated)"
-        for key, label in (('fluid', 'Fluid'), ('imaging', 'Imaging'),
-                           ('illumination', 'Illumination')):
+        for key, label in (
+            ("fluid", "Fluid"),
+            ("imaging", "Imaging"),
+            ("illumination", "Illumination"),
+        ):
             parts.append("{}: {}".format(label, self._status_word(key)))
         self.status_label.setText("      ".join(parts))
 

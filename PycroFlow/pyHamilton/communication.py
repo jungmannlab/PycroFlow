@@ -11,13 +11,13 @@ attachment point — :mod:`PycroFlow.hamilton_architecture` and
 it to cancel ``waitForResponse`` mid-poll. ``SerialBus`` reads this name
 at call time so external assignments stay effective.
 """
+
 import sys
 import threading
 import time
 
 import serial
 from loguru import logger
-
 
 # External cancellation hook. Set this to a threading.Event so a long-running
 # waitForResponse() can be cancelled by setting the event from another
@@ -27,18 +27,18 @@ abort_wait_response_flag = None
 # Pump-status bytes returned in the second position of a Hamilton response.
 # Used by waitForResponse to log human-readable status and to detect 'ready'.
 STATUS_BYTES_INFO = {
-    '@': "Pump is busy - no error",
-    '`': "Pump is ready - no error",
-    'a': "Initialization error – occurs when the pump fails to initialize",
-    'b': "Invalid command – occurs when an unrecognized command is used.",
-    'c': "Invalid operand – occurs when an invalid parameter is given with a command.",
-    'd': "Invalid command sequence – occurs when the command communication protocol is incorrect",
-    'f': "EEPROM failure – occurs when the EEPROM is faulty",
-    'g': "Syringe not initialized – occurs when the syringe fails to initialize",
-    'i': "Syringe overload – occurs when the syringe encounters excessive back pressure.",
-    'j': "Valve overload – occurs when the valve drive encounters excessive back pressure.",
-    'k': "Syringe move not allowed – when the valve is in the bypass or throughput position, syringe move commands are not allowed.",
-    'o': "Pump is busy – occurs when the command buffer is full"
+    "@": "Pump is busy - no error",
+    "`": "Pump is ready - no error",
+    "a": "Initialization error – occurs when the pump fails to initialize",
+    "b": "Invalid command – occurs when an unrecognized command is used.",
+    "c": "Invalid operand – occurs when an invalid parameter is given with a command.",
+    "d": "Invalid command sequence – occurs when the command communication protocol is incorrect",
+    "f": "EEPROM failure – occurs when the EEPROM is faulty",
+    "g": "Syringe not initialized – occurs when the syringe fails to initialize",
+    "i": "Syringe overload – occurs when the syringe encounters excessive back pressure.",
+    "j": "Valve overload – occurs when the valve drive encounters excessive back pressure.",
+    "k": "Syringe move not allowed – when the valve is in the bypass or throughput position, syringe move commands are not allowed.",
+    "o": "Pump is busy – occurs when the command buffer is full",
 }
 
 # Back-compat alias for code that previously imported statusBytesInfo.
@@ -54,7 +54,7 @@ class SerialBus:
     consumers.
     """
 
-    def __init__(self, com_port_prefix='COM'):
+    def __init__(self, com_port_prefix="COM"):
         self.ser = None
         self.com_port_prefix = com_port_prefix
         self.lock = threading.Lock()
@@ -64,7 +64,7 @@ class SerialBus:
         self.ser.port = self.com_port_prefix + str(comm_port)
         self.ser.baudrate = baudrate
         self.ser.bytesize = 8
-        self.ser.parity = 'N'
+        self.ser.parity = "N"
         self.ser.stopbits = 1
         self.ser.xonxoff = False
         self.ser.rtscts = False
@@ -72,7 +72,7 @@ class SerialBus:
         self.ser.timeout = 10
         self.ser.open()
         if self.ser.isOpen():
-            logger.debug('Open: ' + self.ser.portstr)
+            logger.debug("Open: " + self.ser.portstr)
 
     def disconnect(self):
         if self.ser is not None and self.ser.isOpen():
@@ -82,14 +82,14 @@ class SerialBus:
         """Send ``message`` followed by CRLF, log the response. Does NOT
         serialize through the lock — call from contexts where you already
         hold it."""
-        encoded = (message + '\r\n').encode()
+        encoded = (message + "\r\n").encode()
         self.ser.write(encoded)
         respond_bytes = self.ser.readline()
-        logger.debug('Response :' + respond_bytes.decode())
+        logger.debug("Response :" + respond_bytes.decode())
 
     def send_command(self, pump_address, message, wait_for_pump=False):
-        command_header = '/' + pump_address
-        command_footer = '\r\n'
+        command_header = "/" + pump_address
+        command_footer = "\r\n"
         command = command_header + message + command_footer
         logger.debug("Sending command " + command)
         encoded_command = command.encode()
@@ -101,12 +101,12 @@ class SerialBus:
                 response = response_bytes.decode()
             except UnicodeDecodeError as exc:
                 logger.exception(str(exc))
-                response = ''
+                response = ""
 
         if wait_for_pump:
             self.wait_for_response(command_header, command_footer)
 
-        logger.debug('Response :' + response)
+        logger.debug("Response :" + response)
         return response
 
     def wait_for_response(self, header, footer):
@@ -123,7 +123,7 @@ class SerialBus:
         comm_module = sys.modules[__name__]
         while True:
             time.sleep(0.02)
-            query = header + 'QR' + footer
+            query = header + "QR" + footer
             with self.lock:
                 self.ser.write(query.encode())
                 respond_bytes = self.ser.readline()
@@ -132,11 +132,14 @@ class SerialBus:
             response_bit = decoded[2:3]
             if response_bit in STATUS_BYTES_INFO:
                 logger.debug(
-                    "Pump status: " + response_bit + ' - '
-                    + STATUS_BYTES_INFO[response_bit])
-                if response_bit == '`':
+                    "Pump status: "
+                    + response_bit
+                    + " - "
+                    + STATUS_BYTES_INFO[response_bit]
+                )
+                if response_bit == "`":
                     return
-            flag = getattr(comm_module, 'abort_wait_response_flag', None)
+            flag = getattr(comm_module, "abort_wait_response_flag", None)
             if flag is not None and flag.is_set():
                 logger.debug("waitForResponse aborted by external flag")
                 return
@@ -168,6 +171,7 @@ hamilton_comm_lock = _BUS.lock
 
 
 # --- Module-level shim functions preserved for back-compat ---------------
+
 
 def initializeSerial(commPort, baudrate):
     _BUS.initialize(commPort, baudrate)

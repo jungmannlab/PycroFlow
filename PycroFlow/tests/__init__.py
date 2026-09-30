@@ -15,6 +15,7 @@ usage:
 $ cd /Users/hgrabmayr/GitHub/PycroFlow
 $ python -m unittest -v
 """
+
 import atexit
 import os
 import shutil
@@ -25,14 +26,15 @@ import tempfile
 # pycromanager / monet / pycobolt / nidaqmx installed. No-op when the real
 # library is importable.
 from PycroFlow.tests._mock_hardware import install_hardware_mocks
+
 install_hardware_mocks()
 
 
 TEST_FIXTURES_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), os.pardir, 'TestData')
+    os.path.join(os.path.dirname(__file__), os.pardir, "TestData")
 )
 
-TEST_OUTPUT_DIR = tempfile.mkdtemp(prefix='pycroflow-test-')
+TEST_OUTPUT_DIR = tempfile.mkdtemp(prefix="pycroflow-test-")
 
 
 @atexit.register

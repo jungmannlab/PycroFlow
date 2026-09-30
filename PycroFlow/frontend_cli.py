@@ -117,9 +117,12 @@ class PycroFlowInteractive(cmd.Cmd):
         """Load the Fluid Automation protocol"""
         with open(fname_protocol, "r") as f:
             self.protocol = yaml.full_load(f)
-        if self.fluid_system:
+        # A deselected subsystem (``enabled: false`` in the design) is dropped
+        # from the compiled Run Sequence, so its top-level key may be absent —
+        # guard each access the same way the ``illu`` branch below does.
+        if self.fluid_system and self.protocol.get("fluid"):
             self.fluid_system._assign_protocol(self.protocol["fluid"])
-        if self.imaging_system:
+        if self.imaging_system and self.protocol.get("img"):
             self.imaging_system._assign_protocol(self.protocol["img"])
 
         if self.protocol.get("illu"):

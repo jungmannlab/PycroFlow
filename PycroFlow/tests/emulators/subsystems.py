@@ -13,6 +13,7 @@ test. Unlike a bare ``MagicMock`` they:
 :class:`EmulatedValve` so an orchestration test can also assert hardware-level
 effects (e.g. that an ``inject`` entry moved fluid).
 """
+
 from __future__ import annotations
 
 from PycroFlow.orchestration import AbstractSystem
@@ -22,7 +23,7 @@ from PycroFlow.tests.emulators.hal_devices import EmulatedPump, EmulatedValve
 class _BaseEmulatedSystem(AbstractSystem):
     def __init__(self):
         self.protocol = None
-        self.executed = []      # list of (index, entry) actually run
+        self.executed = []  # list of (index, entry) actually run
         self.paused = False
         self.aborted = False
 
@@ -34,7 +35,7 @@ class _BaseEmulatedSystem(AbstractSystem):
         self._flags = flags
 
     def execute_protocol_entry(self, i):
-        entry = self.protocol['protocol_entries'][i]
+        entry = self.protocol["protocol_entries"][i]
         self.executed.append((i, entry))
         self._on_entry(entry)
 
@@ -60,7 +61,7 @@ class EmulatedImagingSystem(_BaseEmulatedSystem):
         self.acquisitions = []
 
     def _on_entry(self, entry):
-        if entry.get('$type') == 'acquire':
+        if entry.get("$type") == "acquire":
             self.acquisitions.append(entry)
 
     def close(self):
@@ -78,12 +79,12 @@ class EmulatedIlluminationSystem(_BaseEmulatedSystem):
         self.shutter_open = False
 
     def _on_entry(self, entry):
-        t = entry.get('$type')
-        if t in ('set power', 'power'):
-            self.power = entry.get('power', entry.get('value'))
-            self.laser = entry.get('laser', self.laser)
-        elif t == 'set shutter':
-            self.shutter_open = bool(entry.get('state'))
+        t = entry.get("$type")
+        if t in ("set power", "power"):
+            self.power = entry.get("power", entry.get("value"))
+            self.laser = entry.get("laser", self.laser)
+        elif t == "set shutter":
+            self.shutter_open = bool(entry.get("state"))
 
     # Manual-control surface (matches IlluminationSystem) so the GUI/CLI
     # SystemService laser controls work against the emulator.
@@ -112,20 +113,21 @@ class EmulatedFluidSystem(_BaseEmulatedSystem):
         self.injections = []
 
     def _on_entry(self, entry):
-        t = entry.get('$type')
-        if t == 'inject':
-            vol = entry.get('volume', 0)
-            velocity = entry.get('velocity')
-            res = entry.get('reservoir_id')
+        t = entry.get("$type")
+        if t == "inject":
+            vol = entry.get("volume", 0)
+            velocity = entry.get("velocity")
+            res = entry.get("reservoir_id")
             self.injections.append((res, vol))
             if res is not None:
                 self.valve.set_valve(res)
-            self.pump.set_valve('in')
+            self.pump.set_valve("in")
             self.pump.pickup(vol, velocity=velocity, waitForPump=True)
-            self.pump.set_valve('out')
+            self.pump.set_valve("out")
             self.pump.dispense(vol, velocity=velocity, waitForPump=True)
-        elif t == 'flush':
-            factor = entry.get('flushfactor', 1)
-            self.pump.set_valve('out')
-            self.pump.dispense(self.pump.syringe_volume * factor,
-                               waitForPump=True)
+        elif t == "flush":
+            factor = entry.get("flushfactor", 1)
+            self.pump.set_valve("out")
+            self.pump.dispense(
+                self.pump.syringe_volume * factor, waitForPump=True
+            )

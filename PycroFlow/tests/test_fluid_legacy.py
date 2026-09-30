@@ -6,67 +6,78 @@ test_hamilton_architecture; here we exercise the orchestration-facing methods
 (protocol dispatch, deliver_fluid, fill_tubings, flush, pump_out, and the
 pause/resume/abort/stop lifecycle) that those tests don't reach.
 """
+
 import threading
 import unittest
 
 import PycroFlow.pyHamilton as ham
 from PycroFlow.hamilton_components import ReservoirDict
-from PycroFlow import fluid as _fluid_pkg
 from PycroFlow.fluid import legacy as fluid_legacy
 from PycroFlow.fluid.legacy import LegacyArchitecture
 from PycroFlow.tests.emulators import patch_serial
 
-
 SYSTEM_CONFIG = {
-    'system_type': 'legacy',
-    'valve_a': [
-        {'address': 0, 'instrument_type': 'MVP', 'valve_type': '8-5'},
-        {'address': 1, 'instrument_type': 'MVP', 'valve_type': '8-5'},
+    "system_type": "legacy",
+    "valve_a": [
+        {"address": 0, "instrument_type": "MVP", "valve_type": "8-5"},
+        {"address": 1, "instrument_type": "MVP", "valve_type": "8-5"},
     ],
-    'valve_flush': {'address': 4, 'instrument_type': 'MVP', 'valve_type': '8-5'},
+    "valve_flush": {
+        "address": 4,
+        "instrument_type": "MVP",
+        "valve_type": "8-5",
+    },
     # flush position must be a valid MVP position (1-8); 'flush' is used by
     # fill_tubings/_flush.
-    'flush_pos': {'inject': 1, 'flush': 2},
-    'pump_a': {'address': 2, 'instrument_type': '4', 'valve_type': 'Y',
-               'syringe': '500u'},
-    'pump_out': {'address': 3, 'instrument_type': '4', 'valve_type': 'Y',
-                 'syringe': '5.0m'},
-    'reservoir_a': [
-        {'id': 0, 'valve_pos': {0: 3, 1: 2}},
-        {'id': 1, 'valve_pos': {0: 2, 1: 2}},
-        {'id': 3, 'valve_pos': {0: 2, 1: 4}},
+    "flush_pos": {"inject": 1, "flush": 2},
+    "pump_a": {
+        "address": 2,
+        "instrument_type": "4",
+        "valve_type": "Y",
+        "syringe": "500u",
+    },
+    "pump_out": {
+        "address": 3,
+        "instrument_type": "4",
+        "valve_type": "Y",
+        "syringe": "5.0m",
+    },
+    "reservoir_a": [
+        {"id": 0, "valve_pos": {0: 3, 1: 2}},
+        {"id": 1, "valve_pos": {0: 2, 1: 2}},
+        {"id": 3, "valve_pos": {0: 2, 1: 4}},
     ],
-    'special_names': {'flushbuffer_a': 3},
+    "special_names": {"flushbuffer_a": 3},
 }
 
 TUBING_CONFIG = {
-    ('R0', 'pump_a'): 0,
-    ('R1', 'pump_a'): 0,
-    ('R3', 'pump_a'): 0,
-    ('pump_a', 'valve_flush'): 50,   # nonzero so _flush actually pumps
-    ('valve_flush', 'sample'): 0,
+    ("R0", "pump_a"): 0,
+    ("R1", "pump_a"): 0,
+    ("R3", "pump_a"): 0,
+    ("pump_a", "valve_flush"): 50,  # nonzero so _flush actually pumps
+    ("valve_flush", "sample"): 0,
 }
 
 PARAMETERS = {
-    'start_velocity': 50,
-    'max_velocity': 1000,
-    'stop_velocity': 500,
-    'mode': 'tubing_ignore',
-    'extractionfactor': 2,
-    'pumpout_dispense_velocity': 20000,
-    'inject_pickup_extravol': 1500,
+    "start_velocity": 50,
+    "max_velocity": 1000,
+    "stop_velocity": 500,
+    "mode": "tubing_ignore",
+    "extractionfactor": 2,
+    "pumpout_dispense_velocity": 20000,
+    "inject_pickup_extravol": 1500,
     # Zero delays exercise the empty-pump path of _inject that used to raise
     # ZeroDivisionError (regression guard for that fix).
-    'inject_in_to_out_delay': 0,
-    'inject_out_to_in_delay': 0,
-    'clean_velocity': 3000,
+    "inject_in_to_out_delay": 0,
+    "inject_out_to_in_delay": 0,
+    "clean_velocity": 3000,
 }
 
 INJECT_PROTOCOL = {
-    'parameters': dict(PARAMETERS),
-    'protocol_entries': [
-        {'$type': 'inject', 'reservoir_id': 0, 'volume': 10},
-        {'$type': 'inject', 'reservoir_id': 1, 'volume': 10},
+    "parameters": dict(PARAMETERS),
+    "protocol_entries": [
+        {"$type": "inject", "reservoir_id": 0, "volume": 10},
+        {"$type": "inject", "reservoir_id": 1, "volume": 10},
     ],
 }
 
@@ -91,15 +102,19 @@ class LegacyArchitectureTest(unittest.TestCase):
         # __init__ before its own connect() call, so the bus must already hold
         # the emulated serial. Connect first, then mark connected so __init__
         # skips reconnecting.
-        ham.connect('18', 9600)
+        ham.connect("18", 9600)
         fluid_legacy.is_connected = True
 
         self.la = LegacyArchitecture(SYSTEM_CONFIG, TUBING_CONFIG)
-        self.la._assign_protocol({'parameters': dict(PARAMETERS),
-                                  'protocol_entries': list(
-                                      INJECT_PROTOCOL['protocol_entries'])})
+        self.la._assign_protocol(
+            {
+                "parameters": dict(PARAMETERS),
+                "protocol_entries": list(INJECT_PROTOCOL["protocol_entries"]),
+            }
+        )
         self.la._assign_multiprocess_events(
-            threading.Event(), threading.Event(), threading.Event())
+            threading.Event(), threading.Event(), threading.Event()
+        )
 
     def tearDown(self):
         self._ctx.__exit__(None, None, None)
@@ -120,13 +135,13 @@ class LegacyArchitectureTest(unittest.TestCase):
     # --- protocol dispatch -----------------------------------------------
 
     def test_execute_protocol_entry_tubing_ignore_inject(self):
-        self.la.parameters['mode'] = 'tubing_ignore'
+        self.la.parameters["mode"] = "tubing_ignore"
         before = len(self.fake.command_log)
         self.la.execute_protocol_entry(0)
         self.assertGreater(len(self.fake.command_log), before)
 
     def test_execute_protocol_entry_tubing_stack_inject(self):
-        self.la.parameters['mode'] = 'tubing_stack'
+        self.la.parameters["mode"] = "tubing_stack"
         before = len(self.fake.command_log)
         self.la.execute_protocol_entry(0)
         self.assertGreater(len(self.fake.command_log), before)
@@ -134,8 +149,8 @@ class LegacyArchitectureTest(unittest.TestCase):
         self.assertEqual(self.la.last_protocol_entry, 0)
 
     def test_execute_single_protocol_entry_pump_out(self):
-        self.la.protocol = [{'$type': 'pump_out', 'volume': 50}]
-        self.la.parameters['mode'] = 'tubing_ignore'
+        self.la.protocol = [{"$type": "pump_out", "volume": 50}]
+        self.la.parameters["mode"] = "tubing_ignore"
         before = len(self.fake.command_log)
         self.la.execute_protocol_entry(0)
         self.assertGreater(len(self.fake.command_log), before)
@@ -143,7 +158,7 @@ class LegacyArchitectureTest(unittest.TestCase):
         self.assertEqual(self.la.last_protocol_entry, -1)
 
     def test_unknown_mode_raises(self):
-        self.la.parameters['mode'] = 'nonsense'
+        self.la.parameters["mode"] = "nonsense"
         with self.assertRaises(Exception):
             self.la.execute_protocol_entry(0)
 
@@ -159,7 +174,7 @@ class LegacyArchitectureTest(unittest.TestCase):
         self.la._pump_out(50)
         self.assertGreater(len(self.fake.command_log), before)
         # pump_out picked up then dispensed -> ascii address '4'
-        self.assertTrue(any(a == '4' for a, _ in self.fake.command_log))
+        self.assertTrue(any(a == "4" for a, _ in self.fake.command_log))
 
     def test_fill_tubings_returns_total_volume(self):
         total = self.la.fill_tubings(extra_vol=10)
@@ -190,5 +205,5 @@ class LegacyArchitectureTest(unittest.TestCase):
         self.assertTrue(self.la.resume_execution())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

@@ -8,21 +8,21 @@ into ``hamilton_architecture.py`` as module-scope dicts. The loader
 The package data is included via ``[tool.setuptools.package-data]`` in
 ``pyproject.toml``.
 """
+
 import copy
 from pathlib import Path
 
 import yaml
 
-
 _CONFIG_DIR = Path(__file__).resolve().parent
-_SETUP_DIR = _CONFIG_DIR / 'setups'
+_SETUP_DIR = _CONFIG_DIR / "setups"
 
 
 def _resolve(path_or_name, suffix, base=None):
     """Accept either a bare name ('default') or a path; return a Path."""
     p = Path(path_or_name)
-    if p.suffix == '':
-        p = (base or _CONFIG_DIR) / f'{path_or_name}{suffix}'
+    if p.suffix == "":
+        p = (base or _CONFIG_DIR) / f"{path_or_name}{suffix}"
     return p
 
 
@@ -35,22 +35,22 @@ def _records_to_tubing(records):
     """
     result = {}
     for record in records:
-        result[(record['from'], record['to'])] = record['volume']
+        result[(record["from"], record["to"])] = record["volume"]
     return result
 
 
-def load_legacy_system(name='legacy_system'):
+def load_legacy_system(name="legacy_system"):
     """Load a legacy system config YAML and return the parsed dict.
 
     ``name`` may be either a basename (e.g. ``'legacy_system'``) found in
     :mod:`PycroFlow.configs`, or an absolute / relative path to a YAML file.
     """
-    path = _resolve(name, '.yaml')
+    path = _resolve(name, ".yaml")
     with open(path) as f:
         return yaml.safe_load(f)
 
 
-def load_legacy_tubing(name='legacy_tubing'):
+def load_legacy_tubing(name="legacy_tubing"):
     """Load a legacy tubing config and convert list-of-records to
     tuple-keyed dict, matching the original in-source dict shape.
 
@@ -62,13 +62,14 @@ def load_legacy_tubing(name='legacy_tubing'):
 
     which round-trips to ``{('R21', 'pump_a'): 365, ...}``.
     """
-    path = _resolve(name, '.yaml')
+    path = _resolve(name, ".yaml")
     with open(path) as f:
         records = yaml.safe_load(f)
     return _records_to_tubing(records)
 
 
 # --- Per-microscope setup (hardware) configs -----------------------------
+
 
 def list_setups():
     """Return the names of the available setup configs.
@@ -81,7 +82,7 @@ def list_setups():
     """
     if not _SETUP_DIR.is_dir():
         return []
-    return sorted(p.stem for p in _SETUP_DIR.glob('*.yaml'))
+    return sorted(p.stem for p in _SETUP_DIR.glob("*.yaml"))
 
 
 def load_setup(name):
@@ -101,11 +102,11 @@ def load_setup(name):
     dict
         The parsed setup with ``tubing`` converted to a tuple-keyed dict.
     """
-    path = _resolve(name, '.yaml', base=_SETUP_DIR)
+    path = _resolve(name, ".yaml", base=_SETUP_DIR)
     with open(path) as f:
         setup = yaml.safe_load(f)
-    if isinstance(setup.get('tubing'), list):
-        setup['tubing'] = _records_to_tubing(setup['tubing'])
+    if isinstance(setup.get("tubing"), list):
+        setup["tubing"] = _records_to_tubing(setup["tubing"])
     return setup
 
 
@@ -135,14 +136,14 @@ def assemble_hamilton_config(setup, fluid_settings):
         ``(hamilton_config, tubing_config)`` ready for
         ``LegacyArchitecture(hamilton_config, tubing_config)``.
     """
-    hamilton = copy.deepcopy(setup['hamilton'])
-    manifold = hamilton.pop('reservoir_a_manifold', [])
-    by_id = {entry['id']: entry for entry in manifold}
+    hamilton = copy.deepcopy(setup["hamilton"])
+    manifold = hamilton.pop("reservoir_a_manifold", [])
+    by_id = {entry["id"]: entry for entry in manifold}
 
-    special_names = dict(fluid_settings.get('special_names', {}))
-    cleaning = fluid_settings.get('cleaning_reservoirs', []) or []
+    special_names = dict(fluid_settings.get("special_names", {}))
+    cleaning = fluid_settings.get("cleaning_reservoirs", []) or []
 
-    used_ids = list(fluid_settings.get('reservoir_names', {}).keys())
+    used_ids = list(fluid_settings.get("reservoir_names", {}).keys())
     for res in cleaning:
         if isinstance(res, int):
             rid = res
@@ -151,7 +152,8 @@ def assemble_hamilton_config(setup, fluid_settings):
             if rid is None:
                 raise KeyError(
                     "Cleaning reservoir {!r} is neither an int id nor a "
-                    "name in special_names {}".format(res, special_names))
+                    "name in special_names {}".format(res, special_names)
+                )
         if rid not in used_ids:
             used_ids.append(rid)
 
@@ -160,14 +162,14 @@ def assemble_hamilton_config(setup, fluid_settings):
         if rid not in by_id:
             raise KeyError(
                 "Reservoir id {!r} is not wired in setup "
-                "{!r}'s reservoir_a_manifold".format(
-                    rid, setup.get('setup')))
+                "{!r}'s reservoir_a_manifold".format(rid, setup.get("setup"))
+            )
         reservoir_a.append(by_id[rid])
 
-    hamilton['reservoir_a'] = reservoir_a
-    hamilton['special_names'] = special_names
-    hamilton['cleaning_reservoirs'] = cleaning
-    return hamilton, setup.get('tubing', {})
+    hamilton["reservoir_a"] = reservoir_a
+    hamilton["special_names"] = special_names
+    hamilton["cleaning_reservoirs"] = cleaning
+    return hamilton, setup.get("tubing", {})
 
 
 def assemble_imaging_config(setup, design):
@@ -188,11 +190,11 @@ def assemble_imaging_config(setup, design):
     dict
         Config for :class:`PycroFlow.imaging.ImagingSystem`.
     """
-    cfg = copy.deepcopy(setup.get('imaging', {}))
-    cfg.setdefault('save_dir', design.get('save_dir', '.'))
-    cfg['base_name'] = design.get('base_name', 'experiment')
-    img = design.get('img', {})
-    settings = img.get('settings', {}) if isinstance(img, dict) else {}
-    if 'use_positions' in settings:
-        cfg['use_positions'] = settings['use_positions']
+    cfg = copy.deepcopy(setup.get("imaging", {}))
+    cfg.setdefault("save_dir", design.get("save_dir", "."))
+    cfg["base_name"] = design.get("base_name", "experiment")
+    img = design.get("img", {})
+    settings = img.get("settings", {}) if isinstance(img, dict) else {}
+    if "use_positions" in settings:
+        cfg["use_positions"] = settings["use_positions"]
     return cfg
