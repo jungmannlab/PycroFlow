@@ -185,6 +185,7 @@ class CaptureService:
         self._clip_path: Optional[str] = None
         self._clip_name: Optional[str] = None
         self._clip_step: Optional[int] = None
+        self._clip_stamp: Optional[str] = None
         self._last_frame = 0.0
         # Create the pool dir before opening the registry buffer sqlite in it:
         # output_dir defaults to a fresh <save_dir>/fluidics_cam, so without
@@ -260,7 +261,7 @@ class CaptureService:
                 cmd.get("protocol_step"),
             )
         elif kind == "round_end":
-            self._close_clip()
+            self._close_clip(cmd.get("protocol_step_end"))
         elif kind == "stop":
             self._stop.set()
         else:
@@ -279,13 +280,10 @@ class CaptureService:
             # the current clip first so we never leak an open writer.
             self._close_clip()
         stamp = t_utc or _utc_stamp()
-        step_tag = (
-            ""
-            if protocol_step is None
-            else "_step{:03d}".format(protocol_step)
-        )
-        name = "run_{}_round{:03d}{}_{}.avi".format(
-            _sanitize(self.run_id), round_index, step_tag, stamp
+        # Named with the fluid step the exchange starts on; the end step is only
+        # known at close, when the file is renamed to a fluid-step<a>-<b> range.
+        name = _clip_filename(
+            self.run_id, round_index, protocol_step, None, stamp
         )
         path = os.path.join(self.config.output_dir, name)
         try:
@@ -307,6 +305,7 @@ class CaptureService:
         self._clip_round = round_index
         self._clip_name = unique_name
         self._clip_step = protocol_step
+        self._clip_stamp = stamp
         self._clip_path = path
         self._last_frame = 0.0
         logger.info("monitoring: recording round {} -> {}", round_index, name)
@@ -325,23 +324,48 @@ class CaptureService:
             logger.warning("monitoring: dropped a frame ({!r})", exc)
         self._last_frame = now
 
-    def _close_clip(self) -> None:
+    def _close_clip(self, end_step: Optional[int] = None) -> None:
         if self._writer is None:
             return
         writer, self._writer = self._writer, None
         path, self._clip_path = self._clip_path, None
         rnd, self._clip_round = self._clip_round, None
         name, self._clip_name = self._clip_name, None
-        step, self._clip_step = self._clip_step, None
+        start, self._clip_step = self._clip_step, None
+        stamp, self._clip_stamp = self._clip_stamp, None
         try:
             writer.close()
         except Exception as exc:  # pragma: no cover
             logger.warning("monitoring: failed to finalize clip ({!r})", exc)
             return
+        # Now the end step is known: rename to the fluid-step<start>-<end> range
+        # (best-effort; keep the start-only name if the rename fails).
+        if (
+            path is not None
+            and rnd is not None
+            and start is not None
+            and end_step is not None
+            and end_step != start
+        ):
+            new = os.path.join(
+                self.config.output_dir,
+                _clip_filename(self.run_id, rnd, start, end_step, stamp),
+            )
+            try:
+                os.replace(path, new)
+                path = new
+            except OSError as exc:  # pragma: no cover
+                logger.warning("monitoring: could not rename clip ({!r})", exc)
         logger.info("monitoring: finished round {} clip {}", rnd, path)
         if path is not None and rnd is not None:
             uri = Path(path).resolve().as_uri()
-            self._index.index(rnd, uri, round_name=name, protocol_step=step)
+            self._index.index(
+                rnd,
+                uri,
+                round_name=name,
+                protocol_step=start,
+                protocol_step_end=end_step,
+            )
 
     def _shutdown(self) -> None:
         self._close_clip()
@@ -356,6 +380,23 @@ class CaptureService:
 
 def _utc_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _clip_filename(run_id, round_index, start, end, stamp) -> str:
+    """``run_<id>_round<NNN>_fluid-step<a>-<b>_<UTC>.avi``.
+
+    ``end`` (the fluid step the exchange finished on) is dropped when unknown or
+    equal to ``start`` (a single-step exchange -> ``fluid-step<a>``).
+    """
+    if start is None:
+        tag = ""
+    elif end is None or end == start:
+        tag = "_fluid-step{}".format(start)
+    else:
+        tag = "_fluid-step{}-{}".format(start, end)
+    return "run_{}_round{:03d}{}_{}.avi".format(
+        _sanitize(run_id), round_index, tag, stamp
+    )
 
 
 def _sanitize(text: str) -> str:

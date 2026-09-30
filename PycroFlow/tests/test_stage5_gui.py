@@ -315,6 +315,58 @@ class TestMainWindow(unittest.TestCase):
         # img cur=1 -> on the 2nd acquire (round 2 of 2), labelled by name.
         self.assertIn("Round 2/2: A1 RESI round 2", tab.step_status.text())
 
+    def test_dark_frames_fold_into_imager_round(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+
+        svc = MagicMock(name="service")
+        svc.state = ExperimentState.RUNNING
+        # Exchange with dark frames: EGFR + EGFR-dark + 5T4 -> two imager rounds
+        # (the dark acquire is folded into EGFR's round, not counted separately).
+        svc.protocol = {
+            "fluid": {"protocol_entries": []},
+            "img": {
+                "protocol_entries": [
+                    {
+                        "$type": "acquire",
+                        "name": "EGFR",
+                        "message": "round_img-0-EGFR",
+                    },
+                    {
+                        "$type": "acquire",
+                        "name": "EGFR (dark frames)",
+                        "message": "round_img-dark-0-EGFR",
+                    },
+                    {
+                        "$type": "acquire",
+                        "name": "5T4",
+                        "message": "round_img-1-5T4",
+                    },
+                ]
+            },
+            "illu": {"protocol_entries": []},
+        }
+        svc.step_progress.return_value = {}
+        tab = ExperimentTab(svc, MagicMock(name="bridge"))
+        # While imaging EGFR's dark frames (img cur=1) it's still Round 1/2:EGFR.
+        svc.progress.return_value = {
+            "fluid": (0, 0),
+            "img": (1, 3),
+            "illu": (0, 0),
+        }
+        tab._populate_steps()
+        tab._poll_progress()
+        self.assertIn("Round 1/2: EGFR", tab.step_status.text())
+        # On the 5T4 acquire (img cur=2) -> Round 2/2: 5T4.
+        svc.progress.return_value = {
+            "fluid": (0, 0),
+            "img": (2, 3),
+            "illu": (0, 0),
+        }
+        tab._poll_progress()
+        self.assertIn("Round 2/2: 5T4", tab.step_status.text())
+
     def test_current_round_progress_bar(self):
         from unittest.mock import MagicMock
         from PycroFlow.services import ExperimentState

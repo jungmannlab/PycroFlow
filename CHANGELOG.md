@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Progress bar counts **one round per exchange imager**: an imager's dark-frame
+  acquisition is folded into its round instead of being counted as a separate
+  round (Exchange-PAINT; the same dark-fold rule applies to any experiment type
+  with dark acquisitions). Dark-free protocols are unaffected.
+- Monitoring clip filenames now carry the **fluid step range** the exchange
+  spans — `run_<id>_round<NNN>_fluid-step<a>-<b>_<UTC>.avi` (was a single
+  `step<SSS>`); the registry row gains `protocol_step_end` alongside
+  `protocol_step`.
+
 ### Added
 
 - Fluidics monitoring: reliable real-webcam capture on Windows. The instrument

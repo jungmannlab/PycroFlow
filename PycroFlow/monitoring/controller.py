@@ -313,7 +313,13 @@ class MonitoringController:
 
     def _close(self) -> None:
         self._active = False
-        self._emit({"cmd": "round_end", "round_index": self._round})
+        self._emit(
+            {
+                "cmd": "round_end",
+                "round_index": self._round,
+                "protocol_step_end": self._current_fluid_step(),
+            }
+        )
 
     def _emit(self, cmd: dict) -> None:
         try:

@@ -143,14 +143,16 @@ One file per Exchange round, named with the run id, round index, the **fluid
 run-sequence step** the exchange started on, and the UTC start time:
 
 ```
-run_<run_id>_round<NNN>_step<SSS>_<UTC-start>.avi
-# e.g. run_20260924T141500Z_ab12cd_round003_step037_20260924T141530Z.avi
+run_<run_id>_round<NNN>_fluid-step<a>-<b>_<UTC-start>.avi
+# e.g. run_20260924T141500Z_ab12cd_round003_fluid-step37-41_20260924T141530Z.avi
 ```
 
-`step<SSS>` is the fluid Run Sequence entry index that began the exchange, so a
-clip maps directly to the step you see in the GUI **Run Sequence** tab. Only the
-fluid-exchange leg of each round is recorded (not the long imaging leg), bounding
-disk use; `retention_days` prunes old clips before each run.
+`fluid-step<a>-<b>` is the range of fluid Run Sequence steps the exchange spans
+(`a` = the step it started on, `b` = the step it finished on; a single-step
+exchange is just `fluid-step<a>`), so a clip maps directly to the steps you see
+in the GUI **Run Sequence** tab. Only the fluid-exchange leg of each round is
+recorded (not the long imaging leg), bounding disk use; `retention_days` prunes
+old clips before each run.
 
 ---
 

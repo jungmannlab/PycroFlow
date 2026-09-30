@@ -152,6 +152,30 @@ class TestAviWriter(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
+# clip filename (fluid step range)
+# --------------------------------------------------------------------------
+class TestClipFilename(unittest.TestCase):
+    def _name(self, *a):
+        from PycroFlow.monitoring.capture_service import _clip_filename
+
+        return _clip_filename(*a)
+
+    def test_step_range(self):
+        n = self._name("R", 3, 3, 6, "S")
+        self.assertIn("round003", n)
+        self.assertIn("fluid-step3-6", n)
+        self.assertTrue(n.endswith("_S.avi"))
+
+    def test_single_step_when_end_equals_start(self):
+        n = self._name("R", 3, 3, 3, "S")
+        self.assertIn("fluid-step3", n)
+        self.assertNotIn("step3-3", n)
+
+    def test_no_step_tag_when_start_unknown(self):
+        self.assertNotIn("fluid-step", self._name("R", 3, None, None, "S"))
+
+
+# --------------------------------------------------------------------------
 # config
 # --------------------------------------------------------------------------
 class TestMonitoringConfig(unittest.TestCase):
@@ -425,6 +449,7 @@ class TestRegistryIndex(unittest.TestCase):
             "file:///pool/run42_round002.avi",
             round_name="img-2",
             protocol_step=37,
+            protocol_step_end=42,
         )
         self.assertIsNotNone(rec)
         stored = fake.rows[rec["id"]]
@@ -436,6 +461,7 @@ class TestRegistryIndex(unittest.TestCase):
             "file:///pool/run42_round002.avi",
         )
         self.assertEqual(stored["protocol_step"], 37)
+        self.assertEqual(stored["protocol_step_end"], 42)
 
     def test_disabled_writer_is_noop(self):
         w = RegistryIndexWriter("RUN", None)
