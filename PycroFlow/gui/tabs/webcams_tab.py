@@ -109,6 +109,7 @@ class WebcamsTab(QWidget):
         self._output_edit: Optional[QLineEdit] = None
         self._worker: Optional[_PreviewWorker] = None
         self._run_locked = False
+        self._content: Optional[QWidget] = None
         self._root = QVBoxLayout(self)
         self._rebuild()
 
@@ -121,19 +122,25 @@ class WebcamsTab(QWidget):
         return setup.get("monitoring") or {}
 
     def _rebuild(self):
-        """Rebuild the editor from the current setup's monitoring block."""
+        """Rebuild the editor from the current setup's monitoring block.
+
+        All content lives in a single ``_content`` widget that is replaced
+        wholesale, so no child (incl. those inside sub-layouts, like the button
+        row) is ever left orphaned to the tab.
+        """
         self.stop_preview()
-        while self._root.count():
-            item = self._root.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+        if self._content is not None:
+            self._content.setParent(None)
+            self._content.deleteLater()
         self._rows = []
+        self._content = QWidget()
+        layout = QVBoxLayout(self._content)
+        self._root.addWidget(self._content)
 
         block = self._block()
         if block is None:
-            self._root.addWidget(QLabel("Load a setup to configure webcams."))
-            self._root.addStretch()
+            layout.addWidget(QLabel("Load a setup to configure webcams."))
+            layout.addStretch()
             return
 
         # -- save path ---------------------------------------------------
@@ -148,7 +155,7 @@ class WebcamsTab(QWidget):
         self._browse_btn = QPushButton("Browse…")
         self._browse_btn.clicked.connect(self._browse_output)
         out_layout.addWidget(self._browse_btn)
-        self._root.addWidget(out_box)
+        layout.addWidget(out_box)
 
         # -- cameras -----------------------------------------------------
         self._cams_box = QGroupBox("Cameras")
@@ -158,7 +165,7 @@ class WebcamsTab(QWidget):
         self._add_btn = QPushButton("+ Add camera")
         self._add_btn.clicked.connect(lambda: self._add_camera_row())
         self._cams_layout.addWidget(self._add_btn)
-        self._root.addWidget(self._cams_box)
+        layout.addWidget(self._cams_box)
 
         # -- actions -----------------------------------------------------
         btns = QHBoxLayout()
@@ -171,12 +178,12 @@ class WebcamsTab(QWidget):
         for b in (self.preview_btn, self.apply_btn, self.save_btn):
             btns.addWidget(b)
         btns.addStretch()
-        self._root.addLayout(btns)
+        layout.addLayout(btns)
 
         self.preview_label = QLabel("Preview stopped")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setMinimumHeight(240)
-        self._root.addWidget(self.preview_label, stretch=1)
+        layout.addWidget(self.preview_label, stretch=1)
 
         self.set_run_lock(self._run_locked)
 

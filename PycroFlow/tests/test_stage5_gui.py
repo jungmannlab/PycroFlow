@@ -2414,6 +2414,16 @@ class TestWebcamsTab(unittest.TestCase):
         tab.refresh()
         self.assertEqual(len(tab._rows), 0)
 
+    def test_rebuild_does_not_orphan_widgets(self):
+        from PyQt6.QtWidgets import QPushButton
+
+        tab, _ = self._tab()
+        before = len(tab.findChildren(QPushButton))
+        for _ in range(4):
+            tab.refresh()
+            self.app.processEvents()  # flush deleteLater of the old content
+        self.assertEqual(len(tab.findChildren(QPushButton)), before)
+
     def test_add_and_remove_camera(self):
         tab, svc = self._tab()
         self.assertEqual(len(tab._rows), 3)
