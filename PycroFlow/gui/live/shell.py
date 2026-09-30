@@ -47,6 +47,7 @@ from PycroFlow.gui.live.contribution import (
 )
 from PycroFlow.gui.live.operator import OperatorContributor
 from PycroFlow.gui.live.panels import OverviewZoom, QcAtAGlance
+from PycroFlow.gui.live.theme import LIVE_QSS
 
 
 def _scroll(widget: QWidget) -> QScrollArea:
@@ -101,6 +102,12 @@ class LiveShell(QWidget):
         else:
             register_contributor(OperatorContributor())
             self._contributors = iter_contributors()
+
+        # Carry the V0.8 theme on the root so the shell looks right even when
+        # mounted in a host that hasn't themed itself (app-wide Fusion + QSS is
+        # still applied by the standalone/acquisition launchers via
+        # apply_live_theme; this is the embedded-safe fallback).
+        self.setStyleSheet(LIVE_QSS)
 
         self._build_ui()
         self._bridge.update.connect(self._dispatch)

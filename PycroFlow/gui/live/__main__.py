@@ -28,8 +28,10 @@ def main(argv=None) -> int:
         return 2
 
     from PycroFlow.gui.live.shell import build_live_shell
+    from PycroFlow.gui.live.theme import apply_live_theme
 
     app = QApplication(argv if argv is not None else sys.argv)
+    apply_live_theme(app)  # V0.8 look: Fusion base + dark/gold stylesheet.
     shell = build_live_shell()  # passive (no service) — layout inspection.
     win = QMainWindow()
     win.setWindowTitle("PycroFlow — Live QC (operator frontend)")
