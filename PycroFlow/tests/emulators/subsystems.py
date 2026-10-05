@@ -58,30 +58,16 @@ class EmulatedImagingSystem(_BaseEmulatedSystem):
 
     WP-LIVE-INT: when the live-run coordinator attaches a ``frame_tap``, each
     'acquire' entry also synthesizes a short burst of MockFrameSource frames
-    through it (mirroring ``ImagingSystem.record_movie``'s bracketing +
-    per-frame push), so the Emulator setup exercises the full orchestrated
-    live-analysis path — including the end-this-FOV early-abort — with no
-    instrument. ``live_camera_info`` / ``live_analysis_options`` play the role
-    of the real setup's imaging-config ``camera_info`` / ``live_analysis``
-    blocks (thread-pool compute + a low gradient threshold keep it fast and
-    make the synthetic spots localizable).
+    through it (via ``FrameTap.feed_frames``, the same bracketing protocol
+    ``ImagingSystem.record_movie`` implements), so the Emulator setup
+    exercises the full orchestrated live-analysis path — including the
+    end-this-FOV early-abort — with no instrument. ``self.config`` mirrors
+    the real ImagingSystem's config dict, so the coordinator reads the SAME
+    ``config['camera_info']`` / ``config['live_analysis']`` spelling for both
+    system flavors (thread-pool compute + a low gradient threshold keep the
+    emulated pipeline fast and the synthetic spots localizable).
     """
 
-    # Full picasso photon-conversion info (the fit refuses partial info).
-    live_camera_info = {
-        "Baseline": 100.0,
-        "Sensitivity": 0.46,
-        "Gain": 1,
-        "Qe": 0.82,
-        "Pixelsize": 130.0,
-    }
-    live_analysis_options = {
-        "use_processes": False,
-        "n_workers": 2,
-        "batch_size": 20,
-        "localize_params": {"Box Size": 7, "Min. Net Gradient": 200},
-        "first_frame_timeout_s": 10.0,
-    }
     # Cap synthetic frames per acquire so emulated runs stay near-instant
     # (the emulator's acquisitions are instantaneous anyway).
     live_max_frames = 60
@@ -90,6 +76,25 @@ class EmulatedImagingSystem(_BaseEmulatedSystem):
         super().__init__()
         self.acquisitions = []
         self.frame_tap = None
+        self.last_dataset_path = None
+        self.config = {
+            # Full picasso photon-conversion info (the fit refuses partial
+            # info).
+            "camera_info": {
+                "Baseline": 100.0,
+                "Sensitivity": 0.46,
+                "Gain": 1,
+                "Qe": 0.82,
+                "Pixelsize": 130.0,
+            },
+            "live_analysis": {
+                "use_processes": False,
+                "n_workers": 2,
+                "batch_size": 20,
+                "localize_params": {"Box Size": 7, "Min. Net Gradient": 200},
+                "first_frame_timeout_s": 10.0,
+            },
+        }
 
     def _on_entry(self, entry):
         if entry.get("$type") == "acquire":
@@ -104,20 +109,13 @@ class EmulatedImagingSystem(_BaseEmulatedSystem):
 
         n = int(min(entry.get("frames") or 30, self.live_max_frames))
         name = "emulated_{}".format(entry.get("message", "acquire"))
-        tap.start_fov(name, {"frames": n, "t_exp": entry.get("t_exp")})
-        try:
-            source = MockFrameSource(n_frames=n, seed=0)
-            done = False
-            for batch in source.batches(8):
-                for frame in batch.frames:
-                    if tap.fov_end_requested():
-                        done = True
-                        break
-                    tap.push(frame, None)
-                if done:
-                    break
-        finally:
-            tap.end_fov()
+        source = MockFrameSource(n_frames=n, seed=0)
+        frames = (
+            frame for batch in source.batches(8) for frame in batch.frames
+        )
+        tap.feed_frames(
+            name, {"frames": n, "t_exp": entry.get("t_exp")}, frames
+        )
 
     def close(self):
         """No-op cleanup (matches ImagingSystem.close for SystemService)."""

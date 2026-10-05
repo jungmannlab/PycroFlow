@@ -106,6 +106,35 @@ class TestFrameTap(unittest.TestCase):
         tap.end_fov()  # on_fov_end raising is swallowed
         self.assertIsNone(q.get_nowait())
 
+    def test_backlog_is_bounded_drops_counted_sentinel_delivered(self):
+        tap = FrameTap(max_pending_frames=3)
+        q = tap.start_fov("fov", {})
+        for i in range(5):
+            tap.push([i], None)
+        self.assertEqual(tap.dropped_frames(), 2)
+        tap.end_fov()
+        # The three retained frames, then the sentinel — never refused.
+        self.assertEqual([q.get_nowait() for _ in range(3)], [[0], [1], [2]])
+        self.assertIsNone(q.get_nowait())
+        # A fresh FOV re-arms the drop counter.
+        tap.start_fov("fov2", {})
+        self.assertEqual(tap.dropped_frames(), 0)
+
+    def test_feed_frames_brackets_and_honors_fov_end(self):
+        got = {}
+        tap = FrameTap(on_fov_start=lambda name, cfg, q: got.update(q=q))
+        pushed = tap.feed_frames("fov", {"frames": 3}, [[1], [2], [3]])
+        self.assertEqual(pushed, 3)
+        drained = [got["q"].get_nowait() for _ in range(4)]
+        self.assertEqual(drained, [[1], [2], [3], None])
+        # An immediate end-this-FOV request stops the feed but still ends
+        # the FOV (sentinel via the finally).
+        tap2 = FrameTap()
+        tap2._on_fov_start = lambda name, cfg, q: tap2.request_fov_end()
+        pushed = tap2.feed_frames("fov", {}, [[1], [2], [3]])
+        self.assertEqual(pushed, 0)
+        self.assertFalse(tap2.fov_active())
+
 
 class TestPostRecordsBufferedClient(unittest.TestCase):
 
@@ -160,6 +189,27 @@ class TestPostRecordsBufferedClient(unittest.TestCase):
         client = _StubRegistry()
         row = post_experiment_record(client, payload)
         self.assertEqual(row["id"], "EXPID")
+
+
+class TestAbortGenerations(unittest.TestCase):
+    """clear_abort(generation=...) must never erase a newer abort request."""
+
+    def test_generation_gated_clear_keeps_newer_request(self):
+        from PycroFlow.live_analysis.service import LiveAnalysisService
+
+        svc = LiveAnalysisService()
+        svc.start_experiment()
+        svc.request_abort()
+        self.assertEqual(svc.abort_generation(), 1)
+        svc.clear_abort(generation=0)  # stale clear: no-op
+        self.assertTrue(svc.abort_requested())
+        svc.request_abort()  # a second request before the re-arm
+        svc.clear_abort(generation=1)  # the FOV that consumed request #1
+        self.assertTrue(svc.abort_requested())  # request #2 survives
+        svc.clear_abort(generation=2)
+        self.assertFalse(svc.abort_requested())
+        svc.clear_abort()  # unconditional (standalone semantics) still works
+        self.assertFalse(svc.abort_requested())
 
 
 class TestLiveRunCoordinator(unittest.TestCase):
@@ -220,7 +270,7 @@ class TestLiveRunCoordinator(unittest.TestCase):
         imaging._on_entry({"$type": "acquire", "frames": 25, "message": "r1"})
         imaging._on_entry({"$type": "acquire", "frames": 25, "message": "r2"})
         self._wait_fov_records(registry, 2)
-        coord.stop_run()
+        coord.stop_run(wait=True)
 
         self.assertEqual(len(registry.fovs), 2)
         for acq in registry.acquisitions:
@@ -265,7 +315,7 @@ class TestLiveRunCoordinator(unittest.TestCase):
         # The protocol continues: the next acquire runs a fresh, clean FOV.
         imaging._on_entry({"$type": "acquire", "frames": 25, "message": "r2"})
         self._wait_fov_records(registry, 2)
-        coord.stop_run()
+        coord.stop_run(wait=True)
 
         first = registry.analyses[0]["extra"]["coverage"]
         second = registry.analyses[1]["extra"]["coverage"]
@@ -278,7 +328,7 @@ class TestLiveRunCoordinator(unittest.TestCase):
         illu = FakeIllumination()
         coord, imaging, run_id = self._coordinator(illu=illu)
         imaging._on_entry({"$type": "acquire", "frames": 25, "message": "r"})
-        coord.stop_run()
+        coord.stop_run(wait=True)
         # Clean FOVs do NOT engage per-FOV in the orchestrated mode; the
         # end-of-run shutdown does (C21's end-of-run/on-abort scope).
         self.assertTrue(illu.lasers_all_off)
@@ -306,7 +356,7 @@ class TestLiveRunCoordinator(unittest.TestCase):
         deadline = time.time() + 30
         while time.time() < deadline and not records:
             time.sleep(0.02)
-        coord.stop_run()
+        coord.stop_run(wait=True)
         self.assertTrue(records)
         self.assertFalse(any(r.payload.get("posted") for r in records))
 
@@ -345,8 +395,10 @@ class TestExperimentServiceLiveIntegration(unittest.TestCase):
         self.assertIsNotNone(svc.live_service)
         svc.end()
         self.assertEqual(svc.state, ExperimentState.FINISHED)
-        # Teardown released the service.
+        # end() detaches synchronously; the drain/interlock/close run on the
+        # background teardown thread — wait for it before asserting records.
         self.assertIsNone(svc.live_service)
+        self.assertTrue(svc._live.wait_idle())
         return svc, run_id
 
     def test_orchestrated_run_single_run_id_linked_records(self):
@@ -384,6 +436,7 @@ class TestExperimentServiceLiveIntegration(unittest.TestCase):
         svc.abort()
         self.assertEqual(svc.state, ExperimentState.ABORTED)
         self.assertIsNone(svc.live_service)
+        self.assertTrue(svc._live.wait_idle())
         self.assertTrue(registry.closed)
 
 

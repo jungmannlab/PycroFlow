@@ -47,6 +47,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `LiveAnalysisService.run_fov` records an early-abort honestly even when the
   frame source ends (sentinel) before the per-batch abort check runs again —
   previously such a FOV could be reported clean.
+- **Review fixes (adversarial review of WP-LIVE-INT):**
+  - The frame tap's live backlog is now **soft-bounded**
+    (`live_analysis.max_pending_frames`, default 256): when the pipeline lags
+    that far, frames are dropped from the live stream (counted, logged
+    loudly) instead of accumulating raw frames in RAM without bound (OOM risk
+    on long FOVs; the raw movie on disk is unaffected).
+  - **No more blocking joins on hot threads:** FOVs are queued to a single
+    per-run consumer thread (the acquisition thread only enqueues — the
+    previous design joined the prior FOV's worker for up to 60 s inside
+    `record_movie`), and `stop_run` hands joins/interlock/registry-close to a
+    background teardown thread so the Abort button / `closeEvent` (GUI
+    thread) never freeze on a draining pipeline (`wait_idle()` for tests).
+  - **Abort requests are generation-counted**: `clear_abort(generation=...)`
+    re-arms exactly the requests a finished FOV consumed, so an early-abort
+    landing between FOVs is served to the next FOV instead of being silently
+    lost; acquisition-side delivery is gated the same way (one request ends
+    at most one MDA).
+  - `record_movie` initialises `viewer` before the acquisition block — with
+    `show_display: false` it previously raised `UnboundLocalError` after
+    every movie (pre-existing).
+  - The **C15 archive step is wired** on the orchestrated path:
+    `record_movie` captures the finished dataset's on-disk path and, when the
+    setup configures `live_analysis.archive_dir`, the per-FOV pipeline moves
+    the raw movie; unset, the gap is logged once per run (no longer silent)
+    and the record carries `raw_data_path`.
+  - One `config['camera_info']` / `config['live_analysis']` spelling for real
+    and emulated imaging systems (the `live_camera_info` attribute variant is
+    gone); emulators feed the tap via the shared `FrameTap.feed_frames`
+    bracketing helper instead of re-implementing the protocol; the
+    record-surfacing triad is a single `surface_record` helper used by both
+    the per-FOV and experiment-level posts.
 
 ## [0.2.0] - 2026-09-30
 

@@ -201,5 +201,21 @@ def build_experiment_payload(
 
 
 def post_experiment_record(client: Any, payload: dict) -> dict:
-    """Post a :func:`build_experiment_payload` record; returns the row."""
+    """Post a :func:`build_experiment_payload` record through a client.
+
+    Parameters
+    ----------
+    client : Any
+        A registry client exposing the ``log_*`` surface (real, buffered, or
+        the in-memory mock).
+    payload : dict
+        The experiment row from :func:`build_experiment_payload`.
+
+    Returns
+    -------
+    dict
+        The client's response — the created row for synchronous clients, a
+        ``{"buffered": True}`` acknowledgement for the fire-and-forget one
+        (callers fall back to the payload's pre-minted ``id``).
+    """
     return client.log_experiment(**payload)

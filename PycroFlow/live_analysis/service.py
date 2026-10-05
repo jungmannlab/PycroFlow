@@ -60,6 +60,47 @@ DEFAULT_LOCALIZE_PARAMS = {
 }
 
 
+def surface_record(hub, run_id, registry, payload, poster):
+    """Post one registry record best-effort and surface the outcome on a hub.
+
+    The single implementation of the record-surfacing triad every registry
+    writer uses (the per-FOV records here, the experiment-level record in
+    the live-run coordinator), so all ``kind == "record"`` updates share one
+    shape: ``posted=True`` with ``ids``, or ``posted=False`` with the unposted
+    ``payload`` (no client) / the ``error`` (post failed). Never raises; a
+    registry outage is never fatal.
+
+    Parameters
+    ----------
+    hub : UpdateHub
+        Where the outcome is pushed (``kind="record"``).
+    run_id : str
+        The experiment run_id the update is tagged with.
+    registry : object or None
+        The registry client; None surfaces the payload as not posted.
+    payload : dict
+        The record payload (also surfaced verbatim when not posted).
+    poster : callable
+        ``poster(registry, payload) -> dict`` returning the created ids.
+
+    Returns
+    -------
+    dict or None
+        The created ids, or None when not posted.
+    """
+    if registry is None:
+        hub.push_kind("record", run_id, payload=payload, posted=False)
+        return None
+    try:
+        ids = poster(registry, payload)
+        hub.push_kind("record", run_id, ids=ids, posted=True)
+        return ids
+    except Exception as exc:  # noqa: BLE001 - a registry outage isn't fatal
+        logger.warning("posting record failed: {!r}".format(exc))
+        hub.push_kind("record", run_id, error=repr(exc), posted=False)
+        return None
+
+
 @dataclass
 class FovConfig:
     """Per-FOV inputs (what/where to read + how to localize + where to archive)."""
@@ -104,6 +145,10 @@ class FovResult:
     # Coverage provenance: frames_read vs frames_localized + partial flags, so
     # partial coverage (abort/error/dropped) is explicit, never silent.
     coverage: dict = field(default_factory=dict)
+    # The abort generation observed when this FOV's fate was sealed; lets an
+    # orchestrated caller re-arm exactly the aborts this FOV consumed (see
+    # clear_abort) without erasing a newer, not-yet-served request.
+    abort_generation: int = 0
 
     @property
     def partial(self) -> bool:
@@ -150,6 +195,11 @@ class LiveAnalysisService:
         self.hub = UpdateHub()
         self._run_id: str | None = None
         self._abort = threading.Event()
+        # Monotonic count of abort REQUESTS, so a per-FOV caller can clear
+        # exactly the requests a finished FOV consumed (clear_abort) without
+        # losing one that arrived after the FOV's fate was sealed.
+        self._abort_gen = 0
+        self._abort_lock = threading.Lock()
 
     # -- experiment lifecycle ----------------------------------------------
     def start_experiment(self, run_id: str | None = None) -> str:
@@ -176,25 +226,40 @@ class LiveAnalysisService:
         what's in flight, and the ``finally`` engages the laser interlock.
         """
         logger.warning("live-analysis early-abort requested")
-        self._abort.set()
+        with self._abort_lock:
+            self._abort_gen += 1
+            self._abort.set()
         self.hub.push_kind("state", self._run_id, state="abort_requested")
 
     def abort_requested(self) -> bool:
         """True while the early-abort flag is armed (see :meth:`clear_abort`)."""
         return self._abort.is_set()
 
-    def clear_abort(self) -> None:
+    def abort_generation(self) -> int:
+        """Monotonic count of abort requests so far (see :meth:`clear_abort`)."""
+        with self._abort_lock:
+            return self._abort_gen
+
+    def clear_abort(self, generation: int | None = None) -> None:
         """Re-arm after a per-FOV early-abort (orchestrated runs).
 
         The standalone WP-4 flow treats an early-abort as ending the
         experiment, so the flag only clears on :meth:`start_experiment`. In an
         ORCHESTRATED run the abort's scope is ONE FOV (initiative #3): the
         live-run coordinator clears the flag at the END of an aborted FOV so
-        the protocol continues with a fresh one. (Clearing at the START of the
-        next FOV instead would race a just-arrived abort: the acquisition
-        would end but the pipeline would record the FOV as clean.)
+        the protocol continues with a fresh one.
+
+        Parameters
+        ----------
+        generation : int or None
+            When given (``FovResult.abort_generation``), the flag clears ONLY
+            if no newer abort arrived since that FOV's fate was sealed — a
+            request landing in the gap stays armed and aborts the next FOV
+            instead of being silently lost. None clears unconditionally.
         """
-        self._abort.clear()
+        with self._abort_lock:
+            if generation is None or generation == self._abort_gen:
+                self._abort.clear()
 
     def shutdown(self, *, reason: str = "experiment end"):
         """End-of-experiment safety engage of the laser interlock. Never raises.
@@ -303,6 +368,11 @@ class LiveAnalysisService:
             error = repr(exc)
             logger.exception("live-analysis FOV failed")
         finally:
+            # Seal the abort bookkeeping for this FOV: requests up to here
+            # shaped its fate; anything newer belongs to the next FOV (the
+            # caller passes this to clear_abort so a late request survives).
+            with self._abort_lock:
+                abort_generation = self._abort_gen
             # --- T3 laser fail-safe (C21): abort and error ALWAYS engage;
             # a clean FOV end engages only in per-FOV mode (standalone WP-4).
             # The orchestrated path engages once at experiment end instead
@@ -411,6 +481,7 @@ class LiveAnalysisService:
             aborted=aborted,
             error=error,
             coverage=coverage,
+            abort_generation=abort_generation,
         )
 
     # -- internals ----------------------------------------------------------
@@ -423,19 +494,9 @@ class LiveAnalysisService:
         )
 
     def _post_record(self, run_id, payload: dict) -> dict | None:
-        if self._registry is None:
-            self.hub.push_kind("record", run_id, payload=payload, posted=False)
-            return None
-        try:
-            ids = post_fov_record(self._registry, payload)
-            self.hub.push_kind("record", run_id, ids=ids, posted=True)
-            return ids
-        except (
-            Exception
-        ) as exc:  # noqa: BLE001 - a registry outage isn't fatal
-            logger.warning("posting FOV record failed: {!r}".format(exc))
-            self.hub.push_kind("record", run_id, error=repr(exc), posted=False)
-            return None
+        return surface_record(
+            self.hub, run_id, self._registry, payload, post_fov_record
+        )
 
 
 # Re-exported so callers don't reach into archive.py for the constants.
@@ -446,4 +507,5 @@ __all__ = [
     "WRITE_TARGET_LOCAL",
     "WRITE_TARGET_POOL",
     "DEFAULT_LOCALIZE_PARAMS",
+    "surface_record",
 ]

@@ -139,6 +139,10 @@ class ImagingSystem(AbstractSystem):
         # and image_process_fn tees every frame into it (plus honors its
         # end-this-FOV early-abort). None = no live analysis, zero overhead.
         self.frame_tap = None
+        # On-disk path of the most recently finished acquisition's dataset
+        # (best-effort; None when unknown) — the live-run coordinator stamps
+        # it on the FOV's archive config at end-of-FOV.
+        self.last_dataset_path = None
 
         # Within-acquisition progress (for the GUI step bar): frames acquired
         # so far / total, and whether an acquisition is currently running.
@@ -376,6 +380,8 @@ class ImagingSystem(AbstractSystem):
         # WP-LIVE-INT: bracket the FOV for the live-analysis tap (try/finally
         # so the reader always gets its end-of-FOV sentinel, even when the
         # acquisition raises — otherwise the live pipeline would wait forever).
+        viewer = None  # only assigned on the show_display path below
+        self.last_dataset_path = None
         tap = self.frame_tap
         if tap is not None:
             tap.start_fov(acq_name, acquisition_config)
@@ -396,6 +402,13 @@ class ImagingSystem(AbstractSystem):
                     order="tcpz",
                 )
                 acq.acquire(events)
+                try:
+                    # Actual on-disk dataset dir (pycromanager may suffix
+                    # the requested name) — consumed by the live-analysis
+                    # archive step. Best-effort only.
+                    self.last_dataset_path = acq.get_dataset().path
+                except Exception:
+                    self.last_dataset_path = None
                 if self.protocol["parameters"].get("show_display", True):
                     try:
                         viewer = acq.get_viewer()
