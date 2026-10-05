@@ -54,15 +54,70 @@ class _BaseEmulatedSystem(AbstractSystem):
 
 
 class EmulatedImagingSystem(_BaseEmulatedSystem):
-    """Records 'acquire' entries instead of talking to pycromanager."""
+    """Records 'acquire' entries instead of talking to pycromanager.
+
+    WP-LIVE-INT: when the live-run coordinator attaches a ``frame_tap``, each
+    'acquire' entry also synthesizes a short burst of MockFrameSource frames
+    through it (mirroring ``ImagingSystem.record_movie``'s bracketing +
+    per-frame push), so the Emulator setup exercises the full orchestrated
+    live-analysis path — including the end-this-FOV early-abort — with no
+    instrument. ``live_camera_info`` / ``live_analysis_options`` play the role
+    of the real setup's imaging-config ``camera_info`` / ``live_analysis``
+    blocks (thread-pool compute + a low gradient threshold keep it fast and
+    make the synthetic spots localizable).
+    """
+
+    # Full picasso photon-conversion info (the fit refuses partial info).
+    live_camera_info = {
+        "Baseline": 100.0,
+        "Sensitivity": 0.46,
+        "Gain": 1,
+        "Qe": 0.82,
+        "Pixelsize": 130.0,
+    }
+    live_analysis_options = {
+        "use_processes": False,
+        "n_workers": 2,
+        "batch_size": 20,
+        "localize_params": {"Box Size": 7, "Min. Net Gradient": 200},
+        "first_frame_timeout_s": 10.0,
+    }
+    # Cap synthetic frames per acquire so emulated runs stay near-instant
+    # (the emulator's acquisitions are instantaneous anyway).
+    live_max_frames = 60
 
     def __init__(self):
         super().__init__()
         self.acquisitions = []
+        self.frame_tap = None
 
     def _on_entry(self, entry):
         if entry.get("$type") == "acquire":
             self.acquisitions.append(entry)
+            self._feed_tap(entry)
+
+    def _feed_tap(self, entry):
+        tap = self.frame_tap
+        if tap is None:
+            return
+        from PycroFlow.live_analysis.frame_source import MockFrameSource
+
+        n = int(min(entry.get("frames") or 30, self.live_max_frames))
+        name = "emulated_{}".format(entry.get("message", "acquire"))
+        tap.start_fov(name, {"frames": n, "t_exp": entry.get("t_exp")})
+        try:
+            source = MockFrameSource(n_frames=n, seed=0)
+            done = False
+            for batch in source.batches(8):
+                for frame in batch.frames:
+                    if tap.fov_end_requested():
+                        done = True
+                        break
+                    tap.push(frame, None)
+                if done:
+                    break
+        finally:
+            tap.end_fov()
 
     def close(self):
         """No-op cleanup (matches ImagingSystem.close for SystemService)."""

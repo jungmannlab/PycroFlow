@@ -123,6 +123,15 @@ class LiveAnalysisService:
         The illumination system for the laser interlock (None -> interlock no-op).
     lasers_off_finally : bool
         Master switch for the T3 interlock (default ON, fail-safe).
+    interlock_per_fov : bool
+        When True (default — the standalone WP-4 behaviour, where one FOV is
+        effectively the run), the interlock engages on EVERY FOV end. The
+        orchestrated path (WP-LIVE-INT) passes False: between rounds the
+        ILLUMINATION HANDLER owns the lasers (its protocol entries set the
+        non-acquisition power), so a clean-FOV all-off would race it. Abort
+        and error still engage immediately regardless, and :meth:`shutdown`
+        provides the matching end-of-experiment engage (C21's
+        "end-of-run/on-abort" scope).
     """
 
     def __init__(
@@ -131,11 +140,13 @@ class LiveAnalysisService:
         registry_client=None,
         illumination_system=None,
         lasers_off_finally: bool = True,
+        interlock_per_fov: bool = True,
     ):
         self._registry = registry_client
         self._interlock = LaserInterlock(
             illumination_system, enabled=lasers_off_finally
         )
+        self._interlock_per_fov = interlock_per_fov
         self.hub = UpdateHub()
         self._run_id: str | None = None
         self._abort = threading.Event()
@@ -167,6 +178,38 @@ class LiveAnalysisService:
         logger.warning("live-analysis early-abort requested")
         self._abort.set()
         self.hub.push_kind("state", self._run_id, state="abort_requested")
+
+    def abort_requested(self) -> bool:
+        """True while the early-abort flag is armed (see :meth:`clear_abort`)."""
+        return self._abort.is_set()
+
+    def clear_abort(self) -> None:
+        """Re-arm after a per-FOV early-abort (orchestrated runs).
+
+        The standalone WP-4 flow treats an early-abort as ending the
+        experiment, so the flag only clears on :meth:`start_experiment`. In an
+        ORCHESTRATED run the abort's scope is ONE FOV (initiative #3): the
+        live-run coordinator clears the flag at the END of an aborted FOV so
+        the protocol continues with a fresh one. (Clearing at the START of the
+        next FOV instead would race a just-arrived abort: the acquisition
+        would end but the pipeline would record the FOV as clean.)
+        """
+        self._abort.clear()
+
+    def shutdown(self, *, reason: str = "experiment end"):
+        """End-of-experiment safety engage of the laser interlock. Never raises.
+
+        The orchestrated path suppresses the per-clean-FOV engage
+        (``interlock_per_fov=False``); this is the matching end-of-run engage
+        (C21). Idempotent — engaging an already-dark system is a no-op.
+        """
+        result = None
+        try:
+            result = self._interlock.engage(reason=reason)
+        except Exception as exc:  # noqa: BLE001 - interlock must never raise
+            logger.error("shutdown interlock raised: {!r}".format(exc))
+        self.hub.push_kind("state", self._run_id, state="experiment_ended")
+        return result
 
     # -- per-FOV run --------------------------------------------------------
     def run_fov(self, cfg: FovConfig) -> FovResult:
@@ -246,25 +289,37 @@ class LiveAnalysisService:
                     self._push_metrics(run_id, metrics, backend)
                     last_push = now
 
+            # The source can end (sentinel) before the per-batch abort check
+            # runs again — e.g. an early-abort that already stopped the
+            # producer, with the last frames still in flight. Record the
+            # abort honestly instead of reporting a clean FOV the operator
+            # in fact aborted (coverage still shows what was localized).
+            if self._abort.is_set():
+                aborted = True
+
         except (
             Exception
         ) as exc:  # noqa: BLE001 - captured; interlock still runs
             error = repr(exc)
             logger.exception("live-analysis FOV failed")
         finally:
-            # --- T3 laser fail-safe: ALWAYS runs (normal / abort / crash) ---
-            try:
-                interlock_result = self._interlock.engage(
-                    reason=(
-                        "fov end"
-                        if not (aborted or error)
-                        else ("abort" if aborted else "error")
+            # --- T3 laser fail-safe (C21): abort and error ALWAYS engage;
+            # a clean FOV end engages only in per-FOV mode (standalone WP-4).
+            # The orchestrated path engages once at experiment end instead
+            # (see ``interlock_per_fov`` / :meth:`shutdown`).
+            if self._interlock_per_fov or aborted or error:
+                try:
+                    interlock_result = self._interlock.engage(
+                        reason=(
+                            "fov end"
+                            if not (aborted or error)
+                            else ("abort" if aborted else "error")
+                        )
                     )
-                )
-            except (
-                Exception
-            ) as exc:  # noqa: BLE001 - interlock must never raise
-                logger.error("interlock itself raised: {!r}".format(exc))
+                except (
+                    Exception
+                ) as exc:  # noqa: BLE001 - interlock must never raise
+                    logger.error("interlock itself raised: {!r}".format(exc))
 
             # Drain in-flight localizations + tear the pool down.
             if backend is not None:

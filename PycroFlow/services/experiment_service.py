@@ -23,6 +23,7 @@ import yaml
 from loguru import logger
 
 from PycroFlow.orchestration import ProtocolOrchestrator
+from PycroFlow.services.live_run import LiveRunCoordinator
 
 
 class ExperimentState(enum.Enum):
@@ -78,6 +79,12 @@ class ExperimentService:
         self._lock = threading.Lock()
         self._state_observers: List[StateObserver] = []
         self._log_observers: List[LogObserver] = []
+        # WP-LIVE-INT: live analysis over the orchestrated run (lazy; a run
+        # without camera_info / with the env kill switch is unchanged).
+        self._live = LiveRunCoordinator()
+        # Optional provenance: the microscope setup name, set by frontends
+        # that know it (the GUI toolbar); rides on the experiment record.
+        self.setup_name: Optional[str] = None
 
     # --- Subsystem wiring ---------------------------------------------
 
@@ -249,6 +256,16 @@ class ExperimentService:
                     "will finish immediately. Connect hardware (or the "
                     "Emulator setup) in the System tab first."
                 )
+            # WP-LIVE-INT: attach live analysis before the handlers start, so
+            # the frame tap is in place for the first acquire step. Only when
+            # the protocol has imaging steps — a fluid-only run has no frames.
+            if "img" in (self._protocol or {}):
+                self._live.start_run(
+                    imaging_system=self._imaging_system,
+                    illumination_system=self._illumination_system,
+                    design=self._experiment_design,
+                    setup_name=self.setup_name,
+                )
             self._orchestrator.start_orchestration()
             self._set_state(ExperimentState.ORCHESTRATING)
         if self._state in (
@@ -272,6 +289,10 @@ class ExperimentService:
         if self._orchestrator is None:
             return
         self._orchestrator.abort_protocol()
+        # Tear live analysis down too: the orchestrator abort already ends the
+        # in-flight MDA (acq_abort); this aborts the live pipeline's FOV,
+        # joins its worker, and engages the end-of-run laser interlock.
+        self._live.stop_run(abort=True)
         self._set_state(ExperimentState.ABORTED)
 
     def clear_design(self) -> None:
@@ -307,6 +328,9 @@ class ExperimentService:
         if self._orchestrator is None:
             return
         self._orchestrator.end_orchestration()
+        # Live analysis teardown: drain the last FOV's pipeline and engage
+        # the end-of-run laser interlock (C21).
+        self._live.stop_run()
         self._set_state(ExperimentState.FINISHED)
 
     # --- Status / introspection ---------------------------------------
@@ -320,6 +344,21 @@ class ExperimentService:
         """Escape hatch for code that needs the raw orchestrator (tests,
         legacy paths). Avoid in new frontend code."""
         return self._orchestrator
+
+    @property
+    def live_service(self):
+        """The run's LiveAnalysisService (for GUI clients), or None.
+
+        Available from run start until teardown; a frontend subscribes its
+        live view (e.g. the Live tab's ``LiveShell.connect_service``) when the
+        experiment enters ORCHESTRATING/RUNNING.
+        """
+        return self._live.service
+
+    @property
+    def live_run_id(self) -> Optional[str]:
+        """The live-analysis ULID run_id of record (None = live analysis off)."""
+        return self._live.run_id
 
     @property
     def protocol(self) -> Optional[Dict]:

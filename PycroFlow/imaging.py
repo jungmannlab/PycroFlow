@@ -134,6 +134,12 @@ class ImagingSystem(AbstractSystem):
 
         self.handler_ref = None
 
+        # WP-LIVE-INT: optional live-analysis frame tap. When the live-run
+        # coordinator attaches a FrameTap here, record_movie brackets each FOV
+        # and image_process_fn tees every frame into it (plus honors its
+        # end-this-FOV early-abort). None = no live analysis, zero overhead.
+        self.frame_tap = None
+
         # Within-acquisition progress (for the GUI step bar): frames acquired
         # so far / total, and whether an acquisition is currently running.
         self.curr_frame = 0
@@ -367,26 +373,38 @@ class ImagingSystem(AbstractSystem):
         self.studio.get_application().refresh_gui()
         if self.protocol["parameters"].get("show_progress"):
             self.probar = ProgressBar("Acquisition", n_frames)
-        with Acquisition(
-            directory=acq_dir,
-            name=acq_name,
-            show_display=self.protocol["parameters"].get("show_display", True),
-            image_process_fn=self.image_process_fn,
-        ) as acq:
-            events = multi_d_acquisition_events(
-                num_time_points=n_frames,
-                time_interval_s=0,  # t_exp/1000,
-                # channel_group=chan_group, channels=[filter],
-                channel_exposures_ms=[t_exp],
-                order="tcpz",
-            )
-            acq.acquire(events)
-            if self.protocol["parameters"].get("show_display", True):
-                try:
-                    viewer = acq.get_viewer()
-                except Exception:
-                    viewer = None
-                    pass
+        # WP-LIVE-INT: bracket the FOV for the live-analysis tap (try/finally
+        # so the reader always gets its end-of-FOV sentinel, even when the
+        # acquisition raises — otherwise the live pipeline would wait forever).
+        tap = self.frame_tap
+        if tap is not None:
+            tap.start_fov(acq_name, acquisition_config)
+        try:
+            with Acquisition(
+                directory=acq_dir,
+                name=acq_name,
+                show_display=self.protocol["parameters"].get(
+                    "show_display", True
+                ),
+                image_process_fn=self.image_process_fn,
+            ) as acq:
+                events = multi_d_acquisition_events(
+                    num_time_points=n_frames,
+                    time_interval_s=0,  # t_exp/1000,
+                    # channel_group=chan_group, channels=[filter],
+                    channel_exposures_ms=[t_exp],
+                    order="tcpz",
+                )
+                acq.acquire(events)
+                if self.protocol["parameters"].get("show_display", True):
+                    try:
+                        viewer = acq.get_viewer()
+                    except Exception:
+                        viewer = None
+                        pass
+        finally:
+            if tap is not None:
+                tap.end_fov()
         time.sleep(0.2)
         if viewer is not None and self.protocol["parameters"].get(
             "close_display_after_acquisition", True
@@ -449,6 +467,16 @@ class ImagingSystem(AbstractSystem):
                     to the end. Execute 'resume_protocol' when ready."
                 )
                 # abort the acquisition
+                event_queue.put(None)
+
+        # WP-LIVE-INT: tee the frame to the live-analysis tap (non-blocking,
+        # exception-proof inside the tap) and honor its end-this-FOV request —
+        # the live early-abort ends ONLY the current MDA (frames so far stay
+        # saved); the protocol continues with its next entry.
+        tap = self.frame_tap
+        if tap is not None:
+            tap.push(img, meta)
+            if tap.fov_end_requested():
                 event_queue.put(None)
 
         # should the acquisition be aborted?

@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **WP-LIVE-INT — live analysis on the orchestrated product path.** A normal
+  `pycroflow`/`pycroflow-gui` run now gets the WP-4 live pipeline without any
+  standalone launcher: `ExperimentService` owns a `LiveRunCoordinator`
+  (`services/live_run.py`) that lazily builds the `LiveAnalysisService` at run
+  start, mints the ULID run_id of record, runs one `run_fov` per imaging
+  `acquire` step, and tears down (with the C21 end-of-run laser interlock) on
+  finish/abort. Frames come from the production acquisition via a new
+  `FrameTap` (`live_analysis/frame_tap.py`): `ImagingSystem.record_movie`
+  brackets each FOV and `image_process_fn` tees every frame into an
+  `ImageQueueFrameSource` (non-blocking; the hot path only pays a queue put).
+  Enabled when the setup's imaging config carries a picasso `camera_info`
+  block (tunables via a `live_analysis` block); `PYCROFLOW_LIVE_ANALYSIS=0`
+  is the kill switch. The `EmulatedImagingSystem` synthesizes frames through
+  the same tap, so the Emulator setup exercises the whole path.
+- **"Live" tab in the main GUI**: the WP-GUI `LiveShell` is mounted in
+  `PycroFlowMainWindow`, passive until a run starts, auto-connected to the
+  run's live service and unsubscribed after. Its sidebar **Early-abort** ends
+  only the CURRENT FOV's acquisition (frames so far stay saved, honest
+  partial-coverage record, immediate T3 interlock) and the protocol continues
+  — distinct from the orchestrator Abort in the Run Sequence tab.
+- **Registry auto-connect**: a shared from-env client factory
+  (`services/registry.py`, `PAINT_REGISTRY_URL` / `PAINT_REGISTRY_TOKEN` /
+  `PYCROFLOW_REGISTRY_BUFFER` → WP-3 `BufferedRegistryClient`; unset = quietly
+  disabled) now feeds the live service in production, and each run writes an
+  **experiment-level record** (`build_experiment_payload` /
+  `post_experiment_record`) that the per-FOV `acquisition_run` rows link to
+  via `experiment_id`.
+
+### Fixed
+
+- `post_fov_record` now pre-mints row ids client-side, so the
+  acquisition→fov→analysis→metrics FK chain works with the fire-and-forget
+  `BufferedRegistryClient` (whose writes return an acknowledgement, not the
+  row — chaining on the response id raised `KeyError` in production) and
+  dedups exactly on at-least-once replay.
+- `LiveAnalysisService.run_fov` records an early-abort honestly even when the
+  frame source ends (sentinel) before the per-batch abort check runs again —
+  previously such a FOV could be reported clean.
+
 ## [0.2.0] - 2026-09-30
 
 First deployable release of the live-analysis slice (C40 "release when useful").

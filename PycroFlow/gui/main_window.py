@@ -1,7 +1,7 @@
 """PycroFlowMainWindow — the top-level GUI window.
 
 A toolbar (setup selector + Connect) over a tab widget: Experiment
-Design, Run Sequence, Fluid, Imaging, Monet. The run controls (Load /
+Design, Run Sequence, Fluid, Imaging, Live, Monet. The run controls (Load /
 Start / Pause-Resume / Abort) live in the Run Sequence tab. The window also
 coordinates
 hardware connection: the microscope **setup** is chosen in the toolbar, and
@@ -36,6 +36,7 @@ from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
 from PycroFlow.gui.tabs.fluid_tab import FluidTab
 from PycroFlow.gui.tabs.imaging_tab import ImagingTab
 from PycroFlow.gui.tabs.monet_tab import MonetTab
+from PycroFlow.gui.live.shell import LiveShell
 
 # Experiment states during which hardware must not be touched manually (the
 # orchestrator owns the instruments).
@@ -105,11 +106,20 @@ class PycroFlowMainWindow(QMainWindow):
             on_connect=lambda: self._connect_system("imaging"),
         )
         self.monet_tab = MonetTab()
+        # WP-LIVE-INT: the WP-GUI operator shell as a tab, passive until a run
+        # creates a LiveAnalysisService (connected in _on_experiment_state).
+        # Its manual run controls are inert by design (run control lives in
+        # the Run Sequence tab); the sidebar Early-abort stays usable and ends
+        # only the CURRENT FOV's acquisition — the protocol then continues —
+        # so it is deliberately NOT run-locked like the other tabs' controls.
+        self.live_tab = LiveShell()
+        self._live_connected = None
 
         self.tabs.addTab(self.design_tab, "Experiment Design")
         self.tabs.addTab(self.run_sequence_tab, "Run Sequence")
         self.tabs.addTab(self.fluid_tab, "Fluid")
         self.tabs.addTab(self.imaging_tab, "Imaging")
+        self.tabs.addTab(self.live_tab, "Live")
         self.tabs.addTab(self.monet_tab, "Monet")
         self.setCentralWidget(self.tabs)
 
@@ -147,6 +157,8 @@ class PycroFlowMainWindow(QMainWindow):
             self._refresh_status()
             return
         self.monet_tab.set_setup(self._system_service.get_monet_setup())
+        # Provenance for the registry's experiment record (WP-LIVE-INT).
+        self._experiment_service.setup_name = name
         self._refresh_status()
         # If a design is already loaded, connect for the new setup.
         if self._experiment_service.experiment_design:
@@ -161,6 +173,20 @@ class PycroFlowMainWindow(QMainWindow):
     def _on_experiment_state(self, old, new):
         """Lock/unlock manual hardware access on experiment state changes."""
         self._lock_hardware(new in _RUN_LOCK_STATES)
+        self._sync_live_tab(new)
+
+    def _sync_live_tab(self, state):
+        """Attach the Live tab to the run's live-analysis stream (and detach
+        after). The shell keeps showing the finished run's last metrics —
+        close_client only unsubscribes."""
+        if state in _RUN_LOCK_STATES:
+            service = self._experiment_service.live_service
+            if service is not None and service is not self._live_connected:
+                self.live_tab.connect_service(service)
+                self._live_connected = service
+        elif self._live_connected is not None:
+            self.live_tab.close_client()
+            self._live_connected = None
 
     def _lock_hardware(self, locked):
         self.setup_combo.setEnabled(not locked)
@@ -343,6 +369,10 @@ class PycroFlowMainWindow(QMainWindow):
         release hardware locks."""
         try:
             self._experiment_service.abort()
+        except Exception:
+            pass
+        try:
+            self.live_tab.close_client()
         except Exception:
             pass
         self.monet_tab.shutdown()

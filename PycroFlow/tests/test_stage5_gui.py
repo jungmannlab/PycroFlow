@@ -109,11 +109,41 @@ class TestMainWindow(unittest.TestCase):
 
     def test_builds_tabs(self):
         w = self._build()
-        self.assertEqual(w.tabs.count(), 5)
+        self.assertEqual(w.tabs.count(), 6)
         self.assertEqual(
-            [w.tabs.tabText(i) for i in range(5)],
-            ["Experiment Design", "Run Sequence", "Fluid", "Imaging", "Monet"],
+            [w.tabs.tabText(i) for i in range(6)],
+            [
+                "Experiment Design",
+                "Run Sequence",
+                "Fluid",
+                "Imaging",
+                "Live",
+                "Monet",
+            ],
         )
+
+    def test_live_tab_attaches_to_runs_live_service(self):
+        """WP-LIVE-INT: entering a run state connects the Live tab's shell to
+        the run's LiveAnalysisService; leaving it unsubscribes (the shell
+        keeps showing the last metrics)."""
+        from PycroFlow.live_analysis.service import LiveAnalysisService
+        from PycroFlow.services import ExperimentState
+
+        w = self._build()
+        self.assertIsNone(w._live_connected)
+        service = LiveAnalysisService()
+        w._experiment_service._live._service = service
+        w._on_experiment_state(
+            ExperimentState.LOADED, ExperimentState.ORCHESTRATING
+        )
+        self.assertIs(w._live_connected, service)
+        # The shell's bridge subscribed to the service's update hub.
+        self.assertIn(w.live_tab._bridge.seam_client, service.hub._clients)
+        w._on_experiment_state(
+            ExperimentState.RUNNING, ExperimentState.FINISHED
+        )
+        self.assertIsNone(w._live_connected)
+        self.assertNotIn(w.live_tab._bridge.seam_client, service.hub._clients)
 
     def test_window_title_has_version(self):
         from PycroFlow import __version__
