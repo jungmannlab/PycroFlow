@@ -1,31 +1,11 @@
-# Real-hardware template: Hamilton syringe pumps + ibidi MultiFlOW multiplexer.
-#
-# Copy this file to configs/setups/<YourSetup>.yaml and edit the values marked
-# "EDIT" for your rig. Reservoirs are multiplexed by the ibidi MultiFlOW
-# 24-channel actuator unit instead of Hamilton MVP rotary valves; the syringe
-# pumps stay Hamilton.
-#
-# Sections are grouped by ROLE, and each names its driver: `fluid.pumps`,
-# `fluid.multiplexer`, `imaging`, `illumination`.
-#
-# Before a run:
-#   * Set `illumination.config` to the monet CONFIGS key of the MICROSCOPE this
-#     runs on — that is the microscope's name, not this setup's name (this file
-#     ships configured for the Mercury microscope).
-#   * Set `fluid.pumps.interface.COM` to the pumps' serial port and
-#     `fluid.multiplexer.port` to the COM port the MultiFlOW enumerates as
-#     (a *separate* USB serial connection).
-#   * Confirm the pump addresses/syringes and the reservoir<->channel wiring.
-
-setup: Ibidi          # this setup's own name (shown in the setup selector)
+setup: Ibidi
 emulated: false
-
 fluid:
   system_type: legacy
   pumps:
     driver: hamilton-psd
     interface:
-      COM: '3'        # EDIT: serial port of the Hamilton pump bus
+      COM: '3'
       baud: 9600
     pump_a:
       address: 1
@@ -45,95 +25,311 @@ fluid:
       output_pos: out
       motorsteps_per_step: 1
       speed_factor: 2
-  # Reservoir selection: ibidi MultiFlOW 24-channel actuator unit, on its own
-  # USB serial port. No Hamilton MVP rotary valves in this setup.
   multiplexer:
     driver: ibidi-multiflow
-    port: '4'         # EDIT: COM port of the MultiFlOW device
-    baud: 115200      # device runs 115200 8N1; only ';' terminates a command
+    port: '4'
+    baud: 115200
     channels: 24
-    address: ibidi    # key referenced by each reservoir's valve_pos
-    # Physical port layout for the GUI's live wiring schematic (advisory —
-    # no effect on routing). Ports are numbered left-to-right, bottom-to-top
-    # on a grid `grid_cols` wide: port 1 lower left, port 6 lower right, port
-    # 7 directly above port 1. (The tubing between ports meanders; that shows
-    # up in the reservoir routes, not the numbering.) `pump_channel` is the
-    # port tubed to pump_a.
+    address: ibidi
     grid_cols: 6
     pump_channel: 1
-    # Switch one valve at a time. The unit cannot supply the inrush current
-    # of many valves actuating together, so the single atomic SETBATCHVALVES
-    # command leaves some of them unmoved — silently, since it still answers
-    # OK. Set batch_valves: true to go back to it once the hardware allows;
-    # the resulting routing is identical either way.
     batch_valves: false
-    switch_delay: 0.01   # s between consecutive single-valve commands
+    switch_delay: 0.01
   flush_pos:
     inject: in
     flush: out
-  # Each reservoir maps to ibidi channel(s) (1..24). Selecting a reservoir
-  # opens exactly those and closes all others; the pump (address 1) is set to
-  # its input position. Trim this list to the channels you actually use.
-  #
-  # Unlike a Hamilton rotary valve (one position at a time), these valves are
-  # independent, so a reservoir reached through several channels at once lists
-  # them:  - {id: 3, valve_pos: {ibidi: [1, 3], 1: in}}
   reservoirs:
-    - {id: 1,  valve_pos: {ibidi: [1],  1: in}}
-    - {id: 2,  valve_pos: {ibidi: [1, 2],  1: in}}
-    - {id: 3,  valve_pos: {ibidi: [1, 3],  1: in}}
-    - {id: 4,  valve_pos: {ibidi: [1, 4],  1: in}}
-    - {id: 5,  valve_pos: {ibidi: [1, 5],  1: in}}
-    - {id: 6,  valve_pos: {ibidi: [1, 6],  1: in}}
-    - {id: 12,  valve_pos: {ibidi: [1, 6, 12],  1: in}}
-    - {id: 11,  valve_pos: {ibidi: [1, 6, 12, 11],  1: in}}
-    - {id: 10,  valve_pos: {ibidi: [1, 6, 12, 10],  1: in}}
-    - {id: 9, valve_pos: {ibidi: [1, 6, 12, 9], 1: in}}
-    - {id: 8, valve_pos: {ibidi: [1, 6, 12, 8], 1: in}}
-    - {id: 7,  valve_pos: {ibidi: [1, 6, 12, 7],  1: in}}
-    - {id: 13,  valve_pos: {ibidi: [1, 6, 12, 7, 13],  1: in}}
-    - {id: 14, valve_pos: {ibidi: [1, 6, 12, 7, 13, 14], 1: in}}
-    - {id: 15, valve_pos: {ibidi: [1, 6, 12, 7, 13, 15], 1: in}}
-    - {id: 16, valve_pos: {ibidi: [1, 6, 12, 7, 13, 16], 1: in}}
-    - {id: 17, valve_pos: {ibidi: [1, 6, 12, 7, 13, 17], 1: in}}
-    - {id: 18,  valve_pos: {ibidi: [1, 6, 12, 7, 13, 18],  1: in}}
-    - {id: 24,  valve_pos: {ibidi: [1, 6, 12, 7, 13, 18, 24],  1: in}}
-    - {id: 23, valve_pos: {ibidi: [1, 6, 12, 7, 13, 18, 24, 23], 1: in}}
-    - {id: 22, valve_pos: {ibidi: [1, 6, 12, 7, 13, 18, 24, 22], 1: in}}
-    - {id: 21, valve_pos: {ibidi: [1, 6, 12, 7, 13, 18, 24, 21], 1: in}}
-    - {id: 20, valve_pos: {ibidi: [1, 6, 12, 7, 13, 18, 24, 20], 1: in}}
-    - {id: 19, valve_pos: {ibidi: [1, 6, 12, 7, 13, 18, 24, 19], 1: in}}
-  # Tubing volumes (ul) — EDIT to your measured values (run a tubing
-  # calibration). With the multiplexer each reservoir connects directly to
-  # pump_a: one segment per reservoir plus the pump->sample / pump->waste legs.
+  - id: 1
+    valve_pos:
+      ibidi:
+      - 1
+      1: in
+  - id: 2
+    valve_pos:
+      ibidi:
+      - 1
+      - 2
+      1: in
+  - id: 3
+    valve_pos:
+      ibidi:
+      - 1
+      - 3
+      1: in
+  - id: 4
+    valve_pos:
+      ibidi:
+      - 1
+      - 4
+      1: in
+  - id: 5
+    valve_pos:
+      ibidi:
+      - 1
+      - 5
+      1: in
+  - id: 6
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      1: in
+  - id: 12
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      1: in
+  - id: 11
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 11
+      1: in
+  - id: 10
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 10
+      1: in
+  - id: 9
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 9
+      1: in
+  - id: 8
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 8
+      1: in
+  - id: 7
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 7
+      1: in
+  - id: 13
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 7
+      - 13
+      1: in
+  - id: 14
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 7
+      - 13
+      - 14
+      1: in
+  - id: 15
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 7
+      - 13
+      - 15
+      1: in
+  - id: 16
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 7
+      - 13
+      - 16
+      1: in
+  - id: 17
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 7
+      - 13
+      - 17
+      1: in
+  - id: 18
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 7
+      - 13
+      - 18
+      1: in
+  - id: 24
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 7
+      - 13
+      - 18
+      - 24
+      1: in
+  - id: 23
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 7
+      - 13
+      - 18
+      - 24
+      - 23
+      1: in
+  - id: 22
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 7
+      - 13
+      - 18
+      - 24
+      - 22
+      1: in
+  - id: 21
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 7
+      - 13
+      - 18
+      - 24
+      - 21
+      1: in
+  - id: 20
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 7
+      - 13
+      - 18
+      - 24
+      - 20
+      1: in
+  - id: 19
+    valve_pos:
+      ibidi:
+      - 1
+      - 6
+      - 12
+      - 7
+      - 13
+      - 18
+      - 24
+      - 19
+      1: in
   tubing:
-    - {from: R1,  to: pump_a, volume: 325}
-    - {from: R2,  to: R1, volume: 10}
-    - {from: R3,  to: R2, volume: 10}
-    - {from: R4,  to: R3, volume: 10}
-    - {from: R5,  to: R4, volume: 10}
-    - {from: R6,  to: R5, volume: 10}
-    - {from: R12,  to: R6, volume: 50}
-    - {from: R11,  to: R12, volume: 10}
-    - {from: R10,  to: R11, volume: 10}
-    - {from: R9, to: R10, volume: 10}
-    - {from: R8, to: R9, volume: 10}
-    - {from: R7, to: R8, volume: 10}
-    - {from: R13, to: R7, volume: 50}
-    - {from: R14, to: R13, volume: 10}
-    - {from: R15, to: R14, volume: 10}
-    - {from: R16, to: R15, volume: 10}
-    - {from: R17, to: R16, volume: 10}
-    - {from: R18, to: R17, volume: 10}
-    - {from: R24, to: R18, volume: 50}
-    - {from: R23, to: R24, volume: 10}
-    - {from: R22, to: R23, volume: 10}
-    - {from: R21, to: R22, volume: 10}
-    - {from: R20, to: R21, volume: 10}
-    - {from: R19, to: R20, volume: 10}
-    - {from: pump_a, to: sample, volume: 325}
-    - {from: pump_a, to: flush_waste, volume: 650}
-
+  - from: R1
+    to: pump_a
+    volume: 325
+  - from: R2
+    to: R1
+    volume: 10
+  - from: R3
+    to: R2
+    volume: 10
+  - from: R4
+    to: R3
+    volume: 10
+  - from: R5
+    to: R4
+    volume: 10
+  - from: R6
+    to: R5
+    volume: 10
+  - from: R12
+    to: R6
+    volume: 50
+  - from: R11
+    to: R12
+    volume: 10
+  - from: R10
+    to: R11
+    volume: 10
+  - from: R9
+    to: R10
+    volume: 10
+  - from: R8
+    to: R9
+    volume: 10
+  - from: R7
+    to: R8
+    volume: 10
+  - from: R13
+    to: R7
+    volume: 50
+  - from: R14
+    to: R13
+    volume: 10
+  - from: R15
+    to: R14
+    volume: 10
+  - from: R16
+    to: R15
+    volume: 10
+  - from: R17
+    to: R16
+    volume: 10
+  - from: R18
+    to: R17
+    volume: 10
+  - from: R24
+    to: R18
+    volume: 50
+  - from: R23
+    to: R24
+    volume: 10
+  - from: R22
+    to: R23
+    volume: 10
+  - from: R21
+    to: R22
+    volume: 10
+  - from: R20
+    to: R21
+    volume: 10
+  - from: R19
+    to: R20
+    volume: 10
+  - from: pump_a
+    to: sample
+    volume: 325
+  - from: pump_a
+    to: flush_waste
+    volume: 650
 imaging:
   pfs_pars:
     tag_pfs: TIPFSOffset
@@ -142,20 +338,15 @@ imaging:
     prop_state: State
     prop_status: Status
     deltat: 10
-
 illumination:
   backend: monet
-  # EDIT: the monet CONFIGS key of the MICROSCOPE this fluidics setup runs on
-  # — not this setup's name. Ships pointing at the Mercury microscope.
-  config: Mercury
-
+  config: Mercury_nopf
 monitoring:
-  output_dir: ./fluidics_cam
   backend: dshow
   fps: 5
   retention_days: 14
-  # source: emulator   # inferred from `emulated: true`; set explicitly on a rig
   cameras:
-    - {role: reservoir, device: 0, width: 320, height: 240}
-    - {role: pump,      device: 1, width: 320, height: 240}
-    - {role: sample,    device: 2, width: 320, height: 240}
+  - role: reservoir
+    device: 0
+    width: 640
+    height: 480

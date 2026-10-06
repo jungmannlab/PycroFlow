@@ -101,11 +101,9 @@ illumination:
 # `output_dir` is the pool/archive the per-round clips land in; here it points
 # at a scratch dir so the emulated app writes somewhere harmless.
 monitoring:
-  output_dir: ./fluidics_cam
+  # output_dir: ./fluidics_cam
   fps: 5
   retention_days: 14
   # source: emulator   # inferred from `emulated: true`; set explicitly on a rig
   cameras:
     - {role: reservoir, device: 0, width: 320, height: 240}
-    - {role: pump,      device: 1, width: 320, height: 240}
-    - {role: sample,    device: 2, width: 320, height: 240}
