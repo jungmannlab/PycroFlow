@@ -114,6 +114,11 @@ class FrameSource(abc.ABC):
     #: True for lossless sources safe to use as the authoritative stream.
     lossless: bool = True
 
+    #: Newest frame (ndarray) as a cheap display tap for live thumbnails —
+    #: None until a source chooses to maintain it (the peek and mock sources
+    #: do). Part of the contract so new sources know preview depends on it.
+    latest_frame = None
+
     @abc.abstractmethod
     def batches(self, batch_size: int) -> Iterator[Batch]:
         """Yield :class:`Batch` objects until the source is closed/exhausted.
@@ -366,6 +371,11 @@ class RamPeekFrameSource(FrameSource):
         MM ZMQ bridge port.
     maxsize : int
         Internal queue cap; when full the oldest frame is dropped (fresh-first).
+    camera_info : dict or None
+        Picasso photon-conversion info returned by :meth:`camera_info` — MM
+        tags don't carry it, so a caller that LOCALIZES the peeked stream
+        (the Live-tab preview) must pass the setup's values. None keeps the
+        WP-4 view-only behaviour.
     """
 
     lossless = False
@@ -856,7 +866,6 @@ SOURCE_RAM_PEEK = "ram-peek"
 SOURCE_MOCK = "mock"
 SOURCE_NDTIFF_DATASET = "ndtiff-dataset"
 SOURCE_IMAGE_QUEUE = "image-queue"
-SOURCE_INSTANCE = "instance"
 
 
 def make_frame_source(kind: str, **kwargs) -> FrameSource:
@@ -875,9 +884,4 @@ def make_frame_source(kind: str, **kwargs) -> FrameSource:
         return NdTiffDatasetFrameSource(**kwargs)
     if kind == SOURCE_IMAGE_QUEUE:
         return ImageQueueFrameSource(**kwargs)
-    if kind == SOURCE_INSTANCE:
-        # A pre-built source the caller owns (e.g. the Live-tab preview's
-        # RamPeek, which the session must start/stop and read thumbnails
-        # from) — the FovConfig stays declarative for every other kind.
-        return kwargs["source"]
     raise ValueError("unknown frame source {!r}".format(kind))

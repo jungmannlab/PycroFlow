@@ -398,6 +398,20 @@ class TestLivePreviewSession(unittest.TestCase):
         self.assertEqual(len(thumb["shape"]), 2)
         self.assertEqual(thumb["pixelsize_nm"], 130.0)
 
+    def test_early_abort_ends_the_preview(self):
+        """The sidebar Early-abort stops the preview outright — no silent
+        segment restart with reset metrics."""
+        from PycroFlow.services.live_preview import LivePreviewSession
+
+        session = LivePreviewSession()
+        service = session.start(emu.EmulatedImagingSystem())
+        self.assertIsNotNone(service)
+        service.request_abort()  # what the shell's Early-abort issues
+        # Both preview threads end on their own (no stop() call needed).
+        self.assertTrue(session.wait(timeout=30))
+        session.stop()  # GUI reconciliation; idempotent
+        self.assertFalse(session.active)
+
     def test_preview_unavailable_without_camera_info(self):
         from PycroFlow.services.live_preview import LivePreviewSession
 

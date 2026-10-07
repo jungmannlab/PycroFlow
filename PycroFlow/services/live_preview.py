@@ -17,14 +17,18 @@ running. Deliberately read-only and side-effect-free:
   never the authoritative reduction); metrics are indicative.
 
 Lifecycle: :meth:`start` returns the service (the Live tab subscribes its
-shell to it), a worker thread runs the pipeline until :meth:`stop`, and a
-thumbnail thread pushes the newest frame on the seam every ~0.5 s. Stop is
-non-blocking (daemon threads drain on their own); :meth:`wait` is the
-explicit join for tests. Enablement mirrors the orchestrated path: the
-imaging system's ``config['camera_info']`` block (localization needs the
-photon-conversion keys). On an emulated setup (no MM core) the preview runs
-on looping ``MockFrameSource`` segments, so the mode is demoable and testable
-with no instrument.
+shell to it), a worker thread runs the pipeline, and a thumbnail thread
+pushes new frames on the seam every ~0.5 s (downsampled to a view-sized
+image, skipped when unchanged). The preview ends on :meth:`stop` (toggle,
+run start, window close) OR on the shell's Early-abort — the service's
+``abort_requested`` ends the preview outright; the Live tab reflects it on
+the toggle. Stop never blocks the caller: the abort is requested first and
+the peek source's poller is closed on a background thread (its join can ride
+a slow ZMQ call); :meth:`wait` is the explicit join for tests. Enablement
+mirrors the orchestrated path: the imaging config's ``camera_info`` block.
+On an emulated setup (no MM core) the preview runs paced, looping
+``MockFrameSource`` segments, so the mode is demoable and testable with no
+instrument.
 """
 
 from __future__ import annotations
@@ -34,9 +38,18 @@ import time
 
 from loguru import logger
 
-from PycroFlow.services.live_run import _camera_info_for, _options_for
+from PycroFlow.services.imaging_config import (
+    build_fov_config,
+    camera_info_for,
+    live_options_for,
+)
 
 _THUMB_INTERVAL_S = 0.5
+# Downsample preview thumbnails to roughly this edge length (full frames off
+# a 2048² camera would push ~8 MB through the GUI twice a second for the
+# whole — possibly hours-long — preview). Override via
+# ``live_analysis: {preview_thumbnail_max_px: ...}``.
+_THUMB_MAX_PX = 512
 
 
 class LivePreviewSession:
@@ -68,7 +81,7 @@ class LivePreviewSession:
         imaging_system : object or None
             The connected imaging system. A real
             :class:`~PycroFlow.imaging.ImagingSystem` (has an MM ``core``)
-            is watched via the RAM peek; an emulated system runs looping
+            is watched via the RAM peek; an emulated system runs paced
             synthetic segments instead.
 
         Returns
@@ -89,14 +102,14 @@ class LivePreviewSession:
         if imaging_system is None:
             logger.info("live preview unavailable: no imaging system")
             return None
-        camera_info = _camera_info_for(imaging_system)
+        camera_info = camera_info_for(imaging_system)
         if not camera_info:
             logger.info(
                 "live preview unavailable: the imaging system's config "
                 "carries no `camera_info` block"
             )
             return None
-        options = _options_for(imaging_system)
+        options = live_options_for(imaging_system)
 
         from PycroFlow.live_analysis.service import LiveAnalysisService
 
@@ -113,7 +126,7 @@ class LivePreviewSession:
         self._worker.start()
         self._thumb = threading.Thread(
             target=self._push_thumbnails,
-            args=(self._service, camera_info),
+            args=(self._service, camera_info, options),
             name="live-preview-thumb",
             daemon=True,
         )
@@ -124,23 +137,45 @@ class LivePreviewSession:
         return self._service
 
     def stop(self) -> None:
-        """End the preview. Non-blocking; the daemon threads drain on their
-        own (:meth:`wait` is the explicit join for tests)."""
+        """End the preview. Never blocks the caller.
+
+        The pipeline abort is requested first (fast — it unblocks the
+        drain), then the peek source is closed on a background thread: its
+        ``close()`` joins the poller, which can ride out a slow ZMQ call, and
+        stop() runs on the GUI thread (toggle-off, run start, window close).
+        :meth:`wait` is the explicit join for tests.
+        """
         service, source = self._service, self._source
         self._service = None
         self._source = None
         self._stop.set()
-        if source is not None:
-            try:
-                source.close()
-            except Exception:  # noqa: BLE001
-                pass
         if service is not None:
             service.request_abort()
+        if source is not None:
+            threading.Thread(
+                target=self._close_source,
+                args=(source,),
+                name="live-preview-close",
+                daemon=True,
+            ).start()
+        if service is not None:
             logger.info("live preview stopped")
 
+    @staticmethod
+    def _close_source(source) -> None:
+        try:
+            source.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("preview source close raised: {!r}".format(exc))
+
     def wait(self, timeout: float = 30.0) -> bool:
-        """Join the preview threads (tests); True when both ended."""
+        """Join the preview threads (tests); True when both ended.
+
+        Parameters
+        ----------
+        timeout : float
+            Per-thread join timeout in seconds.
+        """
         done = True
         for thread in (self._worker, self._thumb):
             if thread is not None:
@@ -152,17 +187,13 @@ class LivePreviewSession:
 
     def _run(self, service, imaging_system, camera_info, options) -> None:
         from PycroFlow.live_analysis.frame_source import (
-            SOURCE_INSTANCE,
             MockFrameSource,
             RamPeekFrameSource,
         )
-        from PycroFlow.live_analysis.service import (
-            DEFAULT_LOCALIZE_PARAMS,
-            FovConfig,
-        )
 
         # A real ImagingSystem carries the MM core -> RAM peek; an emulated
-        # one runs looping synthetic segments (finite MockFrameSource).
+        # one runs paced synthetic segments (finite MockFrameSource at ~20
+        # fps so an idle emulated preview doesn't pin the CPU).
         peek_mm = getattr(imaging_system, "core", None) is not None
         segment = 0
         while not self._stop.is_set():
@@ -173,19 +204,18 @@ class LivePreviewSession:
                     camera_info=camera_info,
                 ).start()
             else:
-                source = MockFrameSource(n_frames=120, seed=segment)
+                source = MockFrameSource(
+                    n_frames=120,
+                    seed=segment,
+                    produce_delay_s=options.get("preview_mock_delay_s", 0.05),
+                )
             self._source = source
-            cfg = FovConfig(
-                source_kind=SOURCE_INSTANCE,
-                source_kwargs={"source": source},
-                localize_params=dict(
-                    options.get("localize_params", DEFAULT_LOCALIZE_PARAMS)
-                ),
-                batch_size=options.get("batch_size", 20),
-                n_workers=options.get("n_workers", 2),
-                queue_size=options.get("queue_size", 8),
-                use_processes=options.get("use_processes", False),
-                pixelsize_nm=camera_info.get("Pixelsize"),
+            cfg = build_fov_config(
+                options,
+                camera_info=camera_info,
+                source_instance=source,
+                batch_size=20,
+                use_processes=False,
             )
             try:
                 service.run_fov(cfg)
@@ -197,32 +227,39 @@ class LivePreviewSession:
                     source.close()
                 except Exception:  # noqa: BLE001
                     pass
-            # The peek segment only ends on stop/abort; mock segments are
-            # finite — re-arm and loop so the preview keeps animating.
-            service.clear_abort()
+            if service.abort_requested():
+                # The shell's Early-abort during a preview ENDS the preview
+                # (the Live tab untoggles on the abort update) — a peek
+                # segment has no other way to end but stop()/abort anyway.
+                self._stop.set()
+                break
+            # Only the finite mock segments reach here: loop so the emulated
+            # preview keeps animating.
             segment += 1
-            if peek_mm and not self._stop.is_set():
-                # A peek segment ending without stop means MM has no (new)
-                # frames (Live turned off) — idle briefly, then re-attach.
-                time.sleep(1.0)
 
-    def _push_thumbnails(self, service, camera_info) -> None:
+    def _push_thumbnails(self, service, camera_info, options) -> None:
         pixelsize = camera_info.get("Pixelsize")
+        max_px = options.get("preview_thumbnail_max_px", _THUMB_MAX_PX)
+        from PycroFlow.live_analysis.client_seam import push_thumbnail
+
+        last = None
         while not self._stop.is_set():
             source = self._source
             frame = getattr(source, "latest_frame", None)
-            if frame is not None:
-                try:
-                    service.hub.push_kind(
-                        "thumbnail",
-                        service.run_id,
-                        data=frame.tobytes(),
-                        shape=frame.shape,
-                        dtype=str(frame.dtype),
-                        pixelsize_nm=pixelsize,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "preview thumbnail push failed: {!r}".format(exc)
-                    )
+            # Skip unchanged frames (MM Live off keeps latest_frame
+            # identical) — no point re-rendering the same image.
+            if frame is not None and frame is not last:
+                last = frame
+                stride = max(
+                    1, int(-(-max(frame.shape) // max_px))
+                )  # ceil div
+                thumb = frame[::stride, ::stride]
+                push_thumbnail(
+                    service.hub,
+                    service.run_id,
+                    thumb,
+                    pixelsize_nm=(
+                        pixelsize * stride if pixelsize else pixelsize
+                    ),
+                )
             time.sleep(_THUMB_INTERVAL_S)

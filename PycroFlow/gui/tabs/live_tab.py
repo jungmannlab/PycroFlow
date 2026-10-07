@@ -62,14 +62,37 @@ class LiveTabHost(QWidget):
 
         self.shell = LiveShell()
         layout.addWidget(self.shell, 1)
+        # Reflect a preview that ends from the SERVICE side (the sidebar
+        # Early-abort stops the preview outright) on the toggle. The shell's
+        # bridge already marshals seam updates onto the GUI thread; the host
+        # owns the shell, so listening on its update signal is the seam-
+        # consistent way to observe the stream without a second bridge.
+        self.shell._bridge.update.connect(self._on_shell_update)
 
     # -- shell pass-through (what the main window drives) ----------------------
 
     def connect_service(self, service) -> None:
+        """Subscribe the shell to a run's/preview's LiveAnalysisService."""
         self.shell.connect_service(service)
 
     def close_client(self) -> None:
+        """Unsubscribe the shell (it keeps showing the last metrics)."""
         self.shell.close_client()
+
+    # -- service-side preview end (Early-abort) ---------------------------------
+
+    def _on_shell_update(self, update) -> None:
+        """Untoggle when the PREVIEW service ends from the stream side."""
+        if not self._previewing:
+            return
+        if update.kind == "state" and update.payload.get("state") in (
+            "abort_requested",
+            "experiment_ended",
+        ):
+            self.preview_btn.blockSignals(True)
+            self.preview_btn.setChecked(False)
+            self.preview_btn.blockSignals(False)
+            self._stop_preview()
 
     # -- preview toggle ---------------------------------------------------------
 
@@ -109,7 +132,13 @@ class LiveTabHost(QWidget):
     # -- run coordination -------------------------------------------------------
 
     def set_run_lock(self, locked: bool) -> None:
-        """A run owns the camera: stop any preview and disable the toggle."""
+        """A run owns the camera: stop any preview and disable the toggle.
+
+        Parameters
+        ----------
+        locked : bool
+            True while an experiment is ORCHESTRATING/RUNNING/PAUSED.
+        """
         if locked and (self._previewing or self.preview_btn.isChecked()):
             self.preview_btn.blockSignals(True)
             self.preview_btn.setChecked(False)

@@ -29,6 +29,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the CURRENT FOV's acquisition (frames so far stay saved, honest
   partial-coverage record, immediate T3 interlock) and the protocol continues
   — distinct from the orchestrator Abort in the Run Sequence tab.
+- **Preview review fixes** (adversarial review of the preview commit):
+  stopping a preview never blocks the GUI thread (abort is requested first;
+  the peek poller's join runs on a background thread); the sidebar
+  **Early-abort now ends the preview** — reflected on the toggle — instead of
+  silently restarting the segment with reset metrics; emulated preview
+  segments are paced (`preview_mock_delay_s`, default 0.05 s) so they no
+  longer pin the CPU; thumbnails skip unchanged frames and are downsampled to
+  ~512 px (`preview_thumbnail_max_px`) with the scale corrected, instead of
+  re-pushing full 8 MB frames twice a second; `latest_frame` is declared on
+  the `FrameSource` ABC; the `camera_info`/`live_analysis` readers and the
+  options→`FovConfig` plumbing live in one shared `services/imaging_config.py`
+  (used by the orchestrated and preview paths); every thumbnail pusher
+  (demo/live launchers + preview) shares one `client_seam.push_thumbnail`;
+  the `SOURCE_INSTANCE` factory kind became an explicit
+  `FovConfig.source_instance` field; docstring gaps closed.
 - **MM live-preview mode in the Live tab**: a "Start MM preview" toggle
   (`gui/tabs/live_tab.py` hosting the shell) watches Micro-Manager's own Live
   view through the live pipeline with NO protocol running —

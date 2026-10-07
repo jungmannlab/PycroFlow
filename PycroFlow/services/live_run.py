@@ -63,6 +63,11 @@ import threading
 
 from loguru import logger
 
+from PycroFlow.services.imaging_config import (
+    build_fov_config,
+    camera_info_for,
+    live_options_for,
+)
 from PycroFlow.services.registry import registry_client_from_env
 
 _DISABLE_VALUES = ("0", "off", "false", "no")
@@ -71,22 +76,6 @@ _DISABLE_VALUES = ("0", "off", "false", "no")
 def _env_disabled() -> bool:
     val = os.environ.get("PYCROFLOW_LIVE_ANALYSIS", "").strip().lower()
     return val in _DISABLE_VALUES
-
-
-def _imaging_config(imaging_system) -> dict:
-    """The imaging system's config dict ({} when absent/not a dict)."""
-    config = getattr(imaging_system, "config", None)
-    return config if isinstance(config, dict) else {}
-
-
-def _camera_info_for(imaging_system) -> dict | None:
-    """The picasso camera_info the fit needs, or None (live analysis off)."""
-    info = _imaging_config(imaging_system).get("camera_info")
-    return dict(info) if info else None
-
-
-def _options_for(imaging_system) -> dict:
-    return dict(_imaging_config(imaging_system).get("live_analysis") or {})
 
 
 class LiveRunCoordinator:
@@ -166,7 +155,7 @@ class LiveRunCoordinator:
         if _env_disabled():
             logger.info("live analysis disabled via PYCROFLOW_LIVE_ANALYSIS")
             return None
-        camera_info = _camera_info_for(imaging_system)
+        camera_info = camera_info_for(imaging_system)
         if not camera_info:
             logger.info(
                 "live analysis disabled: the imaging system's config carries "
@@ -189,7 +178,7 @@ class LiveRunCoordinator:
             registry = None
         self._registry = registry
         self._camera_info = camera_info
-        self._options = _options_for(imaging_system)
+        self._options = live_options_for(imaging_system)
         if not self._options.get("archive_dir"):
             logger.info(
                 "live analysis: no live_analysis.archive_dir configured — "
@@ -341,10 +330,6 @@ class LiveRunCoordinator:
                 tap.request_fov_end()
 
         from PycroFlow.live_analysis.frame_source import SOURCE_IMAGE_QUEUE
-        from PycroFlow.live_analysis.service import (
-            DEFAULT_LOCALIZE_PARAMS,
-            FovConfig,
-        )
 
         opts = self._options
         acquisition_config = acquisition_config or {}
@@ -358,7 +343,9 @@ class LiveRunCoordinator:
         save_dir = acquisition_config.get("save_dir")
         if save_dir:
             acquisition_fields["raw_data_path"] = save_dir
-        cfg = FovConfig(
+        cfg = build_fov_config(
+            opts,
+            camera_info=self._camera_info,
             source_kind=SOURCE_IMAGE_QUEUE,
             source_kwargs={
                 "frame_q": frame_q,
@@ -367,21 +354,12 @@ class LiveRunCoordinator:
                     "first_frame_timeout_s", 120.0
                 ),
             },
-            localize_params=dict(
-                opts.get("localize_params", DEFAULT_LOCALIZE_PARAMS)
-            ),
-            batch_size=opts.get("batch_size", 100),
-            n_workers=opts.get("n_workers", 2),
-            queue_size=opts.get("queue_size", 8),
-            use_processes=opts.get("use_processes", True),
             # movie_source_path is stamped at end-of-FOV (_on_fov_end) once
             # the actual dataset dir is known; the archive move runs only
             # when the setup configures a destination.
-            movie_source_path=None,
             archive_dir=opts.get("archive_dir"),
             fov_fields=fov_fields,
             acquisition_fields=acquisition_fields,
-            pixelsize_nm=self._camera_info.get("Pixelsize"),
         )
         self._last_cfg = cfg
         tasks.put((cfg, acq_name))

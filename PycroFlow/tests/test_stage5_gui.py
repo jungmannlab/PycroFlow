@@ -188,6 +188,13 @@ class TestMainWindow(unittest.TestCase):
         host2.set_run_lock(False)
         self.assertTrue(host2.preview_btn.isEnabled())
 
+        # Service-side end (sidebar Early-abort): the toggle unlatches and
+        # the stop callback fires once the abort update reaches the shell.
+        host2.preview_btn.setChecked(True)
+        service.request_abort()
+        self.assertFalse(host2.preview_btn.isChecked())
+        self.assertEqual(calls["stop"], 3)
+
     def test_window_title_has_version(self):
         from PycroFlow import __version__
 

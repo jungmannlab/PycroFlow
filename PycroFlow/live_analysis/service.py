@@ -107,6 +107,10 @@ class FovConfig:
 
     source_kind: str = "tiff-tail"
     source_kwargs: dict = field(default_factory=dict)
+    # A pre-built frame source the CALLER owns (started/stopped/read by it —
+    # e.g. the MM-preview's RamPeek, whose latest_frame feeds thumbnails).
+    # Takes precedence over source_kind/source_kwargs when set.
+    source_instance: object | None = None
     localize_params: dict = field(
         default_factory=lambda: dict(DEFAULT_LOCALIZE_PARAMS)
     )
@@ -292,7 +296,11 @@ class LiveAnalysisService:
 
         metrics = RunningMetrics()
         metrics.set_pixelsize_nm(cfg.pixelsize_nm)
-        source = make_frame_source(cfg.source_kind, **cfg.source_kwargs)
+        source = (
+            cfg.source_instance
+            if cfg.source_instance is not None
+            else make_frame_source(cfg.source_kind, **cfg.source_kwargs)
+        )
 
         aborted = False
         error: str | None = None
