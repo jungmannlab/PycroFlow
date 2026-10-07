@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Tracked `.env.template`** documenting every per-machine environment
+  variable (registry `PAINT_REGISTRY_URL`/`PAINT_REGISTRY_TOKEN`/
+  `PYCROFLOW_REGISTRY_BUFFER`, monet paths + token, spill port, the
+  live-analysis kill switch) — copy to the gitignored `.env` and fill in;
+  never commit the copy. The `pycroflow`/`pycroflow-gui` frontends now load
+  `.env` at startup themselves (`PycroFlow.envfile.load_env_file`,
+  `override=False`, no-op without python-dotenv), so the registry variables
+  work on machines without monet's import-time dotenv load. A test pins the
+  template against the env vars the code actually reads.
+
 ### Changed
 
 - **Bundle (ibidi + WP-LIVE-INT):** the fluidics-monitoring clip indexer now

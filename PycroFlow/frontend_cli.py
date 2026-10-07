@@ -751,9 +751,13 @@ class PycroFlowInteractive(cmd.Cmd):
 def main():
     """Entry point for the interactive CLI.
 
-    Configures logging, then runs cmdloop.
+    Configures logging, loads the per-machine `.env` (registry URL/token,
+    monet paths — see the tracked `.env.template`), then runs cmdloop.
     """
     PycroFlow.setup_logging(clean_old=True)
+    from PycroFlow.envfile import load_env_file
+
+    load_env_file()
     PycroFlowInteractive().cmdloop()
 
 

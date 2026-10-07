@@ -43,6 +43,12 @@ def main(argv=None):
     from PyQt6.QtWidgets import QApplication
 
     PycroFlow.setup_logging(clean_old=True)
+    # Per-machine secrets/paths (.env, from the tracked .env.template):
+    # registry URL/token, monet paths, spill port. override=False — exported
+    # shell variables win; missing dotenv/.env is a no-op.
+    from PycroFlow.envfile import load_env_file
+
+    load_env_file()
 
     app = QApplication(argv if argv is not None else sys.argv)
     # V0.8 look & feel across the whole acquisition GUI (Fusion + dark/gold QSS),
