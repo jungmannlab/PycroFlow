@@ -93,6 +93,9 @@ class EmulatedImagingSystem(_BaseEmulatedSystem):
                 "batch_size": 20,
                 "localize_params": {"Box Size": 7, "Min. Net Gradient": 200},
                 "first_frame_timeout_s": 10.0,
+                # The emulated feed is near-instant; tick thumbnails fast so
+                # the Overview animates (and the hermetic tests see frames).
+                "thumbnail_interval_s": 0.02,
             },
         }
 

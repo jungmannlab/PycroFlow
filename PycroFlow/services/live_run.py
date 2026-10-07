@@ -102,6 +102,7 @@ class LiveRunCoordinator:
         self._fov_tasks: queue.Queue | None = None
         self._fov_loop: threading.Thread | None = None
         self._last_cfg = None
+        self._thumbs = None  # the shared ThumbnailStreamer (run-scoped)
         self._teardown: threading.Thread | None = None
         # Newest abort generation whose acquisition-side effect (ending an
         # MDA) has been delivered; gates delivery so one request ends at
@@ -215,6 +216,26 @@ class LiveRunCoordinator:
         )
         self._imaging = imaging_system
         imaging_system.frame_tap = self._tap
+        # Feed the Live tab's Overview during the run: the shared streamer
+        # reads the tap's newest frame (display tap, independent of the
+        # pipeline backlog) and pushes downsampled thumbnails + detection
+        # boxes on the seam — without this the run showed metrics but an
+        # empty Overview canvas.
+        from PycroFlow.live_analysis.service import DEFAULT_LOCALIZE_PARAMS
+        from PycroFlow.live_analysis.thumbnails import ThumbnailStreamer
+
+        tap = self._tap
+        self._thumbs = ThumbnailStreamer(
+            self._service,
+            lambda: tap.latest_frame,
+            pixelsize_nm=camera_info.get("Pixelsize"),
+            params_provider=lambda: self._options.get(
+                "localize_params", DEFAULT_LOCALIZE_PARAMS
+            ),
+            with_boxes=bool(self._options.get("thumbnail_boxes", True)),
+            max_px=self._options.get("thumbnail_max_px", 512),
+            interval_s=self._options.get("thumbnail_interval_s", 0.5),
+        ).start()
         logger.info("live analysis attached (run_id {})".format(self._run_id))
         return self._run_id
 
@@ -237,6 +258,7 @@ class LiveRunCoordinator:
         service, tap, imaging = self._service, self._tap, self._imaging
         seam, registry = self._seam_client, self._registry
         tasks, loop = self._fov_tasks, self._fov_loop
+        thumbs = self._thumbs
         if service is None and tap is None:
             if wait:
                 self.wait_idle()
@@ -250,6 +272,9 @@ class LiveRunCoordinator:
         self._fov_tasks = None
         self._fov_loop = None
         self._last_cfg = None
+        self._thumbs = None
+        if thumbs is not None:
+            thumbs.stop()
         # _run_id intentionally kept: it identifies the finished run.
         try:
             if abort and service is not None:

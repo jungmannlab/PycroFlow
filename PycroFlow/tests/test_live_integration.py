@@ -496,6 +496,31 @@ class TestExperimentServiceLiveIntegration(unittest.TestCase):
         self.assertTrue(svc._live.wait_idle())
         return svc, run_id
 
+    def test_orchestrated_run_streams_overview_thumbnails(self):
+        from PycroFlow.live_analysis.client_seam import CallbackClient
+
+        svc = ExperimentService(imaging_system=emu.EmulatedImagingSystem())
+        svc._live.registry_client_factory = staticmethod(lambda: None)
+        svc.load_protocol(dict(self._PROTOCOL))
+        thumbs = []
+        svc.start()
+        # The run's service exists once started — subscribe to its seam.
+        svc.live_service.hub.add(
+            CallbackClient(
+                lambda u: thumbs.append(u) if u.kind == "thumbnail" else None
+            )
+        )
+        deadline = time.time() + 30
+        while time.time() < deadline and not svc.is_finished():
+            time.sleep(0.05)
+        self.assertTrue(svc.is_finished())
+        svc.end()
+        self.assertTrue(svc._live.wait_idle())
+        # The Overview got frames during the acquire steps (the emulated
+        # imaging system feeds the tap; the streamer pushes them).
+        self.assertTrue(thumbs, "no Overview thumbnail during the run")
+        self.assertIn("data", thumbs[0].payload)
+
     def test_orchestrated_run_single_run_id_linked_records(self):
         registry = _StubRegistry()
         svc, run_id = self._run_service(registry)
@@ -540,6 +565,81 @@ class TestExperimentServiceLiveIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestThumbnailStreamer(unittest.TestCase):
+    """The shared Overview feeder: change-detect, downsample, boxes, push."""
+
+    def test_streams_downsampled_thumbnail_with_boxes(self):
+        import numpy as np
+
+        from PycroFlow.live_analysis.client_seam import CallbackClient
+        from PycroFlow.live_analysis.service import LiveAnalysisService
+        from PycroFlow.live_analysis.thumbnails import ThumbnailStreamer
+
+        svc = LiveAnalysisService()
+        svc.start_experiment()
+        seen = []
+        svc.hub.add(
+            CallbackClient(
+                lambda u: seen.append(u) if u.kind == "thumbnail" else None
+            )
+        )
+        frame = next(
+            __import__(
+                "PycroFlow.live_analysis.frame_source",
+                fromlist=["MockFrameSource"],
+            )
+            .MockFrameSource(n_frames=1, seed=1)
+            .batches(1)
+        ).frames[0]
+        big = np.repeat(np.repeat(frame, 20, axis=0), 20, axis=1)  # ~960²
+        streamer = ThumbnailStreamer(
+            svc,
+            lambda: big,
+            pixelsize_nm=130.0,
+            params_provider=lambda: {"Box Size": 7, "Min. Net Gradient": 200},
+            max_px=256,
+            interval_s=0.02,
+        ).start()
+        deadline = time.time() + 10
+        while time.time() < deadline and not seen:
+            time.sleep(0.02)
+        streamer.stop()
+        self.assertTrue(streamer.join(timeout=10))
+        self.assertTrue(seen, "no thumbnail pushed")
+        p0 = seen[0].payload
+        self.assertLessEqual(max(p0["shape"]), 256)  # downsampled
+        self.assertIn("boxes", p0)
+        self.assertEqual(p0["pixelsize_nm"], 130.0 * (960 // 256 + 1))
+
+    def test_skips_unchanged_frames(self):
+        import numpy as np
+
+        from PycroFlow.live_analysis.client_seam import CallbackClient
+        from PycroFlow.live_analysis.service import LiveAnalysisService
+        from PycroFlow.live_analysis.thumbnails import ThumbnailStreamer
+
+        svc = LiveAnalysisService()
+        svc.start_experiment()
+        count = [0]
+        svc.hub.add(
+            CallbackClient(
+                lambda u: (
+                    count.__setitem__(0, count[0] + 1)
+                    if u.kind == "thumbnail"
+                    else None
+                )
+            )
+        )
+        frame = np.zeros((16, 16), dtype=np.uint16)  # same object every tick
+        streamer = ThumbnailStreamer(
+            svc, lambda: frame, with_boxes=False, interval_s=0.02
+        ).start()
+        time.sleep(0.4)
+        streamer.stop()
+        streamer.join(timeout=10)
+        self.assertEqual(count[0], 1)  # unchanged frame pushed once
 
 
 class TestStickyState(unittest.TestCase):

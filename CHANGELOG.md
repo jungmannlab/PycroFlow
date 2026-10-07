@@ -284,6 +284,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the CURRENT FOV's acquisition (frames so far stay saved, honest
   partial-coverage record, immediate T3 interlock) and the protocol continues
   — distinct from the orchestrator Abort in the Run Sequence tab.
+- **The Overview now shows frames during orchestrated runs** — the missing
+  half of the Live tab. A shared `ThumbnailStreamer`
+  (`live_analysis/thumbnails.py`) feeds the Overview from a latest-frame
+  provider (change-detect, downsample, detection-box overlay with the live
+  localize params); the run coordinator drives it from the frame tap's new
+  `latest_frame` display tap (independent of the pipeline backlog), and the
+  MM preview now uses the same streamer instead of its own pusher. Before
+  this, an orchestrated run reached `fov_started` but left the Overview/Zoom
+  canvas empty (only the preview and the launchers pushed thumbnails).
+  Tunable via `live_analysis: {thumbnail_max_px, thumbnail_boxes,
+  thumbnail_interval_s}`.
 - **The Live tab visibly connects to orchestrated runs**: the seam's update
   hub replays its last `state` to late subscribers, so the tab shows
   `experiment_started` the moment a run connects instead of sitting on

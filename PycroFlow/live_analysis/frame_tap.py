@@ -75,6 +75,9 @@ class FrameTap:
         self._fov_end = threading.Event()
         self._lock = threading.Lock()
         self._dropped = 0
+        # Newest pushed frame — the display tap the ThumbnailStreamer reads;
+        # kept current even when the soft-bounded pipeline queue drops.
+        self.latest_frame = None
 
     # -- producer side (acquisition thread; never blocks, never raises) -----
 
@@ -106,6 +109,8 @@ class FrameTap:
         if q is None:
             return
         try:
+            item = img.copy() if hasattr(img, "copy") else img
+            self.latest_frame = item
             if q.qsize() >= self._max_pending:
                 self._dropped += 1
                 if self._dropped == 1:
@@ -115,7 +120,6 @@ class FrameTap:
                         "disk is unaffected)".format(self._max_pending)
                     )
                 return
-            item = img.copy() if hasattr(img, "copy") else img
             q.put_nowait(item)
         except Exception as exc:  # noqa: BLE001 - tee must never hurt acq
             logger.warning("frame tap push failed: {!r}".format(exc))

@@ -36,7 +36,6 @@ instrument.
 from __future__ import annotations
 
 import threading
-import time
 
 from loguru import logger
 
@@ -45,8 +44,6 @@ from PycroFlow.services.imaging_config import (
     camera_info_for,
     live_options_for,
 )
-
-_THUMB_INTERVAL_S = 0.5
 
 
 def set_mm_live_mode(on) -> bool:
@@ -82,13 +79,6 @@ def set_mm_live_mode(on) -> bool:
         return False
 
 
-# Downsample preview thumbnails to roughly this edge length (full frames off
-# a 2048² camera would push ~8 MB through the GUI twice a second for the
-# whole — possibly hours-long — preview). Override via
-# ``live_analysis: {preview_thumbnail_max_px: ...}``.
-_THUMB_MAX_PX = 512
-
-
 class LivePreviewSession:
     """One MM-live-preview watch at a time (start/stop from the Live tab)."""
 
@@ -97,7 +87,7 @@ class LivePreviewSession:
         self._source = None
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
-        self._thumb: threading.Thread | None = None
+        self._thumb = None  # the shared ThumbnailStreamer
         # The session's live_analysis options; its ``localize_params`` entry
         # is the SINGLE source of the detection params — the box overlay
         # reads it per thumbnail tick and each pipeline segment is built from
@@ -172,13 +162,16 @@ class LivePreviewSession:
             daemon=True,
         )
         self._worker.start()
-        self._thumb = threading.Thread(
-            target=self._push_thumbnails,
-            args=(self._service, camera_info, options),
-            name="live-preview-thumb",
-            daemon=True,
-        )
-        self._thumb.start()
+        from PycroFlow.live_analysis.thumbnails import ThumbnailStreamer
+
+        self._thumb = ThumbnailStreamer(
+            self._service,
+            lambda: getattr(self._source, "latest_frame", None),
+            pixelsize_nm=camera_info.get("Pixelsize"),
+            params_provider=lambda: self._options.get("localize_params"),
+            with_boxes=bool(options.get("preview_boxes", True)),
+            max_px=options.get("preview_thumbnail_max_px", 512),
+        ).start()
         logger.info(
             "live preview started (run_id {})".format(self._service.run_id)
         )
@@ -193,10 +186,13 @@ class LivePreviewSession:
         stop() runs on the GUI thread (toggle-off, run start, window close).
         :meth:`wait` is the explicit join for tests.
         """
-        service, source = self._service, self._source
+        service, source, thumb = self._service, self._source, self._thumb
         self._service = None
         self._source = None
+        self._thumb = None
         self._stop.set()
+        if thumb is not None:
+            thumb.stop()
         if service is not None:
             service.request_abort()
         if source is not None:
@@ -225,10 +221,9 @@ class LivePreviewSession:
             Per-thread join timeout in seconds.
         """
         done = True
-        for thread in (self._worker, self._thumb):
-            if thread is not None:
-                thread.join(timeout)
-                done = done and not thread.is_alive()
+        if self._worker is not None:
+            self._worker.join(timeout)
+            done = done and not self._worker.is_alive()
         return done
 
     def set_overlay_params(self, params) -> None:
@@ -341,51 +336,3 @@ class LivePreviewSession:
                 # operator's state on the way out (stop, Early-abort, or a
                 # crashed segment).
                 set_mm_live_mode(False)
-
-    def _push_thumbnails(self, service, camera_info, options) -> None:
-        from PycroFlow.live_analysis.boxes import identify_boxes
-        from PycroFlow.live_analysis.client_seam import push_thumbnail
-
-        pixelsize = camera_info.get("Pixelsize")
-        max_px = options.get("preview_thumbnail_max_px", _THUMB_MAX_PX)
-        with_boxes = bool(options.get("preview_boxes", True))
-
-        last = None
-        while not self._stop.is_set():
-            source = self._source
-            frame = getattr(source, "latest_frame", None)
-            # Skip unchanged frames (MM Live off keeps latest_frame
-            # identical) — no point re-rendering the same image.
-            if frame is not None and frame is not last:
-                last = frame
-                # Detection-box overlay: identify on the FULL frame
-                # (downsampling destroys the PSF gradients picasso detects
-                # on) with the CURRENT localize params — the sidebar's Core
-                # controls steer these live (set_overlay_params) — then
-                # scale the centres onto the downsampled thumbnail.
-                # `preview_boxes: false` turns the overlay off.
-                params = self._options.get("localize_params") or {}
-                box_size = int(params.get("Box Size", 7))
-                min_ng = float(params.get("Min. Net Gradient", 5000))
-                stride = max(
-                    1, int(-(-max(frame.shape) // max_px))
-                )  # ceil div
-                thumb = frame[::stride, ::stride]
-                boxes = (
-                    identify_boxes(frame, box_size, min_ng)
-                    if with_boxes
-                    else None
-                )
-                if boxes is not None and stride > 1:
-                    boxes = [coord / stride for coord in boxes]
-                push_thumbnail(
-                    service.hub,
-                    service.run_id,
-                    thumb,
-                    pixelsize_nm=(
-                        pixelsize * stride if pixelsize else pixelsize
-                    ),
-                    boxes=boxes,
-                    box_size=max(3, round(box_size / stride)),
-                )
-            time.sleep(_THUMB_INTERVAL_S)
