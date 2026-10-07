@@ -8,6 +8,11 @@ port. The frontends call :func:`load_env_file` at startup so those variables
 reach ``os.environ`` without relying on monet's import-time dotenv load (a
 registry-only or emulated machine has no monet).
 
+Search order: an explicit ``path`` → dotenv discovery from the WORKING
+DIRECTORY upward → the PycroFlow REPO ROOT (next to ``.env.template``), so a
+GUI launched from a shortcut or an unrelated directory still finds the repo's
+`.env` on the editable installs the lab runs.
+
 Semantics match monet's loader: ``override=False`` — an already-exported
 shell variable or a systemd ``EnvironmentFile`` always wins — and a missing
 ``python-dotenv`` (not a PycroFlow base dependency; monet brings it) or a
@@ -16,7 +21,19 @@ missing ``.env`` degrades to a logged no-op, never an error.
 
 from __future__ import annotations
 
+import os
+
 from loguru import logger
+
+
+def repo_root_env_path() -> str:
+    """The repo-root ``.env`` path for an editable install (may not exist)."""
+    import PycroFlow
+
+    root = os.path.dirname(
+        os.path.dirname(os.path.abspath(PycroFlow.__file__))
+    )
+    return os.path.join(root, ".env")
 
 
 def load_env_file(path: str | None = None) -> bool:
@@ -26,7 +43,7 @@ def load_env_file(path: str | None = None) -> bool:
     ----------
     path : str or None
         Explicit file to load; None searches from the working directory
-        upward (python-dotenv's discovery).
+        upward, then falls back to the repo root (see module docstring).
 
     Returns
     -------
@@ -41,10 +58,21 @@ def load_env_file(path: str | None = None) -> bool:
     try:
         found = path or find_dotenv(usecwd=True)
         if not found:
+            fallback = repo_root_env_path()
+            if os.path.exists(fallback):
+                found = fallback
+        if not found:
+            logger.info(
+                "no .env found (searched the working directory upward and "
+                "{}) — per-machine variables must be exported in the "
+                "shell. See .env.template.".format(repo_root_env_path())
+            )
             return False
         loaded = load_dotenv(found, override=False)
         if loaded:
             logger.info("environment loaded from {}", found)
+        else:
+            logger.info(".env found at {} but it set no variables", found)
         return bool(loaded)
     except Exception as exc:  # noqa: BLE001 - .env must never block startup
         logger.warning("could not load .env ({!r})", exc)

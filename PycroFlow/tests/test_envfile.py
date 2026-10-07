@@ -17,6 +17,19 @@ class TestLoadEnvFile(unittest.TestCase):
     def test_missing_file_is_a_quiet_noop(self):
         self.assertFalse(load_env_file("/nonexistent/.env"))
 
+    def test_repo_root_fallback_path_sits_next_to_the_template(self):
+        """The cwd-independent fallback points at the repo root (where
+        .env.template lives), so a GUI launched from an unrelated directory
+        still finds the repo's .env on an editable install."""
+        from PycroFlow.envfile import repo_root_env_path
+
+        root = os.path.dirname(repo_root_env_path())
+        self.assertTrue(
+            os.path.exists(os.path.join(root, "pyproject.toml"))
+            or os.path.exists(os.path.join(root, ".env.template")),
+            "fallback does not point at the repo root: {}".format(root),
+        )
+
     @unittest.skipUnless(_HAVE_DOTENV, "python-dotenv not installed")
     def test_loads_values_without_overriding_exported_ones(self):
         with tempfile.TemporaryDirectory() as tmp:
