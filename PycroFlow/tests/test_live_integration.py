@@ -542,6 +542,50 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestMmLiveModeSwitch(unittest.TestCase):
+    """set_mm_live_mode flips only when needed and reports ownership."""
+
+    def _studio(self, live_on):
+        from unittest import mock
+
+        live = mock.Mock()
+        live.is_live_mode_on.return_value = live_on
+        studio = mock.Mock()
+        studio.live.return_value = live
+        return mock.Mock(return_value=studio), live
+
+    def test_flips_and_reports_ownership(self):
+        from unittest import mock
+
+        import pycromanager
+
+        from PycroFlow.services.live_preview import set_mm_live_mode
+
+        # Off -> on: flipped, we own it.
+        studio_cls, live = self._studio(live_on=False)
+        with mock.patch.object(pycromanager, "Studio", studio_cls):
+            self.assertTrue(set_mm_live_mode(True))
+        live.set_live_mode_on.assert_called_once_with(True)
+
+        # Already on: NOT flipped (operator owns it; never yank it later).
+        studio_cls, live = self._studio(live_on=True)
+        with mock.patch.object(pycromanager, "Studio", studio_cls):
+            self.assertFalse(set_mm_live_mode(True))
+        live.set_live_mode_on.assert_not_called()
+
+        # On -> off (the restore path).
+        studio_cls, live = self._studio(live_on=True)
+        with mock.patch.object(pycromanager, "Studio", studio_cls):
+            self.assertTrue(set_mm_live_mode(False))
+        live.set_live_mode_on.assert_called_once_with(False)
+
+        # A dead bridge degrades to False, never an exception.
+        with mock.patch.object(
+            pycromanager, "Studio", mock.Mock(side_effect=RuntimeError)
+        ):
+            self.assertFalse(set_mm_live_mode(True))
+
+
 class TestPreviewOverlayParams(unittest.TestCase):
     """set_overlay_params: ONE param source + a segment restart on change."""
 

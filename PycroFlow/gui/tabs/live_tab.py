@@ -62,7 +62,8 @@ class LiveTabHost(QWidget):
         self.preview_btn.setToolTip(
             "Watch Micro-Manager's Live view through the live-localization "
             "pipeline (no protocol; view-only, may skip frames under load). "
-            "Start MM's Live mode first."
+            "Starts MM's Live mode if it isn't running — and stops it again "
+            "when the preview ends, unless you had started it yourself."
         )
         self.preview_btn.toggled.connect(self._on_toggled)
         bar.addWidget(self.preview_btn)

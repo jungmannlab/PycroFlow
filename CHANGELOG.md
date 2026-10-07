@@ -284,6 +284,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the CURRENT FOV's acquisition (frames so far stay saved, honest
   partial-coverage record, immediate T3 interlock) and the protocol continues
   — distinct from the orchestrator Abort in the Run Sequence tab.
+- **The preview toggle now drives MM's Live mode**: "Start MM preview" turns
+  Micro-Manager's Live view on when it isn't running (re-ensured on
+  param-change re-attach), and the preview's end switches it off again ONLY
+  if the preview started it — an operator-started Live view is never yanked.
+  Best-effort: an unreachable MM logs a warning and the preview waits for
+  frames as before.
 - **Box-overlay detection fixed (uint16 wraparound)**: `identify_boxes` fed
   raw uint16 camera frames straight into picasso's numba gradient kernel,
   whose unsigned arithmetic wraps around — background pixels got

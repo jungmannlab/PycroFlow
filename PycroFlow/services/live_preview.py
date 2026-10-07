@@ -1,7 +1,9 @@
 """LivePreviewSession — live localization over Micro-Manager's Live preview.
 
-The Live tab's PREVIEW mode: the operator starts MM's own Live view (or any
-running acquisition) and PycroFlow watches it — a
+The Live tab's PREVIEW mode: PycroFlow watches MM's Live view — starting
+Live mode itself when it isn't running (and restoring the operator's state
+when the preview ends: Live is only switched off if the preview switched it
+on). A
 :class:`~PycroFlow.live_analysis.frame_source.RamPeekFrameSource`
 non-destructively peeks the newest frame off MM's circular buffer and a
 :class:`~PycroFlow.live_analysis.service.LiveAnalysisService` localizes the
@@ -45,6 +47,41 @@ from PycroFlow.services.imaging_config import (
 )
 
 _THUMB_INTERVAL_S = 0.5
+
+
+def set_mm_live_mode(on) -> bool:
+    """Switch Micro-Manager's Live mode, best-effort. Never raises.
+
+    Builds its own ``Studio`` handle (pycromanager bridge objects are
+    per-thread; this runs on the preview worker, mirroring the peek source's
+    own ``Core``).
+
+    Parameters
+    ----------
+    on : bool
+        Desired Live-mode state.
+
+    Returns
+    -------
+    bool
+        True only when THIS call flipped the mode — the preview turns Live
+        off at the end only if it was the one to turn it on, so an
+        operator-started Live view is never yanked away.
+    """
+    try:
+        from pycromanager import Studio
+
+        live = Studio(convert_camel_case=True).live()
+        if bool(live.is_live_mode_on()) == bool(on):
+            return False
+        live.set_live_mode_on(bool(on))
+        logger.info("MM Live mode -> {}", "on" if on else "off")
+        return True
+    except Exception as exc:  # noqa: BLE001 - preview must not depend on it
+        logger.warning("could not switch MM Live mode: {!r}", exc)
+        return False
+
+
 # Downsample preview thumbnails to roughly this edge length (full frames off
 # a 2048² camera would push ~8 MB through the GUI twice a second for the
 # whole — possibly hours-long — preview). Override via
@@ -245,47 +282,65 @@ class LivePreviewSession:
         # one runs paced synthetic segments (finite MockFrameSource at ~20
         # fps so an idle emulated preview doesn't pin the CPU).
         peek_mm = getattr(imaging_system, "core", None) is not None
-        segment = 0
-        while not self._stop.is_set():
-            if peek_mm:
-                source = RamPeekFrameSource(
-                    poll_s=options.get("preview_poll_s", 0.02),
-                    port=options.get("preview_port", 4827),
+        started_live = False
+        try:
+            segment = 0
+            while not self._stop.is_set():
+                if peek_mm:
+                    # Drive MM's Live view for the operator: ensure it runs at
+                    # every (re)attach — preview start and param restarts are
+                    # both user-intent moments — and remember whether WE turned
+                    # it on, so the preview's end restores MM to how the
+                    # operator had it.
+                    if set_mm_live_mode(True):
+                        started_live = True
+                    source = RamPeekFrameSource(
+                        poll_s=options.get("preview_poll_s", 0.02),
+                        port=options.get("preview_port", 4827),
+                        camera_info=camera_info,
+                    ).start()
+                else:
+                    source = MockFrameSource(
+                        n_frames=120,
+                        seed=segment,
+                        produce_delay_s=options.get(
+                            "preview_mock_delay_s", 0.05
+                        ),
+                    )
+                self._source = source
+                cfg = build_fov_config(
+                    options,
                     camera_info=camera_info,
-                ).start()
-            else:
-                source = MockFrameSource(
-                    n_frames=120,
-                    seed=segment,
-                    produce_delay_s=options.get("preview_mock_delay_s", 0.05),
+                    source_instance=source,
+                    batch_size=20,
+                    use_processes=False,
                 )
-            self._source = source
-            cfg = build_fov_config(
-                options,
-                camera_info=camera_info,
-                source_instance=source,
-                batch_size=20,
-                use_processes=False,
-            )
-            try:
-                service.run_fov(cfg)
-            except Exception as exc:  # noqa: BLE001 - keep the GUI alive
-                logger.warning("live preview segment failed: {!r}".format(exc))
-                break
-            finally:
                 try:
-                    source.close()
-                except Exception:  # noqa: BLE001
-                    pass
-            if service.abort_requested():
-                # The shell's Early-abort during a preview ENDS the preview
-                # (the Live tab untoggles on the abort update) — a peek
-                # segment has no other way to end but stop()/abort anyway.
-                self._stop.set()
-                break
-            # Only the finite mock segments reach here: loop so the emulated
-            # preview keeps animating.
-            segment += 1
+                    service.run_fov(cfg)
+                except Exception as exc:  # noqa: BLE001 - keep the GUI alive
+                    logger.warning(
+                        "live preview segment failed: {!r}".format(exc)
+                    )
+                    break
+                finally:
+                    try:
+                        source.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                if service.abort_requested():
+                    # The shell's Early-abort during a preview ENDS the preview
+                    # (the Live tab untoggles on the abort update).
+                    self._stop.set()
+                    break
+                # Mock segments are finite; a peek segment also ends on a
+                # param-change restart — loop re-attaches either way.
+                segment += 1
+        finally:
+            if started_live:
+                # The preview turned MM's Live mode on — restore the
+                # operator's state on the way out (stop, Early-abort, or a
+                # crashed segment).
+                set_mm_live_mode(False)
 
     def _push_thumbnails(self, service, camera_info, options) -> None:
         from PycroFlow.live_analysis.boxes import identify_boxes
