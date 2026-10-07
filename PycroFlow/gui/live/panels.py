@@ -298,8 +298,13 @@ class OverviewZoom(QWidget):
         self.boxes_cb.toggled.connect(self._render)
         head.addWidget(self.boxes_cb)
         self.auto_btn = QPushButton("Auto")
-        self.auto_btn.setToolTip("Auto-contrast the displayed frame")
-        self.auto_btn.clicked.connect(self._auto_contrast)
+        self.auto_btn.setCheckable(True)
+        self.auto_btn.setToolTip(
+            "Auto-contrast. Latched (MM-style autostretch): every incoming "
+            "frame is re-stretched with the ignore-% clip; editing black/"
+            "white manually takes back control and unlatches it."
+        )
+        self.auto_btn.toggled.connect(self._on_auto_toggled)
         head.addWidget(self.auto_btn)
         # MM-style reference setting for Auto: clip this percentage of the
         # darkest/brightest pixels when stretching (MM's "ignore %").
@@ -390,7 +395,12 @@ class OverviewZoom(QWidget):
             arr = np.frombuffer(bytes(data), dtype=dtype or np.uint16)
             arr = arr.reshape(shape[:2])
             self._raw = arr
-            self._render()
+            if self.auto_btn.isChecked():
+                # Latched autostretch: re-fit black/white to EVERY incoming
+                # frame (renders once inside).
+                self._auto_contrast()
+            else:
+                self._render()
         except Exception:
             self.image.setText("frame {}".format(shape))
 
@@ -468,7 +478,18 @@ class OverviewZoom(QWidget):
                 w.blockSignals(False)
         self._render()
 
+    def _on_auto_toggled(self, checked: bool) -> None:
+        if checked:
+            self._auto_contrast()
+
     def _reapply_contrast(self, *_: object) -> None:
+        # A USER edit of black/white (programmatic sets are signal-blocked in
+        # _auto_contrast) means manual control: unlatch the autostretch so
+        # the next frame doesn't overwrite the chosen window.
+        if self.auto_btn.isChecked():
+            self.auto_btn.blockSignals(True)
+            self.auto_btn.setChecked(False)
+            self.auto_btn.blockSignals(False)
         if getattr(self, "_raw", None) is not None:
             self._render()
 

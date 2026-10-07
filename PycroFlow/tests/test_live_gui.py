@@ -642,3 +642,29 @@ class TestAutoContrastIgnore(_QtTestCase):
         panel._auto_contrast()
         self.assertEqual(panel.black.value(), 0)
         self.assertEqual(panel.white.value(), 9999)
+
+    def test_latched_auto_restretches_each_frame_until_manual_edit(self):
+        import numpy as np
+
+        from PycroFlow.gui.live.panels import OverviewZoom
+
+        panel = OverviewZoom()
+        panel.ignore_pct.setValue(0.0)
+        dim = np.full((16, 16), 50, dtype=np.uint16)
+        dim[0, 0], dim[0, 1] = 10, 200
+        bright = (dim * 100).astype(np.uint16)
+
+        panel.auto_btn.setChecked(True)  # latch -> MM-style autostretch
+        panel._set_image_from_bytes(dim.tobytes(), dim.shape, "uint16")
+        self.assertEqual((panel.black.value(), panel.white.value()), (10, 200))
+        panel._set_image_from_bytes(bright.tobytes(), bright.shape, "uint16")
+        self.assertEqual(
+            (panel.black.value(), panel.white.value()), (1000, 20000)
+        )
+
+        # A manual black/white edit takes back control: auto unlatches and
+        # the next frame no longer overwrites the chosen window.
+        panel.black.setValue(42)
+        self.assertFalse(panel.auto_btn.isChecked())
+        panel._set_image_from_bytes(dim.tobytes(), dim.shape, "uint16")
+        self.assertEqual(panel.black.value(), 42)

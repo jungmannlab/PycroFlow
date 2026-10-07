@@ -284,6 +284,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the CURRENT FOV's acquisition (frames so far stay saved, honest
   partial-coverage record, immediate T3 interlock) and the protocol continues
   — distinct from the orchestrator Abort in the Run Sequence tab.
+- **Auto contrast is latchable** (MM-style autostretch): the Overview's Auto
+  button is now a toggle — latched, every incoming frame is re-stretched
+  with the current ignore-% clip; manually editing black/white takes back
+  control and unlatches it. A single click still applies once.
 - **The preview toggle now drives MM's Live mode**: "Start MM preview" turns
   Micro-Manager's Live view on when it isn't running (re-ensured on
   param-change re-attach), and the preview's end switches it off again ONLY
