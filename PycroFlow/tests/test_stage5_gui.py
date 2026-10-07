@@ -151,6 +151,10 @@ class TestMainWindow(unittest.TestCase):
         self.assertIn(
             w.live_tab.shell._bridge.seam_client, service.hub._clients
         )
+        # Connecting shows the run on the status line, and the sticky state
+        # reaches the just-attached shell (a real run spends its first
+        # minutes in fluid steps — without this the tab showed 'idle').
+        self.assertIn("watching run", w.live_tab.preview_status.text())
         w._on_experiment_state(
             ExperimentState.RUNNING, ExperimentState.FINISHED
         )
@@ -158,6 +162,18 @@ class TestMainWindow(unittest.TestCase):
         self.assertNotIn(
             w.live_tab.shell._bridge.seam_client, service.hub._clients
         )
+        self.assertEqual(w.live_tab.preview_status.text(), "")
+
+    def test_live_tab_says_when_run_live_analysis_is_off(self):
+        from PycroFlow.services import ExperimentState
+
+        w = self._build()
+        # No live service (e.g. camera_info missing) -> the tab says so
+        # instead of looking dead.
+        w._on_experiment_state(
+            ExperimentState.LOADED, ExperimentState.ORCHESTRATING
+        )
+        self.assertIn("live analysis off", w.live_tab.preview_status.text())
 
     def test_live_tab_preview_toggle(self):
         """The MM-preview toggle connects the shell to the session's service,

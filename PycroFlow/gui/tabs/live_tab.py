@@ -154,6 +154,16 @@ class LiveTabHost(QWidget):
         if self._on_overlay_params is not None:
             self._on_overlay_params(dict(params or {}))
 
+    def set_run_status(self, text) -> None:
+        """Show the run-side connection state next to the preview toggle.
+
+        Parameters
+        ----------
+        text : str
+            Status line (e.g. "watching run <id>"); empty clears it.
+        """
+        self.preview_status.setText(text or "")
+
     # -- run coordination -------------------------------------------------------
 
     def set_run_lock(self, locked: bool) -> None:

@@ -542,6 +542,29 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestStickyState(unittest.TestCase):
+    """A late subscriber receives the hub's last state on add()."""
+
+    def test_late_client_gets_current_state(self):
+        from PycroFlow.live_analysis.client_seam import (
+            CallbackClient,
+            UpdateHub,
+        )
+
+        hub = UpdateHub()
+        hub.push_kind("state", "RUN", state="experiment_started")
+        hub.push_kind("metrics", "RUN", metrics={})  # not sticky
+        seen = []
+        hub.add(CallbackClient(seen.append))
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0].kind, "state")
+        self.assertEqual(seen[0].payload["state"], "experiment_started")
+        # No state yet -> nothing replayed.
+        seen2 = []
+        UpdateHub().add(CallbackClient(seen2.append))
+        self.assertEqual(seen2, [])
+
+
 class TestMmLiveModeSwitch(unittest.TestCase):
     """set_mm_live_mode flips only when needed and reports ownership."""
 

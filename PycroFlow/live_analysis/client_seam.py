@@ -67,13 +67,29 @@ class UpdateHub:
     The service pushes here; every registered client's :meth:`on_update` is
     called, and one client raising is logged and swallowed so it can't affect
     acquisition or the other clients.
+
+    The LAST ``state`` update is sticky: a client registering late (the Live
+    tab connects at ORCHESTRATING, after the service already pushed
+    ``experiment_started``; a second GUI attaching mid-run) receives it on
+    :meth:`add`, so a freshly attached view shows the run's actual state
+    instead of sitting on "idle" through a long fluid phase.
     """
 
     def __init__(self):
         self._clients: list[LiveAnalysisClient] = []
+        self._last_state: LiveUpdate | None = None
 
     def add(self, client: LiveAnalysisClient) -> None:
         self._clients.append(client)
+        if self._last_state is not None:
+            from loguru import logger
+
+            try:
+                client.on_update(self._last_state)
+            except Exception as exc:  # noqa: BLE001 - same isolation as push
+                logger.warning(
+                    "live client raised on sticky state: {!r}".format(exc)
+                )
 
     def remove(self, client: LiveAnalysisClient) -> None:
         if client in self._clients:
@@ -82,6 +98,8 @@ class UpdateHub:
     def push(self, update: LiveUpdate) -> None:
         from loguru import logger
 
+        if update.kind == "state":
+            self._last_state = update
         for client in list(self._clients):
             try:
                 client.on_update(update)

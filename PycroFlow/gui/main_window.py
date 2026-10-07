@@ -205,15 +205,28 @@ class PycroFlowMainWindow(QMainWindow):
     def _sync_live_tab(self, state):
         """Attach the Live tab to the run's live-analysis stream (and detach
         after). The shell keeps showing the finished run's last metrics —
-        close_client only unsubscribes."""
+        close_client only unsubscribes. The status line next to the preview
+        toggle says WHICH world the shell is in — silently-disabled live
+        analysis looked like a dead tab on the rig."""
         if state in _RUN_LOCK_STATES:
             service = self._experiment_service.live_service
-            if service is not None and service is not self._live_connected:
+            if service is None:
+                self.live_tab.set_run_status(
+                    "live analysis off for this run (check camera_info / "
+                    "the log)"
+                )
+            elif service is not self._live_connected:
                 self.live_tab.connect_service(service)
                 self._live_connected = service
+                self.live_tab.set_run_status(
+                    "watching run {}".format(
+                        self._experiment_service.live_run_id or ""
+                    )
+                )
         elif self._live_connected is not None:
             self.live_tab.close_client()
             self._live_connected = None
+            self.live_tab.set_run_status("")
 
     def _lock_hardware(self, locked):
         self.setup_combo.setEnabled(not locked)

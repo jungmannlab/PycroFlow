@@ -284,6 +284,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the CURRENT FOV's acquisition (frames so far stay saved, honest
   partial-coverage record, immediate T3 interlock) and the protocol continues
   — distinct from the orchestrator Abort in the Run Sequence tab.
+- **The Live tab visibly connects to orchestrated runs**: the seam's update
+  hub replays its last `state` to late subscribers, so the tab shows
+  `experiment_started` the moment a run connects instead of sitting on
+  "idle" through the first (often minutes-long) fluid phase — which read as
+  "not connected" on the rig; and a status line next to the preview toggle
+  now says "watching run <id>" or "live analysis off for this run (check
+  camera_info / the log)", so a silently-disabled run is visible at a
+  glance.
 - **Auto contrast is latchable** (MM-style autostretch): the Overview's Auto
   button is now a toggle — latched, every incoming frame is re-stretched
   with the current ignore-% clip; manually editing black/white takes back
