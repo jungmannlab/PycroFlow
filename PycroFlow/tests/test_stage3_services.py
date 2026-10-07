@@ -261,17 +261,21 @@ class TestSystemService(unittest.TestCase):
         self.assertIsNone(svc.illumination_system)
 
     def test_monet_config_may_differ_from_setup_name(self):
-        # A fluidics setup (Ibidi) running on another microscope (Mercury)
-        # illuminates with that microscope's monet config.
+        # A fluidics setup (Ibidi) running on another microscope illuminates
+        # with THAT microscope's monet config. The exact key is lab-tuned in
+        # the shipped YAML (Mercury today, Mercury_nopf tomorrow) — assert
+        # the MECHANISM: it differs from the setup's own name and threads
+        # through laser_options and connect_illumination unchanged.
         svc = SystemService()
         svc.load_setup("Ibidi")
         self.assertEqual(svc.setup_name(), "Ibidi")
-        self.assertEqual(svc.get_monet_setup(), "Mercury")
-        with _fake_monet({"Mercury": {"lasers": {560: {}, 488: {}}}}):
+        monet_key = svc.get_monet_setup()
+        self.assertNotEqual(monet_key, "Ibidi")
+        with _fake_monet({monet_key: {"lasers": {560: {}, 488: {}}}}):
             self.assertEqual(svc.laser_options(), [488, 560])
             with patch("PycroFlow.illumination.IlluminationSystem") as IS:
                 svc.connect_illumination()
-        IS.assert_called_once_with(setup="Mercury")
+        IS.assert_called_once_with(setup=monet_key)
 
     def test_laser_options_from_monet_config(self):
         svc = SystemService()

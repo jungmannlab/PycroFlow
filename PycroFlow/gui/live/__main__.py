@@ -304,19 +304,16 @@ def _run_demo(app, QMainWindow, args) -> int:
         if stop.is_set():
             return
         img = _synthetic_frame(rng)
-        try:
-            svc.hub.push_kind(
-                "thumbnail",
-                svc.run_id,
-                data=img.tobytes(),
-                shape=img.shape,
-                dtype=str(img.dtype),
-                pixelsize_nm=130.0,
-                boxes=_identify_boxes(img, 7, args.min_net_gradient),
-                box_size=7,
-            )
-        except Exception:  # noqa: BLE001
-            pass
+        from PycroFlow.live_analysis.client_seam import push_thumbnail
+
+        push_thumbnail(
+            svc.hub,
+            svc.run_id,
+            img,
+            pixelsize_nm=130.0,
+            boxes=_identify_boxes(img, 7, args.min_net_gradient),
+            box_size=7,
+        )
 
     timer = QTimer()
     timer.timeout.connect(_push_thumb)
@@ -456,21 +453,16 @@ def _run_live(app, QMainWindow, args) -> int:
         frame = drv.latest_frame() if drv is not None else None
         if frame is None:
             return
-        try:
-            svc.hub.push_kind(
-                "thumbnail",
-                svc.run_id,
-                data=frame.tobytes(),
-                shape=tuple(frame.shape),
-                dtype=str(frame.dtype),
-                pixelsize_nm=args.pixelsize_nm or 130.0,
-                boxes=_identify_boxes(
-                    frame, args.box_size, args.min_net_gradient
-                ),
-                box_size=args.box_size,
-            )
-        except Exception:  # noqa: BLE001
-            pass
+        from PycroFlow.live_analysis.client_seam import push_thumbnail
+
+        push_thumbnail(
+            svc.hub,
+            svc.run_id,
+            frame,
+            pixelsize_nm=args.pixelsize_nm or 130.0,
+            boxes=_identify_boxes(frame, args.box_size, args.min_net_gradient),
+            box_size=args.box_size,
+        )
 
     timer = QTimer()
     timer.timeout.connect(_push_thumb)

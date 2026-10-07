@@ -118,18 +118,92 @@ class TestMainWindow(unittest.TestCase):
 
     def test_builds_tabs(self):
         w = self._build()
-        self.assertEqual(w.tabs.count(), 6)
+        self.assertEqual(w.tabs.count(), 7)
         self.assertEqual(
-            [w.tabs.tabText(i) for i in range(6)],
+            [w.tabs.tabText(i) for i in range(7)],
             [
                 "Experiment Design",
                 "Run Sequence",
                 "Fluid",
                 "Imaging",
                 "Webcams",
+                "Live",
                 "Monet",
             ],
         )
+
+    def test_live_tab_attaches_to_runs_live_service(self):
+        """WP-LIVE-INT: entering a run state connects the Live tab's shell to
+        the run's LiveAnalysisService; leaving it unsubscribes (the shell
+        keeps showing the last metrics)."""
+        from PycroFlow.live_analysis.service import LiveAnalysisService
+        from PycroFlow.services import ExperimentState
+
+        w = self._build()
+        self.assertIsNone(w._live_connected)
+        service = LiveAnalysisService()
+        w._experiment_service._live._service = service
+        w._on_experiment_state(
+            ExperimentState.LOADED, ExperimentState.ORCHESTRATING
+        )
+        self.assertIs(w._live_connected, service)
+        # The shell's bridge subscribed to the service's update hub.
+        self.assertIn(
+            w.live_tab.shell._bridge.seam_client, service.hub._clients
+        )
+        w._on_experiment_state(
+            ExperimentState.RUNNING, ExperimentState.FINISHED
+        )
+        self.assertIsNone(w._live_connected)
+        self.assertNotIn(
+            w.live_tab.shell._bridge.seam_client, service.hub._clients
+        )
+
+    def test_live_tab_preview_toggle(self):
+        """The MM-preview toggle connects the shell to the session's service,
+        bounces back when preview is unavailable, and run-lock stops it."""
+        from PycroFlow.gui.tabs.live_tab import LiveTabHost
+        from PycroFlow.live_analysis.service import LiveAnalysisService
+
+        calls = {"stop": 0}
+        service = LiveAnalysisService()
+
+        def stopped():
+            calls["stop"] += 1
+
+        # Unavailable: the toggle bounces back unchecked, no stop fired.
+        host = LiveTabHost(
+            on_start_preview=lambda: None, on_stop_preview=stopped
+        )
+        host.preview_btn.setChecked(True)
+        self.assertFalse(host.preview_btn.isChecked())
+        self.assertEqual(calls["stop"], 0)
+
+        # Available: shell subscribes; untoggling stops + unsubscribes.
+        host2 = LiveTabHost(
+            on_start_preview=lambda: service, on_stop_preview=stopped
+        )
+        host2.preview_btn.setChecked(True)
+        self.assertIn(host2.shell._bridge.seam_client, service.hub._clients)
+        host2.preview_btn.setChecked(False)
+        self.assertEqual(calls["stop"], 1)
+        self.assertNotIn(host2.shell._bridge.seam_client, service.hub._clients)
+
+        # Run lock while previewing: preview stops, toggle disables.
+        host2.preview_btn.setChecked(True)
+        host2.set_run_lock(True)
+        self.assertEqual(calls["stop"], 2)
+        self.assertFalse(host2.preview_btn.isChecked())
+        self.assertFalse(host2.preview_btn.isEnabled())
+        host2.set_run_lock(False)
+        self.assertTrue(host2.preview_btn.isEnabled())
+
+        # Service-side end (sidebar Early-abort): the toggle unlatches and
+        # the stop callback fires once the abort update reaches the shell.
+        host2.preview_btn.setChecked(True)
+        service.request_abort()
+        self.assertFalse(host2.preview_btn.isChecked())
+        self.assertEqual(calls["stop"], 3)
 
     def test_window_title_has_version(self):
         from PycroFlow import __version__
@@ -2395,6 +2469,14 @@ class TestWebcamsTab(unittest.TestCase):
 
         svc = SystemService()
         svc.load_setup(setup_name)
+        # The shipped setup's camera roster is LAB-TUNED (and has drifted
+        # before); pin a known three-camera list here so the editor tests
+        # stay hermetic w.r.t. config edits.
+        svc.setup["monitoring"]["cameras"] = [
+            {"role": "reservoir", "device": 0, "width": 320, "height": 240},
+            {"role": "pump", "device": 1, "width": 320, "height": 240},
+            {"role": "sample", "device": 2, "width": 320, "height": 240},
+        ]
         self._changed = 0
 
         def on_changed():

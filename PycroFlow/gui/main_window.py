@@ -1,7 +1,7 @@
 """PycroFlowMainWindow — the top-level GUI window.
 
 A toolbar (setup selector + Connect) over a tab widget: Experiment
-Design, Run Sequence, Fluid, Imaging, Monet. The run controls (Load /
+Design, Run Sequence, Fluid, Imaging, Live, Monet. The run controls (Load /
 Start / Pause-Resume / Abort) live in the Run Sequence tab. The window also
 coordinates
 hardware connection: the microscope **setup** is chosen in the toolbar, and
@@ -39,6 +39,8 @@ from PycroFlow.gui.tabs.fluid_tab import FluidTab
 from PycroFlow.gui.tabs.imaging_tab import ImagingTab
 from PycroFlow.gui.tabs.monet_tab import MonetTab
 from PycroFlow.gui.tabs.webcams_tab import WebcamsTab
+from PycroFlow.gui.tabs.live_tab import LiveTabHost
+from PycroFlow.services.live_preview import LivePreviewSession
 
 # Experiment states during which hardware must not be touched manually (the
 # orchestrator owns the instruments).
@@ -118,12 +120,27 @@ class PycroFlowMainWindow(QMainWindow):
             self._system_service, on_config_changed=self._attach_monitoring
         )
         self.monet_tab = MonetTab()
+        # WP-LIVE-INT: the WP-GUI operator shell as a tab, passive until a run
+        # creates a LiveAnalysisService (connected in _on_experiment_state) or
+        # the operator toggles the MM preview (LivePreviewSession — watch
+        # MM's own Live view through the pipeline, no protocol). The shell's
+        # manual run controls are inert by design (run control lives in the
+        # Run Sequence tab); the sidebar Early-abort stays usable and ends
+        # only the CURRENT FOV's acquisition — the protocol then continues —
+        # so it is deliberately NOT run-locked like the other tabs' controls.
+        self._preview = LivePreviewSession()
+        self.live_tab = LiveTabHost(
+            on_start_preview=self._start_preview,
+            on_stop_preview=self._preview.stop,
+        )
+        self._live_connected = None
 
         self.tabs.addTab(self.design_tab, "Experiment Design")
         self.tabs.addTab(self.run_sequence_tab, "Run Sequence")
         self.tabs.addTab(self.fluid_tab, "Fluid")
         self.tabs.addTab(self.imaging_tab, "Imaging")
         self.tabs.addTab(self.webcams_tab, "Webcams")
+        self.tabs.addTab(self.live_tab, "Live")
         self.tabs.addTab(self.monet_tab, "Monet")
         self.setCentralWidget(self.tabs)
 
@@ -166,6 +183,8 @@ class PycroFlowMainWindow(QMainWindow):
         self.design_tab.refresh_setup_options()
         self._attach_monitoring()
         self.webcams_tab.refresh()
+        # Provenance for the registry's experiment record (WP-LIVE-INT).
+        self._experiment_service.setup_name = name
         self._refresh_status()
         # If a design is already loaded, connect for the new setup.
         if self._experiment_service.experiment_design:
@@ -180,6 +199,20 @@ class PycroFlowMainWindow(QMainWindow):
     def _on_experiment_state(self, old, new):
         """Lock/unlock manual hardware access on experiment state changes."""
         self._lock_hardware(new in _RUN_LOCK_STATES)
+        self._sync_live_tab(new)
+
+    def _sync_live_tab(self, state):
+        """Attach the Live tab to the run's live-analysis stream (and detach
+        after). The shell keeps showing the finished run's last metrics —
+        close_client only unsubscribes."""
+        if state in _RUN_LOCK_STATES:
+            service = self._experiment_service.live_service
+            if service is not None and service is not self._live_connected:
+                self.live_tab.connect_service(service)
+                self._live_connected = service
+        elif self._live_connected is not None:
+            self.live_tab.close_client()
+            self._live_connected = None
 
     def _lock_hardware(self, locked):
         self.setup_combo.setEnabled(not locked)
@@ -198,6 +231,8 @@ class PycroFlowMainWindow(QMainWindow):
         )
         self.webcams_tab.set_run_lock(locked, live_path=live)
         self.monet_tab.set_run_lock(locked)
+        # A run owns the camera: any MM preview stops, the toggle disables.
+        self.live_tab.set_run_lock(locked)
         if not locked:
             # Restore real connection statuses after the run lock lifts.
             self._refresh_status()
@@ -360,6 +395,21 @@ class PycroFlowMainWindow(QMainWindow):
         except Exception:
             pass
 
+    # --- MM live preview ------------------------------------------------
+
+    def _start_preview(self):
+        """Live-tab Preview toggle: watch MM's Live view (no protocol)."""
+        imaging = self._system_service.imaging_system
+        if imaging is None:
+            QMessageBox.warning(
+                self,
+                "No imaging system",
+                "Connect the imaging system first (load a design or use "
+                "the Imaging tab), then start Micro-Manager's Live mode.",
+            )
+            return None
+        return self._preview.start(imaging)
+
     # --- run-sequence helpers -----------------------------------------
 
     def _on_translated(self):
@@ -421,6 +471,11 @@ class PycroFlowMainWindow(QMainWindow):
             self._monitoring.detach()
             self._monitoring = None
         self.webcams_tab.stop_preview()
+        try:
+            self._preview.stop()
+            self.live_tab.close_client()
+        except Exception:
+            pass
         self.monet_tab.shutdown()
         try:
             self._system_service.close()

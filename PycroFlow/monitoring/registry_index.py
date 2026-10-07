@@ -20,7 +20,6 @@ networked/authenticated registry, per ADR 001 / C18). Unset => indexing off.
 
 from __future__ import annotations
 
-import os
 from typing import Any, Optional
 
 from loguru import logger
@@ -64,40 +63,19 @@ class RegistryIndexWriter:
     ) -> "RegistryIndexWriter":
         """Build from ``PAINT_REGISTRY_URL`` / ``PAINT_REGISTRY_TOKEN``.
 
-        Returns a disabled writer (indexing off) when the URL is unset or the
+        Delegates to the stack-wide factory
+        (:func:`PycroFlow.services.registry.registry_client_from_env` — the
+        same client construction the live-analysis records use), so every
+        PycroFlow registry writer shares one env convention. Returns a
+        disabled writer (indexing off) when the URL is unset or the
         ``picasso-registry`` client is not installed -- never raises.
         """
-        url = os.environ.get("PAINT_REGISTRY_URL")
-        if not url:
-            logger.info(
-                "monitoring: PAINT_REGISTRY_URL unset; clip indexing disabled"
-            )
+        from PycroFlow.services.registry import registry_client_from_env
+
+        client = registry_client_from_env(buffer_path=buffer_path)
+        if client is None:
+            logger.info("monitoring: clip indexing disabled (no registry)")
             return cls(run_id, None)
-        try:
-            from picasso_registry.buffered_client import (
-                BufferedRegistryClient,
-            )
-        except Exception as exc:  # ImportError or a broken install
-            logger.warning(
-                "monitoring: picasso-registry client unavailable "
-                "({!r}); clip indexing disabled",
-                exc,
-            )
-            return cls(run_id, None)
-        token = os.environ.get("PAINT_REGISTRY_TOKEN")
-        buf = buffer_path or os.environ.get(
-            "PYCROFLOW_REGISTRY_BUFFER", "registry_buffer.sqlite"
-        )
-        try:
-            client = BufferedRegistryClient(url, buffer_path=buf, token=token)
-        except Exception as exc:  # never let registry setup break capture
-            logger.warning(
-                "monitoring: could not start registry client ({!r}); "
-                "clip indexing disabled",
-                exc,
-            )
-            return cls(run_id, None)
-        logger.info("monitoring: clip indexing -> {}", url)
         return cls(run_id, client, owns_client=True)
 
     def index(

@@ -94,3 +94,50 @@ class UpdateHub:
         self, kind: str, run_id: str | None = None, **payload: Any
     ) -> None:
         self.push(LiveUpdate(kind=kind, run_id=run_id, payload=payload))
+
+
+def push_thumbnail(
+    hub,
+    run_id,
+    frame,
+    *,
+    pixelsize_nm=None,
+    boxes=None,
+    box_size=None,
+) -> None:
+    """Push one Overview-renderable ``thumbnail`` update. Never raises.
+
+    The single construction of the thumbnail payload (raw bytes + shape +
+    dtype + scale, optional picasso-style detection ``boxes``) shared by
+    every pusher — the demo/live launchers and the MM-preview session — so
+    the schema the Overview consumes cannot drift between them.
+
+    Parameters
+    ----------
+    hub : UpdateHub
+        The service's update hub.
+    run_id : str or None
+        The run the update is tagged with.
+    frame : numpy.ndarray
+        The 2-D frame to show (sent as raw bytes).
+    pixelsize_nm : float or None
+        Sample-plane pixel size for the scale bar — pass the EFFECTIVE value
+        (multiply by the stride when sending a downsampled frame).
+    boxes, box_size : list or None, int or None
+        Optional detection overlay (flat [x0, y0, x1, y1, ...] + box size).
+    """
+    from loguru import logger
+
+    try:
+        payload = {
+            "data": frame.tobytes(),
+            "shape": frame.shape,
+            "dtype": str(frame.dtype),
+            "pixelsize_nm": pixelsize_nm,
+        }
+        if boxes is not None:
+            payload["boxes"] = boxes
+            payload["box_size"] = box_size
+        hub.push_kind("thumbnail", run_id, **payload)
+    except Exception as exc:  # noqa: BLE001 - a thumbnail must never hurt
+        logger.warning("thumbnail push failed: {!r}".format(exc))

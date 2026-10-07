@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Bundle (ibidi + WP-LIVE-INT):** the fluidics-monitoring clip indexer now
+  builds its registry client through the stack-wide factory
+  (`services/registry.registry_client_from_env`) instead of its own env
+  parsing — one convention for every PycroFlow registry writer. Tests that
+  pinned lab-tunable shipped-config values (the `Ibidi` setup's monet key,
+  the `EmulatorCam` camera roster) now assert the mechanism instead of the
+  roster, so lab instrument-config edits no longer break CI.
+
 ### Fixed
 
 - Fluidics monitoring **live view now actually starts** during a run. The GUI
@@ -240,6 +250,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fluid.multiplexer.grid_cols` / `pump_channel` keys tune the drawn geometry
   (default 6 / port 1). Removed a stale duplicate of the Fluid tab's
   `_refresh_reservoirs` / `_update_route_hint` while wiring this in.
+### Added
+
+- **WP-LIVE-INT — live analysis on the orchestrated product path.** A normal
+  `pycroflow`/`pycroflow-gui` run now gets the WP-4 live pipeline without any
+  standalone launcher: `ExperimentService` owns a `LiveRunCoordinator`
+  (`services/live_run.py`) that lazily builds the `LiveAnalysisService` at run
+  start, mints the ULID run_id of record, runs one `run_fov` per imaging
+  `acquire` step, and tears down (with the C21 end-of-run laser interlock) on
+  finish/abort. Frames come from the production acquisition via a new
+  `FrameTap` (`live_analysis/frame_tap.py`): `ImagingSystem.record_movie`
+  brackets each FOV and `image_process_fn` tees every frame into an
+  `ImageQueueFrameSource` (non-blocking; the hot path only pays a queue put).
+  Enabled when the setup's imaging config carries a picasso `camera_info`
+  block (tunables via a `live_analysis` block); `PYCROFLOW_LIVE_ANALYSIS=0`
+  is the kill switch. The `EmulatedImagingSystem` synthesizes frames through
+  the same tap, so the Emulator setup exercises the whole path.
+- **"Live" tab in the main GUI**: the WP-GUI `LiveShell` is mounted in
+  `PycroFlowMainWindow`, passive until a run starts, auto-connected to the
+  run's live service and unsubscribed after. Its sidebar **Early-abort** ends
+  only the CURRENT FOV's acquisition (frames so far stay saved, honest
+  partial-coverage record, immediate T3 interlock) and the protocol continues
+  — distinct from the orchestrator Abort in the Run Sequence tab.
+- **Preview review fixes** (adversarial review of the preview commit):
+  stopping a preview never blocks the GUI thread (abort is requested first;
+  the peek poller's join runs on a background thread); the sidebar
+  **Early-abort now ends the preview** — reflected on the toggle — instead of
+  silently restarting the segment with reset metrics; emulated preview
+  segments are paced (`preview_mock_delay_s`, default 0.05 s) so they no
+  longer pin the CPU; thumbnails skip unchanged frames and are downsampled to
+  ~512 px (`preview_thumbnail_max_px`) with the scale corrected, instead of
+  re-pushing full 8 MB frames twice a second; `latest_frame` is declared on
+  the `FrameSource` ABC; the `camera_info`/`live_analysis` readers and the
+  options→`FovConfig` plumbing live in one shared `services/imaging_config.py`
+  (used by the orchestrated and preview paths); every thumbnail pusher
+  (demo/live launchers + preview) shares one `client_seam.push_thumbnail`;
+  the `SOURCE_INSTANCE` factory kind became an explicit
+  `FovConfig.source_instance` field; docstring gaps closed.
+- **MM live-preview mode in the Live tab**: a "Start MM preview" toggle
+  (`gui/tabs/live_tab.py` hosting the shell) watches Micro-Manager's own Live
+  view through the live pipeline with NO protocol running —
+  `services/live_preview.py` drives WP-4's non-destructive
+  `RamPeekFrameSource` (now accepting the setup's `camera_info` so the peeked
+  stream localizes) and pushes thumbnails to the shell's Overview from the
+  source's new `latest_frame` tap. Read-only by design: no registry records,
+  no laser interlock, lossy (view-only). On emulated setups the preview loops
+  synthetic `MockFrameSource` segments, so it demos and tests with no
+  instrument. A starting run stops any preview and disables the toggle (the
+  run owns the camera); tunables `preview_poll_s`/`preview_port` ride the
+  `live_analysis` config block.
+- **Registry auto-connect**: a shared from-env client factory
+  (`services/registry.py`, `PAINT_REGISTRY_URL` / `PAINT_REGISTRY_TOKEN` /
+  `PYCROFLOW_REGISTRY_BUFFER` → WP-3 `BufferedRegistryClient`; unset = quietly
+  disabled) now feeds the live service in production, and each run writes an
+  **experiment-level record** (`build_experiment_payload` /
+  `post_experiment_record`) that the per-FOV `acquisition_run` rows link to
+  via `experiment_id`.
+
+### Fixed
+
+- `post_fov_record` now pre-mints row ids client-side, so the
+  acquisition→fov→analysis→metrics FK chain works with the fire-and-forget
+  `BufferedRegistryClient` (whose writes return an acknowledgement, not the
+  row — chaining on the response id raised `KeyError` in production) and
+  dedups exactly on at-least-once replay.
+- `LiveAnalysisService.run_fov` records an early-abort honestly even when the
+  frame source ends (sentinel) before the per-batch abort check runs again —
+  previously such a FOV could be reported clean.
+- **Review fixes (adversarial review of WP-LIVE-INT):**
+  - The frame tap's live backlog is now **soft-bounded**
+    (`live_analysis.max_pending_frames`, default 256): when the pipeline lags
+    that far, frames are dropped from the live stream (counted, logged
+    loudly) instead of accumulating raw frames in RAM without bound (OOM risk
+    on long FOVs; the raw movie on disk is unaffected).
+  - **No more blocking joins on hot threads:** FOVs are queued to a single
+    per-run consumer thread (the acquisition thread only enqueues — the
+    previous design joined the prior FOV's worker for up to 60 s inside
+    `record_movie`), and `stop_run` hands joins/interlock/registry-close to a
+    background teardown thread so the Abort button / `closeEvent` (GUI
+    thread) never freeze on a draining pipeline (`wait_idle()` for tests).
+  - **Abort requests are generation-counted**: `clear_abort(generation=...)`
+    re-arms exactly the requests a finished FOV consumed, so an early-abort
+    landing between FOVs is served to the next FOV instead of being silently
+    lost; acquisition-side delivery is gated the same way (one request ends
+    at most one MDA).
+  - `record_movie` initialises `viewer` before the acquisition block — with
+    `show_display: false` it previously raised `UnboundLocalError` after
+    every movie (pre-existing).
+  - The **C15 archive step is wired** on the orchestrated path:
+    `record_movie` captures the finished dataset's on-disk path and, when the
+    setup configures `live_analysis.archive_dir`, the per-FOV pipeline moves
+    the raw movie; unset, the gap is logged once per run (no longer silent)
+    and the record carries `raw_data_path`.
+  - One `config['camera_info']` / `config['live_analysis']` spelling for real
+    and emulated imaging systems (the `live_camera_info` attribute variant is
+    gone); emulators feed the tap via the shared `FrameTap.feed_frames`
+    bracketing helper instead of re-implementing the protocol; the
+    record-surfacing triad is a single `surface_record` helper used by both
+    the per-FOV and experiment-level posts.
 
 ## [0.2.0] - 2026-09-30
 
