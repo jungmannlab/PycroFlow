@@ -225,22 +225,10 @@ def _synthetic_frame(rng, h: int = 128, w: int = 128):
 
 
 def _identify_boxes(frame, box, min_ng):
-    """Flat ``[x0, y0, x1, y1, ...]`` spot centres via picasso ``identify`` — the
-    same detection step picasso Localize draws boxes from — or None if
-    unavailable. Cheap: one frame. Kept launcher-side so the GUI stays picasso-
-    free (it only renders the coords it is handed).
-    """
-    try:
-        from picasso.localize import identify_in_image
+    """Shared identify-for-overlay step (see live_analysis.boxes)."""
+    from PycroFlow.live_analysis.boxes import identify_boxes
 
-        ys, xs, _ng = identify_in_image(frame, float(min_ng), int(box))
-        out = []
-        for xi, yi in zip(xs, ys):
-            out.append(float(xi))
-            out.append(float(yi))
-        return out
-    except Exception:  # noqa: BLE001 - the overlay is best-effort
-        return None
+    return identify_boxes(frame, box, min_ng)
 
 
 def _run_demo(app, QMainWindow, args) -> int:

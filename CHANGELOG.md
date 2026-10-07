@@ -284,6 +284,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the CURRENT FOV's acquisition (frames so far stay saved, honest
   partial-coverage record, immediate T3 interlock) and the protocol continues
   — distinct from the orchestrator Abort in the Run Sequence tab.
+- **Preview box overlay**: the MM preview now pushes picasso-style detection
+  boxes with each thumbnail (same `identify` step and localize parameters the
+  pipeline uses, run on the full frame and scaled onto the downsampled
+  thumbnail; toggle off via `live_analysis: {preview_boxes: false}`). The
+  identify-for-overlay step is one shared helper (`live_analysis/boxes.py`)
+  used by the demo/live launchers and the preview — the Overview's "boxes"
+  checkbox now works in all three.
 - **Preview review fixes** (adversarial review of the preview commit):
   stopping a preview never blocks the GUI thread (abort is requested first;
   the peek poller's join runs on a background thread); the sidebar

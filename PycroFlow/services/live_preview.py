@@ -238,9 +238,20 @@ class LivePreviewSession:
             segment += 1
 
     def _push_thumbnails(self, service, camera_info, options) -> None:
+        from PycroFlow.live_analysis.boxes import identify_boxes
+        from PycroFlow.live_analysis.client_seam import push_thumbnail
+        from PycroFlow.live_analysis.service import DEFAULT_LOCALIZE_PARAMS
+
         pixelsize = camera_info.get("Pixelsize")
         max_px = options.get("preview_thumbnail_max_px", _THUMB_MAX_PX)
-        from PycroFlow.live_analysis.client_seam import push_thumbnail
+        # Detection-box overlay: identify on the FULL frame (downsampling
+        # destroys the PSF gradients picasso detects on), with the same
+        # parameters the pipeline localizes with, then scale the centres onto
+        # the downsampled thumbnail. `preview_boxes: false` turns it off.
+        params = dict(options.get("localize_params", DEFAULT_LOCALIZE_PARAMS))
+        box_size = int(params.get("Box Size", 7))
+        min_ng = float(params.get("Min. Net Gradient", 5000))
+        with_boxes = bool(options.get("preview_boxes", True))
 
         last = None
         while not self._stop.is_set():
@@ -254,6 +265,13 @@ class LivePreviewSession:
                     1, int(-(-max(frame.shape) // max_px))
                 )  # ceil div
                 thumb = frame[::stride, ::stride]
+                boxes = (
+                    identify_boxes(frame, box_size, min_ng)
+                    if with_boxes
+                    else None
+                )
+                if boxes is not None and stride > 1:
+                    boxes = [coord / stride for coord in boxes]
                 push_thumbnail(
                     service.hub,
                     service.run_id,
@@ -261,5 +279,7 @@ class LivePreviewSession:
                     pixelsize_nm=(
                         pixelsize * stride if pixelsize else pixelsize
                     ),
+                    boxes=boxes,
+                    box_size=max(3, round(box_size / stride)),
                 )
             time.sleep(_THUMB_INTERVAL_S)

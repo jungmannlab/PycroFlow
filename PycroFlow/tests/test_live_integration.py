@@ -393,10 +393,15 @@ class TestLivePreviewSession(unittest.TestCase):
         self.assertIsNotNone(seen["metrics"], "no metrics update arrived")
         thumb = seen["thumbnail"]
         self.assertIsNotNone(thumb, "no thumbnail update arrived")
-        # The Overview-renderable payload: raw bytes + shape + dtype.
+        # The Overview-renderable payload: raw bytes + shape + dtype + the
+        # detection-box overlay (flat [x, y, ...] list; may be empty on a
+        # spotless frame, but the key is present when detection ran).
         self.assertIn("data", thumb)
         self.assertEqual(len(thumb["shape"]), 2)
         self.assertEqual(thumb["pixelsize_nm"], 130.0)
+        self.assertIn("boxes", thumb)
+        self.assertEqual(len(thumb["boxes"]) % 2, 0)
+        self.assertGreaterEqual(thumb["box_size"], 3)
 
     def test_early_abort_ends_the_preview(self):
         """The sidebar Early-abort stops the preview outright — no silent
@@ -422,6 +427,26 @@ class TestLivePreviewSession(unittest.TestCase):
         self.assertIsNone(session.start(NoInfoImaging()))
         self.assertIsNone(session.start(None))
         self.assertFalse(session.active)
+
+
+class TestIdentifyBoxes(unittest.TestCase):
+
+    def test_finds_spots_on_a_mock_frame_and_never_raises(self):
+        from PycroFlow.live_analysis.boxes import identify_boxes
+        from PycroFlow.live_analysis.frame_source import MockFrameSource
+
+        # A deterministic frame from the shared synthetic source (the same
+        # frames the demo and the emulated preview draw boxes from).
+        frame = next(MockFrameSource(n_frames=1, seed=1).batches(1)).frames[0]
+        boxes = identify_boxes(frame, 7, 200)
+        self.assertIsNotNone(boxes)
+        self.assertGreaterEqual(len(boxes), 2)
+        self.assertEqual(len(boxes) % 2, 0)
+        h, w = frame.shape
+        for x, y in zip(boxes[0::2], boxes[1::2]):
+            self.assertTrue(0 <= x < w and 0 <= y < h)
+        # Garbage input degrades to None, never an exception.
+        self.assertIsNone(identify_boxes(None, 7, 200))
 
 
 class TestExperimentServiceLiveIntegration(unittest.TestCase):
