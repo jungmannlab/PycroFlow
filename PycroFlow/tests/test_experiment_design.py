@@ -289,7 +289,8 @@ class TestSetupConfigs(unittest.TestCase):
         import yaml
 
         new = configs.load_setup("IbidiEmulator")
-        old_yaml = yaml.safe_load("""
+        old_yaml = yaml.safe_load(
+            """
             setup: IbidiEmulator
             emulated: true
             hamilton:
@@ -309,7 +310,8 @@ class TestSetupConfigs(unittest.TestCase):
                 - {id: 1, valve_pos: {ibidi: 1, 1: in}}
             tubing:
               - {from: R1, to: pump_a, volume: 325}
-        """)
+        """
+        )
         old = configs._normalize_setup(old_yaml)
         self.assertEqual(configs.monet_config(old), "IbidiEmulator")
         self.assertEqual([e["id"] for e in configs.setup_reservoirs(old)], [1])
