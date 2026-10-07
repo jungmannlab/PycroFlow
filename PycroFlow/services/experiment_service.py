@@ -455,6 +455,12 @@ class ExperimentService:
         return self._orchestrator
 
     @property
+    def imaging_system(self):
+        """The attached imaging system (or None) — read-only, for frontends
+        that need runtime facts like the MM position-list count."""
+        return self._imaging_system
+
+    @property
     def live_service(self):
         """The run's LiveAnalysisService (for GUI clients), or None.
 

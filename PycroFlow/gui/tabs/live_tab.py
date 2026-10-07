@@ -33,14 +33,25 @@ class LiveTabHost(QWidget):
         None when preview is unavailable.
     on_stop_preview : callable or None
         Called when the operator toggles the preview OFF (or a run starts).
+    on_overlay_params : callable or None
+        Called with the sidebar's Core-controls payload (``{"Box Size", "Min.
+        Net Gradient", ...}``) whenever the operator changes them and once at
+        preview start — the preview session steers its detection-box overlay
+        with these, so the drawn boxes always match the entered values.
     """
 
     def __init__(
-        self, *, on_start_preview=None, on_stop_preview=None, parent=None
+        self,
+        *,
+        on_start_preview=None,
+        on_stop_preview=None,
+        on_overlay_params=None,
+        parent=None,
     ):
         super().__init__(parent)
         self._on_start_preview = on_start_preview
         self._on_stop_preview = on_stop_preview
+        self._on_overlay_params = on_overlay_params
         self._previewing = False
 
         layout = QVBoxLayout(self)
@@ -68,6 +79,10 @@ class LiveTabHost(QWidget):
         # owns the shell, so listening on its update signal is the seam-
         # consistent way to observe the stream without a second bridge.
         self.shell._bridge.update.connect(self._on_shell_update)
+        # The sidebar's Core controls (box size / min net gradient) steer the
+        # preview's box overlay live — this is the consumer the sidebar's
+        # params_changed signal was waiting for.
+        self.shell.sidebar.params_changed.connect(self._relay_overlay_params)
 
     # -- shell pass-through (what the main window drives) ----------------------
 
@@ -114,6 +129,9 @@ class LiveTabHost(QWidget):
                 return
             self._previewing = True
             self.shell.connect_service(service)
+            # Seed the overlay from the sidebar so the boxes match what the
+            # operator sees in the Core controls from the first frame.
+            self._relay_overlay_params(self.shell.sidebar.current_params())
             self.preview_btn.setText("Stop MM preview")
             self.preview_status.setText("previewing (view-only, lossy)")
         else:
@@ -128,6 +146,10 @@ class LiveTabHost(QWidget):
             self.shell.close_client()
         self.preview_btn.setText("Start MM preview")
         self.preview_status.setText("")
+
+    def _relay_overlay_params(self, params) -> None:
+        if self._on_overlay_params is not None:
+            self._on_overlay_params(dict(params or {}))
 
     # -- run coordination -------------------------------------------------------
 

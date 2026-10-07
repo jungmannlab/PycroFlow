@@ -591,3 +591,26 @@ class TestInertControls(_QtTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAutoContrastIgnore(_QtTestCase):
+    """MM-style 'ignore %' reference for the Overview's Auto contrast."""
+
+    def test_auto_uses_ignore_percentiles(self):
+        import numpy as np
+
+        from PycroFlow.gui.live.panels import OverviewZoom
+
+        panel = OverviewZoom()
+        raw = np.arange(10000, dtype=np.uint16).reshape(100, 100)
+        panel._set_image_from_bytes(raw.tobytes(), raw.shape, "uint16")
+
+        panel.ignore_pct.setValue(10.0)  # valueChanged triggers auto
+        self.assertEqual(panel.black.value(), int(np.percentile(raw, 10)))
+        self.assertEqual(panel.white.value(), int(np.percentile(raw, 90)))
+
+        # 0 % = true min/max, like MM with the reference at zero.
+        panel.ignore_pct.setValue(0.0)
+        panel._auto_contrast()
+        self.assertEqual(panel.black.value(), 0)
+        self.assertEqual(panel.white.value(), 9999)

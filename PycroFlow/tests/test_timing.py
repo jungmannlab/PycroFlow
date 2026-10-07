@@ -236,3 +236,68 @@ class TestVolumes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMultiPositionEstimates(unittest.TestCase):
+    """use_positions: acquire estimates scale by the MM position count."""
+
+    def test_acquire_scales_including_per_position_setup(self):
+        from PycroFlow.protocols.timing import estimate_entry_duration
+
+        entry = {"$type": "acquire", "frames": 100, "t_exp": 100}
+        single = estimate_entry_duration(entry)
+        self.assertEqual(
+            estimate_entry_duration(entry, positions=3), 3 * single
+        )
+        # Non-acquire entries are untouched by the factor.
+        inc = {"$type": "incubate", "duration": 30}
+        self.assertEqual(
+            estimate_entry_duration(inc, positions=3),
+            estimate_entry_duration(inc),
+        )
+
+    def test_protocol_level_factor_applies_to_img_only(self):
+        from PycroFlow.protocols.timing import (
+            estimate_durations,
+            estimate_total_duration,
+        )
+
+        protocol = {
+            "img": {
+                "protocol_entries": [
+                    {"$type": "acquire", "frames": 10, "t_exp": 100}
+                ]
+            },
+            "fluid": {
+                "protocol_entries": [{"$type": "incubate", "duration": 7}]
+            },
+        }
+        base = estimate_durations(protocol)
+        scaled = estimate_durations(protocol, img_positions=4)
+        self.assertEqual(scaled["img"][0], 4 * base["img"][0])
+        self.assertEqual(scaled["fluid"], base["fluid"])
+        self.assertEqual(
+            estimate_total_duration(protocol, img_positions=4),
+            4 * base["img"][0] + base["fluid"][0],
+        )
+
+    def test_step_progress_spans_positions(self):
+        from types import SimpleNamespace
+
+        from PycroFlow.imaging import ImagingSystem
+
+        stub = SimpleNamespace(
+            acquiring=True,
+            curr_n_frames=100,
+            curr_frame=30,
+            n_positions=4,
+            curr_position=2,
+        )
+        self.assertEqual(
+            ImagingSystem.get_step_progress(stub),
+            (230, 400, "frames · pos 3/4"),
+        )
+        stub.n_positions = 0
+        self.assertEqual(
+            ImagingSystem.get_step_progress(stub), (30, 100, "frames")
+        )

@@ -65,7 +65,7 @@ def _param(parameters, key, default):
         return float(default)
 
 
-def estimate_entry_duration(entry, parameters=None):
+def estimate_entry_duration(entry, parameters=None, positions=1):
     """Estimate one protocol entry's wall-clock duration, in seconds.
 
     Adds the calibrated fixed overheads (see the module docstring) to the
@@ -80,6 +80,12 @@ def estimate_entry_duration(entry, parameters=None):
         The owning subsystem's ``parameters`` block, used for the fluid
         fallback velocity, the inject equilibration delays, and the optional
         ``est_*`` overhead overrides.
+    positions : int
+        Multi-position factor for ``acquire`` entries (``use_positions``):
+        one movie — exposure, readout AND the per-acquisition arm/PFS setup —
+        is recorded per MM position-list entry. The count lives in MM at
+        runtime; callers with a connected imaging system pass
+        ``ImagingSystem.position_count()``, everyone else 1.
     """
     if not isinstance(entry, dict):
         return 0.0
@@ -96,9 +102,10 @@ def estimate_entry_duration(entry, parameters=None):
         setup = _param(
             parameters, "est_acquire_setup", DEFAULT_ACQUIRE_SETUP_S
         )
-        # Each frame costs its exposure plus camera readout/transfer, and the
-        # whole acquisition has a fixed arm/PFS/ZMQ startup.
-        return frames * (t_exp / 1000.0 + frame_overhead) + setup
+        # Each frame costs its exposure plus camera readout/transfer, and
+        # EACH position's movie has its own fixed arm/PFS/ZMQ startup.
+        single = frames * (t_exp / 1000.0 + frame_overhead) + setup
+        return single * max(1, int(positions or 1))
     if type_ == "incubate":
         try:
             return max(float(entry.get("duration") or 0), 0.0)
@@ -126,7 +133,7 @@ def estimate_entry_duration(entry, parameters=None):
     return 0.0
 
 
-def estimate_durations(protocol):
+def estimate_durations(protocol, img_positions=1):
     """Per-entry duration estimates for each subsystem.
 
     Parameters
@@ -134,6 +141,10 @@ def estimate_durations(protocol):
     protocol : dict
         A compiled Run Sequence protocol
         (``{system: {'protocol_entries': [...], 'parameters': {...}}}``).
+    img_positions : int
+        Multi-position factor applied to the imaging subsystem's ``acquire``
+        entries (see :func:`estimate_entry_duration`); the count lives in
+        MM's position list at runtime, so design-time callers use 1.
 
     Returns
     -------
@@ -149,13 +160,22 @@ def estimate_durations(protocol):
             continue
         entries = sub.get("protocol_entries") or []
         params = sub.get("parameters") or {}
-        out[system] = [estimate_entry_duration(e, params) for e in entries]
+        positions = img_positions if system == "img" else 1
+        out[system] = [
+            estimate_entry_duration(e, params, positions=positions)
+            for e in entries
+        ]
     return out
 
 
-def estimate_total_duration(protocol):
+def estimate_total_duration(protocol, img_positions=1):
     """Estimated wall-clock duration of the whole protocol, in seconds."""
-    return sum(sum(durs) for durs in estimate_durations(protocol).values())
+    return sum(
+        sum(durs)
+        for durs in estimate_durations(
+            protocol, img_positions=img_positions
+        ).values()
+    )
 
 
 def estimate_remaining(durations, current):

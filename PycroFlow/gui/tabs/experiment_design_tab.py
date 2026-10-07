@@ -335,15 +335,21 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             protocol = ProtocolBuilder().build_protocol(design)
             total = estimate_total_duration(protocol)
             volumes = estimate_volumes(protocol)
+            img_settings = (design.get("img") or {}).get("settings") or {}
+            per_position = bool(img_settings.get("use_positions"))
         except Exception:
             self.estimate_label.setText("Estimated: — (design incomplete)")
             self.preview_text.setPlainText(
                 "The sequence preview appears once the design compiles."
             )
             return
+        # With use_positions the acquire time multiplies by MM's position-
+        # list length, which only MM knows at runtime — say so instead of
+        # showing a silently-wrong single-position number.
         self.estimate_label.setText(
-            "Estimated: ~{}  ·  {} reagents".format(
+            "Estimated: ~{}{}  ·  {} reagents".format(
                 format_duration(total),
+                " × MM positions (imaging)" if per_position else "",
                 format_volume(volumes["total_injected"]),
             )
         )

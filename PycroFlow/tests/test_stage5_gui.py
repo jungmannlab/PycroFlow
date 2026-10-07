@@ -205,6 +205,28 @@ class TestMainWindow(unittest.TestCase):
         self.assertFalse(host2.preview_btn.isChecked())
         self.assertEqual(calls["stop"], 3)
 
+    def test_sidebar_core_controls_steer_the_preview_overlay(self):
+        """The sidebar's box-size / min-net-gradient spinboxes reach the
+        preview session (seeded at preview start, updated live) — the drawn
+        boxes always match the entered values."""
+        from PycroFlow.gui.tabs.live_tab import LiveTabHost
+        from PycroFlow.live_analysis.service import LiveAnalysisService
+
+        seen = []
+        host = LiveTabHost(
+            on_start_preview=lambda: LiveAnalysisService(),
+            on_overlay_params=seen.append,
+        )
+        host.preview_btn.setChecked(True)
+        # Seeded once at start with the sidebar's current values.
+        self.assertTrue(seen)
+        self.assertEqual(seen[-1]["Min. Net Gradient"], 5000)
+        # Live updates follow the spinboxes.
+        host.shell.sidebar.min_gradient.setValue(1234)
+        self.assertEqual(seen[-1]["Min. Net Gradient"], 1234)
+        host.shell.sidebar.box_size.setValue(9)
+        self.assertEqual(seen[-1]["Box Size"], 9)
+
     def test_window_title_has_version(self):
         from PycroFlow import __version__
 

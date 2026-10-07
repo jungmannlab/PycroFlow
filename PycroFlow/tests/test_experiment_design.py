@@ -289,8 +289,7 @@ class TestSetupConfigs(unittest.TestCase):
         import yaml
 
         new = configs.load_setup("IbidiEmulator")
-        old_yaml = yaml.safe_load(
-            """
+        old_yaml = yaml.safe_load("""
             setup: IbidiEmulator
             emulated: true
             hamilton:
@@ -310,8 +309,7 @@ class TestSetupConfigs(unittest.TestCase):
                 - {id: 1, valve_pos: {ibidi: 1, 1: in}}
             tubing:
               - {from: R1, to: pump_a, volume: 325}
-        """
-        )
+        """)
         old = configs._normalize_setup(old_yaml)
         self.assertEqual(configs.monet_config(old), "IbidiEmulator")
         self.assertEqual([e["id"] for e in configs.setup_reservoirs(old)], [1])
@@ -608,3 +606,49 @@ class TestSubsystemDeselection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUsePositions(unittest.TestCase):
+    """The multi-position checkbox: schema -> design dump -> imaging config."""
+
+    _DESIGN = {
+        "base_name": "x",
+        "fluid": {
+            "settings": {
+                "vol_wash": 10,
+                "vol_reagent": 5,
+                "reservoir_names": {1: "R1"},
+                "experiment": {
+                    "type": "Exchange",
+                    "wash_buffer": "B",
+                    "imagers": ["R1"],
+                },
+            }
+        },
+        "img": {
+            "settings": {"t_exp": 100, "frames": 100, "use_positions": True}
+        },
+    }
+
+    def test_schema_carries_use_positions_default_off(self):
+        model = validate_experiment_design(self._DESIGN)
+        self.assertTrue(model.img.settings.use_positions)
+        dumped = model.model_dump(by_alias=True)
+        self.assertTrue(dumped["img"]["settings"]["use_positions"])
+        # Default stays off for existing designs.
+        plain = {
+            **self._DESIGN,
+            "img": {"settings": {"t_exp": 100, "frames": 100}},
+        }
+        model = validate_experiment_design(plain)
+        self.assertFalse(model.img.settings.use_positions)
+
+    def test_assemble_imaging_config_threads_it_through(self):
+        from PycroFlow import configs
+
+        setup = configs.load_setup("Emulator")
+        design = validate_experiment_design(self._DESIGN).model_dump(
+            by_alias=True
+        )
+        cfg = configs.assemble_imaging_config(setup, design)
+        self.assertTrue(cfg["use_positions"])

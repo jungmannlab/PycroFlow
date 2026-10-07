@@ -117,6 +117,10 @@ class EmulatedImagingSystem(_BaseEmulatedSystem):
             name, {"frames": n, "t_exp": entry.get("t_exp")}, frames
         )
 
+    def position_count(self):
+        """Single-position emulator (matches ImagingSystem.position_count)."""
+        return 1
+
     def close(self):
         """No-op cleanup (matches ImagingSystem.close for SystemService)."""
 

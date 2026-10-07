@@ -61,6 +61,11 @@ class LivePreviewSession:
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
         self._thumb: threading.Thread | None = None
+        self._options: dict = {}
+        # Live-tunable overlay detection params ({"Box Size", "Min. Net
+        # Gradient"}); swapped atomically (GIL) and read per thumbnail tick,
+        # so the sidebar's Core controls steer the boxes immediately.
+        self._overlay: dict = {}
 
     @property
     def service(self):
@@ -110,8 +115,16 @@ class LivePreviewSession:
             )
             return None
         options = live_options_for(imaging_system)
+        self._options = options
 
-        from PycroFlow.live_analysis.service import LiveAnalysisService
+        from PycroFlow.live_analysis.service import (
+            DEFAULT_LOCALIZE_PARAMS,
+            LiveAnalysisService,
+        )
+
+        self._overlay = dict(
+            options.get("localize_params", DEFAULT_LOCALIZE_PARAMS)
+        )
 
         # Read-only session: no registry, no illumination (interlock no-op).
         self._service = LiveAnalysisService()
@@ -183,6 +196,29 @@ class LivePreviewSession:
                 done = done and not thread.is_alive()
         return done
 
+    def set_overlay_params(self, params) -> None:
+        """Steer the detection-box overlay from the shell's Core controls.
+
+        Applied to the NEXT thumbnail immediately; also folded into the
+        session options' ``localize_params`` so the next pipeline segment
+        (mock mode) or the next preview start uses the same values for the
+        metrics. Safe to call whether or not a preview is active.
+
+        Parameters
+        ----------
+        params : dict
+            The sidebar payload — ``{"Box Size": int, "Min. Net Gradient":
+            number, ...}``; unknown keys are ignored.
+        """
+        params = dict(params or {})
+        overlay = dict(self._overlay)
+        for key in ("Box Size", "Min. Net Gradient"):
+            if params.get(key) is not None:
+                overlay[key] = params[key]
+        self._overlay = overlay
+        if self._options is not None:
+            self._options["localize_params"] = dict(overlay)
+
     # -- pipeline -------------------------------------------------------------
 
     def _run(self, service, imaging_system, camera_info, options) -> None:
@@ -240,17 +276,9 @@ class LivePreviewSession:
     def _push_thumbnails(self, service, camera_info, options) -> None:
         from PycroFlow.live_analysis.boxes import identify_boxes
         from PycroFlow.live_analysis.client_seam import push_thumbnail
-        from PycroFlow.live_analysis.service import DEFAULT_LOCALIZE_PARAMS
 
         pixelsize = camera_info.get("Pixelsize")
         max_px = options.get("preview_thumbnail_max_px", _THUMB_MAX_PX)
-        # Detection-box overlay: identify on the FULL frame (downsampling
-        # destroys the PSF gradients picasso detects on), with the same
-        # parameters the pipeline localizes with, then scale the centres onto
-        # the downsampled thumbnail. `preview_boxes: false` turns it off.
-        params = dict(options.get("localize_params", DEFAULT_LOCALIZE_PARAMS))
-        box_size = int(params.get("Box Size", 7))
-        min_ng = float(params.get("Min. Net Gradient", 5000))
         with_boxes = bool(options.get("preview_boxes", True))
 
         last = None
@@ -261,6 +289,15 @@ class LivePreviewSession:
             # identical) — no point re-rendering the same image.
             if frame is not None and frame is not last:
                 last = frame
+                # Detection-box overlay: identify on the FULL frame
+                # (downsampling destroys the PSF gradients picasso detects
+                # on) with the CURRENT overlay params — the sidebar's Core
+                # controls steer these live (set_overlay_params) — then
+                # scale the centres onto the downsampled thumbnail.
+                # `preview_boxes: false` turns the overlay off.
+                overlay = self._overlay
+                box_size = int(overlay.get("Box Size", 7))
+                min_ng = float(overlay.get("Min. Net Gradient", 5000))
                 stride = max(
                     1, int(-(-max(frame.shape) // max_px))
                 )  # ceil div

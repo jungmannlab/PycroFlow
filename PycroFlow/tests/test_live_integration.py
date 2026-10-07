@@ -530,3 +530,26 @@ class TestExperimentServiceLiveIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPreviewOverlayParams(unittest.TestCase):
+    """set_overlay_params steers the box overlay + the next segment's fit."""
+
+    def test_setter_updates_overlay_and_options(self):
+        from PycroFlow.services.live_preview import LivePreviewSession
+
+        session = LivePreviewSession()
+        session._options = {"localize_params": {"Box Size": 7}}
+        session._overlay = {"Box Size": 7, "Min. Net Gradient": 5000}
+        session.set_overlay_params(
+            {"Box Size": 9, "Min. Net Gradient": 321, "Blur": 1.0}
+        )
+        self.assertEqual(session._overlay["Box Size"], 9)
+        self.assertEqual(session._overlay["Min. Net Gradient"], 321)
+        # Folded into the options so the next pipeline segment fits with the
+        # same values the boxes use.
+        self.assertEqual(
+            session._options["localize_params"]["Min. Net Gradient"], 321
+        )
+        # Safe with no active session state.
+        LivePreviewSession().set_overlay_params({"Box Size": 5})

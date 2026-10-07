@@ -284,6 +284,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the CURRENT FOV's acquisition (frames so far stay saved, honest
   partial-coverage record, immediate T3 interlock) and the protocol continues
   — distinct from the orchestrator Abort in the Run Sequence tab.
+- **Multi-position acquisition reactivated** (`use_positions`): the dormant
+  MM-position-list loop in `ImagingSystem` is reachable again — a new
+  checkbox in the Experiment Design (img settings) threads through to the
+  imaging config; each acquire step then visits every saved MM position
+  (PFS re-engaged) and records one movie per position into its own
+  `*_pos<N>` dataset folder, all positions before the round's fluid-exchange
+  signal. Live analysis records one FOV chain per position automatically.
+  Duration estimates and progress are position-aware: the within-step bar
+  spans all positions ("frames · pos i/N"), the run ETA/remaining multiply
+  imaging steps by `ImagingSystem.position_count()` (refreshed at run start,
+  when MM's list is knowable), STEP_TIMING estimates match, and the design
+  tab's ETA flags "× MM positions" (the count lives in MM at design time).
+  Needs the light on-rig check: the position loop predates the
+  pycromanager-1.0 migration.
+- **Sidebar Core controls now steer the preview's box overlay**: the box-size
+  / min-net-gradient spinboxes (whose `params_changed` signal previously had
+  no consumer — the drawn boxes ignored the entered values) are wired to the
+  preview session: seeded at preview start, applied to the next thumbnail
+  immediately, and folded into the next pipeline segment's fit parameters.
+- **Auto-contrast "ignore %" reference** (MM-style): the Overview's Auto
+  button now clips a configurable fraction of darkest/brightest pixels
+  (spinbox next to Auto, default 0.1 %, 0 % = true min/max) instead of the
+  hardcoded 1/99 percentiles — hot pixels no longer crush the stretch.
 - **Preview box overlay**: the MM preview now pushes picasso-style detection
   boxes with each thumbnail (same `identify` step and localize parameters the
   pipeline uses, run on the full frame and scaled onto the downsampled

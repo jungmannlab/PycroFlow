@@ -145,10 +145,13 @@ class ImagingSystem(AbstractSystem):
         self.last_dataset_path = None
 
         # Within-acquisition progress (for the GUI step bar): frames acquired
-        # so far / total, and whether an acquisition is currently running.
+        # so far / total, whether an acquisition is currently running, and —
+        # under use_positions — which MM position-list entry is being imaged.
         self.curr_frame = 0
         self.curr_n_frames = 0
         self.acquiring = False
+        self.curr_position = 0
+        self.n_positions = 0
 
         # PFS logging
         # self.pfs_pars = {  # for Mercury
@@ -265,17 +268,32 @@ class ImagingSystem(AbstractSystem):
             pos_list = (
                 self.studio.get_position_list_manager().get_position_list()
             )
-            for i in range(pos_list.get_number_of_positions()):
-                pos = pos_list.get_position(i)
-                logger.debug("moving to position {:d}".format(i))
-                pos.go_to_position(pos, self.core)
-                self.core.set_property(
-                    self.pfs_pars["tag_status"],
-                    self.pfs_pars["prop_state"],
-                    "On",
+            n = pos_list.get_number_of_positions()
+            if n == 0:
+                logger.warning(
+                    "use_positions is on but MM's position list is empty — "
+                    "acquiring the current position only. Save positions in "
+                    "MM (Stage Position List) before the run."
                 )
-                acq_name_p = acq_name + "_pos{:d}".format(i)  # + str(pos)
-                self.record_movie(acq_name_p, acquisition_config)
+                self.record_movie(acq_name, acquisition_config)
+                return
+            self.n_positions = n
+            try:
+                for i in range(n):
+                    self.curr_position = i
+                    pos = pos_list.get_position(i)
+                    logger.debug("moving to position {:d}".format(i))
+                    pos.go_to_position(pos, self.core)
+                    self.core.set_property(
+                        self.pfs_pars["tag_status"],
+                        self.pfs_pars["prop_state"],
+                        "On",
+                    )
+                    acq_name_p = acq_name + "_pos{:d}".format(i)  # + str(pos)
+                    self.record_movie(acq_name_p, acquisition_config)
+            finally:
+                self.curr_position = 0
+                self.n_positions = 0
 
     def pause_execution(self):
         """Pause protocol execution.
@@ -430,17 +448,49 @@ class ImagingSystem(AbstractSystem):
         logger.debug("acquired all images of {:s}".format(acq_name))
 
     def get_step_progress(self):
-        """Frames acquired so far within the current acquisition.
+        """Frames acquired so far within the current acquire step.
 
         Returns
         -------
         tuple or None
-            ``(current_frame, total_frames, 'frames')`` while acquiring,
-            else ``None``.
+            ``(current, total, label)`` while acquiring, else ``None``.
+            Under ``use_positions`` the bar spans ALL positions of the step
+            (``current = position_index * frames + frame``) and the label
+            names the position being imaged.
         """
-        if self.acquiring and self.curr_n_frames:
-            return (self.curr_frame, self.curr_n_frames, "frames")
-        return None
+        if not (self.acquiring and self.curr_n_frames):
+            return None
+        if self.n_positions > 1:
+            return (
+                self.curr_position * self.curr_n_frames + self.curr_frame,
+                self.n_positions * self.curr_n_frames,
+                "frames \u00b7 pos {}/{}".format(
+                    self.curr_position + 1, self.n_positions
+                ),
+            )
+        return (self.curr_frame, self.curr_n_frames, "frames")
+
+    def position_count(self):
+        """MM position-list length when ``use_positions`` is on, else 1.
+
+        Drives the multi-position factor of the duration estimates
+        (:func:`PycroFlow.protocols.timing.estimate_entry_duration`).
+        Best-effort: any MM hiccup degrades to 1, never raises.
+        """
+        if not self.config.get("use_positions", False):
+            return 1
+        try:
+            pos_list = (
+                self.studio.get_position_list_manager().get_position_list()
+            )
+            return max(1, int(pos_list.get_number_of_positions()))
+        except Exception as exc:  # noqa: BLE001 - estimate-only, stay soft
+            logger.warning(
+                "could not read MM's position list ({!r}); assuming 1".format(
+                    exc
+                )
+            )
+            return 1
 
     def image_process_fn(self, img, meta, event_queue):
         if self.protocol["parameters"].get("show_progress"):

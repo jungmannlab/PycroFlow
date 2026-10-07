@@ -301,6 +301,22 @@ class OverviewZoom(QWidget):
         self.auto_btn.setToolTip("Auto-contrast the displayed frame")
         self.auto_btn.clicked.connect(self._auto_contrast)
         head.addWidget(self.auto_btn)
+        # MM-style reference setting for Auto: clip this percentage of the
+        # darkest/brightest pixels when stretching (MM's "ignore %").
+        self.ignore_pct = QDoubleSpinBox()
+        self.ignore_pct.setRange(0.0, 20.0)
+        self.ignore_pct.setSingleStep(0.05)
+        self.ignore_pct.setDecimals(2)
+        self.ignore_pct.setValue(0.1)
+        self.ignore_pct.setSuffix(" %")
+        self.ignore_pct.setToolTip(
+            "Auto-contrast ignores this fraction of the darkest and "
+            'brightest pixels (Micro-Manager\'s "ignore %") — raise it '
+            "when hot pixels or a few bright spots crush the stretch."
+        )
+        self.ignore_pct.valueChanged.connect(self._auto_contrast)
+        head.addWidget(QLabel("ignore"))
+        head.addWidget(self.ignore_pct)
         layout.addLayout(head)
 
         self.image = QLabel("no frame yet")
@@ -426,14 +442,18 @@ class OverviewZoom(QWidget):
         finally:
             painter.end()
 
-    def _auto_contrast(self) -> None:
+    def _auto_contrast(self, *_: object) -> None:
         raw = getattr(self, "_raw", None)
         if raw is None:
             return
         import numpy as np
 
-        self.black.setValue(int(np.percentile(raw, 1)))
-        self.white.setValue(int(np.percentile(raw, 99)))
+        # Percentile stretch with the MM-style ignore fraction: 0 % = true
+        # min/max; 0.1 % (default, MM's default) shrugs off hot pixels.
+        pct = float(self.ignore_pct.value())
+        pct = min(max(pct, 0.0), 49.0)
+        self.black.setValue(int(np.percentile(raw, pct)))
+        self.white.setValue(int(np.percentile(raw, 100.0 - pct)))
         self._render()
 
     def _reapply_contrast(self, *_: object) -> None:

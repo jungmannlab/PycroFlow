@@ -279,7 +279,13 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
                 "actual_s": round(float(elapsed), 3),
                 "estimate_s": round(
                     estimate_entry_duration(
-                        entry, self.protocol.get("parameters")
+                        entry,
+                        self.protocol.get("parameters"),
+                        positions=getattr(
+                            getattr(self, "system", None),
+                            "position_count",
+                            lambda: 1,
+                        )(),
                     ),
                     3,
                 ),

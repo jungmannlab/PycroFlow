@@ -404,6 +404,17 @@ class ImgSettings(BaseModel):
             "entirely — the wash itself still runs."
         ),
     )
+    use_positions: bool = _field(
+        False,
+        tooltip=(
+            "Acquire every position saved in Micro-Manager's position list "
+            "at each imaging step: the stage visits each position (PFS "
+            "re-engaged) and records one movie per position into its own "
+            "*_pos<N> dataset folder. Save the position list in MM before "
+            "starting the run; all positions are imaged before the round "
+            "signals the fluid exchange."
+        ),
+    )
 
 
 class ImgSection(BaseModel):

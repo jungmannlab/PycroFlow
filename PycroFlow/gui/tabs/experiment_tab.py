@@ -390,9 +390,35 @@ class ExperimentTab(YamlDropMixin, QWidget):
 
     # --- bridge-driven UI updates (run on the GUI thread)
 
+    def _img_positions(self):
+        """MM position-list factor for the duration estimates (1 offline).
+
+        The count lives in MM at runtime, so it is only known once the
+        imaging system is connected — estimates computed at protocol-load
+        time are refreshed when the run starts (imaging is connected then).
+        """
+        system = getattr(self._service, "imaging_system", None)
+        try:
+            return getattr(system, "position_count", lambda: 1)()
+        except Exception:
+            return 1
+
+    def _refresh_durations(self, protocol=None):
+        protocol = protocol if protocol is not None else self._service.protocol
+        positions = self._img_positions()
+        self._durations = estimate_durations(protocol, img_positions=positions)
+        self._total_duration = estimate_total_duration(
+            protocol, img_positions=positions
+        )
+
     def _on_state_changed(self, old, new):
         self.state_label.setText(new.value)
         self._refresh_controls(new)
+        if new is ExperimentState.ORCHESTRATING:
+            # Imaging is connected by now: fold the MM position-list count
+            # into the ETA/remaining estimates (use_positions runs).
+            self._refresh_durations()
+            self._update_total_estimate_label()
         # Repopulate the step lists whenever a protocol becomes loaded,
         # regardless of how it was loaded (toolbar, drag&drop, programmatic),
         # so the view always reflects the active protocol. Clearing it
@@ -454,8 +480,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._reservoir_names = (
             (design.get("fluid") or {}).get("settings") or {}
         ).get("reservoir_names") or {}
-        self._durations = estimate_durations(protocol)
-        self._total_duration = estimate_total_duration(protocol)
+        self._refresh_durations(protocol)
         self._overall_sw.reset()
         self._round_sw.reset()
         self._round_index_seen = -1

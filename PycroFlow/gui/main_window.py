@@ -132,6 +132,7 @@ class PycroFlowMainWindow(QMainWindow):
         self.live_tab = LiveTabHost(
             on_start_preview=self._start_preview,
             on_stop_preview=self._preview.stop,
+            on_overlay_params=self._preview.set_overlay_params,
         )
         self._live_connected = None
 
