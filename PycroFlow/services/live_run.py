@@ -333,7 +333,10 @@ class LiveRunCoordinator:
 
         opts = self._options
         acquisition_config = acquisition_config or {}
-        fov_fields = {}
+        # The acquisition name carries the per-position suffix (_pos<N>)
+        # under use_positions; the registry folds unknown keys into the fov
+        # row's extra, so the record stays position-identifiable.
+        fov_fields = {"name": acq_name}
         t_exp = acquisition_config.get("t_exp")
         if t_exp is not None:
             fov_fields["exposure_ms"] = t_exp

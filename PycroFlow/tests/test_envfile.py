@@ -53,6 +53,36 @@ class TestLoadEnvFile(unittest.TestCase):
                 os.environ.pop("PYCROFLOW_TEST_ENVFILE", None)
                 os.environ.pop("PYCROFLOW_TEST_ENVFILE_SET", None)
 
+    def test_template_covers_every_env_var_the_package_reads(self):
+        """Scan the package for PAINT_/PYCROFLOW_/MONET_ env-var literals and
+        assert each is documented in .env.template — a NEW variable wired
+        into the code without a template entry fails here, list-free."""
+        import pathlib
+        import re
+
+        import PycroFlow
+
+        pkg = pathlib.Path(PycroFlow.__file__).parent
+        template = os.path.join(os.path.dirname(str(pkg)), ".env.template")
+        if not os.path.exists(template):
+            self.skipTest("installed without the repo root (no template)")
+        with open(template) as f:
+            body = f.read()
+        pattern = re.compile(
+            r"[\"']((?:PAINT|PYCROFLOW|MONET)_[A-Z_]{3,})[\"']"
+        )
+        wired = set()
+        for path in pkg.rglob("*.py"):
+            if "tests" in path.parts:
+                continue
+            wired |= set(pattern.findall(path.read_text(encoding="utf-8")))
+        missing = sorted(v for v in wired if v not in body)
+        self.assertFalse(
+            missing,
+            "env vars read by the package but undocumented in "
+            ".env.template: {}".format(missing),
+        )
+
     def test_template_covers_the_wired_env_vars(self):
         """The tracked .env.template documents every PAINT_/PYCROFLOW_ env
         var the code reads, so a new variable can't silently miss it."""

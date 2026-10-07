@@ -104,9 +104,7 @@ class LiveTabHost(QWidget):
             "abort_requested",
             "experiment_ended",
         ):
-            self.preview_btn.blockSignals(True)
-            self.preview_btn.setChecked(False)
-            self.preview_btn.blockSignals(False)
+            self._set_checked_silently(False)
             self._stop_preview()
 
     # -- preview toggle ---------------------------------------------------------
@@ -120,9 +118,7 @@ class LiveTabHost(QWidget):
             )
             if service is None:
                 # Unavailable (no imaging / no camera_info) — bounce back.
-                self.preview_btn.blockSignals(True)
-                self.preview_btn.setChecked(False)
-                self.preview_btn.blockSignals(False)
+                self._set_checked_silently(False)
                 self.preview_status.setText(
                     "preview unavailable — connect imaging / add camera_info"
                 )
@@ -147,6 +143,12 @@ class LiveTabHost(QWidget):
         self.preview_btn.setText("Start MM preview")
         self.preview_status.setText("")
 
+    def _set_checked_silently(self, checked: bool) -> None:
+        """Set the toggle without re-firing _on_toggled (programmatic sync)."""
+        self.preview_btn.blockSignals(True)
+        self.preview_btn.setChecked(checked)
+        self.preview_btn.blockSignals(False)
+
     def _relay_overlay_params(self, params) -> None:
         if self._on_overlay_params is not None:
             self._on_overlay_params(dict(params or {}))
@@ -162,8 +164,6 @@ class LiveTabHost(QWidget):
             True while an experiment is ORCHESTRATING/RUNNING/PAUSED.
         """
         if locked and (self._previewing or self.preview_btn.isChecked()):
-            self.preview_btn.blockSignals(True)
-            self.preview_btn.setChecked(False)
-            self.preview_btn.blockSignals(False)
+            self._set_checked_silently(False)
             self._stop_preview()
         self.preview_btn.setEnabled(not locked)

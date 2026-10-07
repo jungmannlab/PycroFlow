@@ -61,11 +61,11 @@ class LivePreviewSession:
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
         self._thumb: threading.Thread | None = None
+        # The session's live_analysis options; its ``localize_params`` entry
+        # is the SINGLE source of the detection params — the box overlay
+        # reads it per thumbnail tick and each pipeline segment is built from
+        # it, so the sidebar's Core controls steer both (set_overlay_params).
         self._options: dict = {}
-        # Live-tunable overlay detection params ({"Box Size", "Min. Net
-        # Gradient"}); swapped atomically (GIL) and read per thumbnail tick,
-        # so the sidebar's Core controls steer the boxes immediately.
-        self._overlay: dict = {}
 
     @property
     def service(self):
@@ -115,16 +115,14 @@ class LivePreviewSession:
             )
             return None
         options = live_options_for(imaging_system)
-        self._options = options
 
         from PycroFlow.live_analysis.service import (
             DEFAULT_LOCALIZE_PARAMS,
             LiveAnalysisService,
         )
 
-        self._overlay = dict(
-            options.get("localize_params", DEFAULT_LOCALIZE_PARAMS)
-        )
+        options.setdefault("localize_params", dict(DEFAULT_LOCALIZE_PARAMS))
+        self._options = options
 
         # Read-only session: no registry, no illumination (interlock no-op).
         self._service = LiveAnalysisService()
@@ -197,12 +195,15 @@ class LivePreviewSession:
         return done
 
     def set_overlay_params(self, params) -> None:
-        """Steer the detection-box overlay from the shell's Core controls.
+        """Steer the detection params from the shell's Core controls.
 
-        Applied to the NEXT thumbnail immediately; also folded into the
-        session options' ``localize_params`` so the next pipeline segment
-        (mock mode) or the next preview start uses the same values for the
-        metrics. Safe to call whether or not a preview is active.
+        One source of truth: the merged values land in the session options'
+        ``localize_params``, which the box overlay reads per thumbnail tick
+        AND every pipeline segment is built from. A change during an active
+        preview also RESTARTS the current segment (the source is closed; the
+        worker loop re-attaches with the new values), so the metrics and the
+        boxes never disagree for longer than one segment teardown. Safe to
+        call whether or not a preview is active.
 
         Parameters
         ----------
@@ -211,13 +212,26 @@ class LivePreviewSession:
             number, ...}``; unknown keys are ignored.
         """
         params = dict(params or {})
-        overlay = dict(self._overlay)
+        merged = dict(self._options.get("localize_params") or {})
+        changed = False
         for key in ("Box Size", "Min. Net Gradient"):
-            if params.get(key) is not None:
-                overlay[key] = params[key]
-        self._overlay = overlay
-        if self._options is not None:
-            self._options["localize_params"] = dict(overlay)
+            if params.get(key) is not None and params[key] != merged.get(key):
+                merged[key] = params[key]
+                changed = True
+        if not changed:
+            return
+        self._options["localize_params"] = merged
+        # Nudge the active segment to re-attach with the new fit params
+        # (same non-blocking close as stop(); the loop is NOT stopped, so it
+        # starts a fresh segment — metrics restart under the new threshold).
+        source = self._source
+        if self.active and source is not None:
+            threading.Thread(
+                target=self._close_source,
+                args=(source,),
+                name="live-preview-param-restart",
+                daemon=True,
+            ).start()
 
     # -- pipeline -------------------------------------------------------------
 
@@ -291,13 +305,13 @@ class LivePreviewSession:
                 last = frame
                 # Detection-box overlay: identify on the FULL frame
                 # (downsampling destroys the PSF gradients picasso detects
-                # on) with the CURRENT overlay params — the sidebar's Core
+                # on) with the CURRENT localize params — the sidebar's Core
                 # controls steer these live (set_overlay_params) — then
                 # scale the centres onto the downsampled thumbnail.
                 # `preview_boxes: false` turns the overlay off.
-                overlay = self._overlay
-                box_size = int(overlay.get("Box Size", 7))
-                min_ng = float(overlay.get("Min. Net Gradient", 5000))
+                params = self._options.get("localize_params") or {}
+                box_size = int(params.get("Box Size", 7))
+                min_ng = float(params.get("Min. Net Gradient", 5000))
                 stride = max(
                     1, int(-(-max(frame.shape) // max_px))
                 )  # ceil div

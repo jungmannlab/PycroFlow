@@ -504,6 +504,9 @@ class TestExperimentServiceLiveIntegration(unittest.TestCase):
         for fov in registry.fovs:
             self.assertEqual(fov["acquisition_run_id"], run_id)
             self.assertEqual(fov["exposure_ms"], 100)
+            # Position-identifiable records: the acquisition name (which
+            # carries the _pos<N> suffix under use_positions) rides along.
+            self.assertTrue(fov["name"].startswith("emulated_"))
         for analysis in registry.analyses:
             self.assertEqual(analysis["acquisition_run_id"], run_id)
             cov = analysis["extra"]["coverage"]
@@ -533,23 +536,45 @@ if __name__ == "__main__":
 
 
 class TestPreviewOverlayParams(unittest.TestCase):
-    """set_overlay_params steers the box overlay + the next segment's fit."""
+    """set_overlay_params: ONE param source + a segment restart on change."""
 
-    def test_setter_updates_overlay_and_options(self):
+    def test_setter_merges_into_the_single_source(self):
         from PycroFlow.services.live_preview import LivePreviewSession
 
         session = LivePreviewSession()
-        session._options = {"localize_params": {"Box Size": 7}}
-        session._overlay = {"Box Size": 7, "Min. Net Gradient": 5000}
+        session._options = {
+            "localize_params": {"Box Size": 7, "Min. Net Gradient": 5000}
+        }
         session.set_overlay_params(
             {"Box Size": 9, "Min. Net Gradient": 321, "Blur": 1.0}
         )
-        self.assertEqual(session._overlay["Box Size"], 9)
-        self.assertEqual(session._overlay["Min. Net Gradient"], 321)
-        # Folded into the options so the next pipeline segment fits with the
-        # same values the boxes use.
-        self.assertEqual(
-            session._options["localize_params"]["Min. Net Gradient"], 321
-        )
+        params = session._options["localize_params"]
+        self.assertEqual(params["Box Size"], 9)
+        self.assertEqual(params["Min. Net Gradient"], 321)
+        self.assertNotIn("Blur", params)  # unknown keys ignored
         # Safe with no active session state.
         LivePreviewSession().set_overlay_params({"Box Size": 5})
+
+    def test_param_change_restarts_the_active_segment(self):
+        from PycroFlow.services.live_preview import LivePreviewSession
+
+        class _Source:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        session = LivePreviewSession()
+        session._options = {"localize_params": {"Min. Net Gradient": 5000}}
+        session._service = object()  # active
+        session._source = _Source()
+        # An UNCHANGED payload must not restart the segment.
+        session.set_overlay_params({"Min. Net Gradient": 5000})
+        time.sleep(0.1)
+        self.assertFalse(session._source.closed)
+        # A real change closes the source (the worker loop re-attaches).
+        session.set_overlay_params({"Min. Net Gradient": 777})
+        deadline = time.time() + 5
+        while time.time() < deadline and not session._source.closed:
+            time.sleep(0.02)
+        self.assertTrue(session._source.closed)

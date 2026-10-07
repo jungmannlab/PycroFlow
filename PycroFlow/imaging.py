@@ -152,6 +152,10 @@ class ImagingSystem(AbstractSystem):
         self.acquiring = False
         self.curr_position = 0
         self.n_positions = 0
+        # position_count() cache — one MM query per run (reset when a
+        # protocol is assigned), so per-step consumers (timing log, ETA)
+        # never repeat the ZMQ round-trip.
+        self._position_count = None
 
         # PFS logging
         # self.pfs_pars = {  # for Mercury
@@ -223,6 +227,8 @@ class ImagingSystem(AbstractSystem):
 
     def _assign_protocol(self, protocol):
         self.protocol = protocol
+        # New run: re-read MM's position list on the next position_count().
+        self._position_count = None
 
     def execute_protocol_entry(self, i):
         """execute protocol entry i"""
@@ -475,22 +481,31 @@ class ImagingSystem(AbstractSystem):
 
         Drives the multi-position factor of the duration estimates
         (:func:`PycroFlow.protocols.timing.estimate_entry_duration`).
-        Best-effort: any MM hiccup degrades to 1, never raises.
+        Best-effort: any MM hiccup degrades to 1, never raises. The MM query
+        runs ONCE per assigned protocol (cached) — per-step consumers (the
+        STEP_TIMING log) must not pay a ZMQ round-trip per step, and the ETA
+        and the per-step records then agree even if the operator edits MM's
+        list mid-run (the acquisition loop itself always reads the live list).
         """
         if not self.config.get("use_positions", False):
             return 1
+        if self._position_count is not None:
+            return self._position_count
         try:
             pos_list = (
                 self.studio.get_position_list_manager().get_position_list()
             )
-            return max(1, int(pos_list.get_number_of_positions()))
+            self._position_count = max(
+                1, int(pos_list.get_number_of_positions())
+            )
         except Exception as exc:  # noqa: BLE001 - estimate-only, stay soft
             logger.warning(
                 "could not read MM's position list ({!r}); assuming 1".format(
                     exc
                 )
             )
-            return 1
+            self._position_count = 1
+        return self._position_count
 
     def image_process_fn(self, img, meta, event_queue):
         if self.protocol["parameters"].get("show_progress"):

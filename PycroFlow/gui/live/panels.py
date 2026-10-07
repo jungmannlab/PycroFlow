@@ -365,9 +365,13 @@ class OverviewZoom(QWidget):
         # alternating x, y (JSON/transport-friendly) + the box size. Stored and
         # drawn in _render; absent -> no overlay (older/minimal payloads).
         boxes = payload.get("boxes")
+        # Boxes are PER-FRAME data: they describe detections on THIS
+        # payload's image. A payload without boxes CLEARS the overlay —
+        # otherwise a previous frame's detections would stay drawn over the
+        # new image (stale boxes).
+        self._boxes = boxes if boxes is not None else []
         if boxes is not None:
             self._box_size = int(payload.get("box_size", self._box_size))
-            self._boxes = boxes  # [x0, y0, x1, y1, ...]
         data = payload.get("data")
         if data is not None and shape is not None:
             self._set_image_from_bytes(data, shape, payload.get("dtype"))
@@ -450,10 +454,18 @@ class OverviewZoom(QWidget):
 
         # Percentile stretch with the MM-style ignore fraction: 0 % = true
         # min/max; 0.1 % (default, MM's default) shrugs off hot pixels.
+        # setValue is silenced so the two valueChanged->_reapply_contrast
+        # hops don't each re-render — one explicit render at the end.
         pct = float(self.ignore_pct.value())
         pct = min(max(pct, 0.0), 49.0)
-        self.black.setValue(int(np.percentile(raw, pct)))
-        self.white.setValue(int(np.percentile(raw, 100.0 - pct)))
+        for w in (self.black, self.white):
+            w.blockSignals(True)
+        try:
+            self.black.setValue(int(np.percentile(raw, pct)))
+            self.white.setValue(int(np.percentile(raw, 100.0 - pct)))
+        finally:
+            for w in (self.black, self.white):
+                w.blockSignals(False)
         self._render()
 
     def _reapply_contrast(self, *_: object) -> None:

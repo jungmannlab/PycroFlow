@@ -301,3 +301,37 @@ class TestMultiPositionEstimates(unittest.TestCase):
         self.assertEqual(
             ImagingSystem.get_step_progress(stub), (30, 100, "frames")
         )
+
+    def test_position_count_is_cached_per_protocol(self):
+        from types import SimpleNamespace
+
+        from PycroFlow.imaging import ImagingSystem
+
+        class _CountingStudio:
+            calls = 0
+
+            def get_position_list_manager(self):
+                _CountingStudio.calls += 1
+
+                class _Mgr:
+                    def get_position_list(self):
+                        class _List:
+                            def get_number_of_positions(self):
+                                return 4
+
+                        return _List()
+
+                return _Mgr()
+
+        stub = SimpleNamespace(
+            config={"use_positions": True},
+            studio=_CountingStudio(),
+            _position_count=None,
+        )
+        self.assertEqual(ImagingSystem.position_count(stub), 4)
+        self.assertEqual(ImagingSystem.position_count(stub), 4)
+        # One MM round-trip per run, not per call/step.
+        self.assertEqual(_CountingStudio.calls, 1)
+        # A new protocol re-arms the query (new run, list may differ).
+        ImagingSystem._assign_protocol(stub, {"protocol_entries": []})
+        self.assertIsNone(stub._position_count)

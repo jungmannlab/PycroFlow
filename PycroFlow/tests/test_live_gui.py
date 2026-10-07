@@ -593,6 +593,34 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestPerFrameBoxes(_QtTestCase):
+    """Boxes are per-frame: a thumbnail without boxes clears the overlay."""
+
+    def test_stale_boxes_cleared_on_boxless_frame(self):
+        import numpy as np
+
+        from PycroFlow.gui.live.panels import OverviewZoom
+
+        panel = OverviewZoom()
+        frame = np.zeros((32, 32), dtype=np.uint16)
+        panel._on_thumbnail(
+            {
+                "data": frame.tobytes(),
+                "shape": frame.shape,
+                "dtype": "uint16",
+                "boxes": [10.0, 12.0],
+                "box_size": 7,
+            }
+        )
+        self.assertEqual(panel._boxes, [10.0, 12.0])
+        # The next frame arrives WITHOUT boxes (identify failed / overlay
+        # off): the previous frame's detections must NOT stay drawn.
+        panel._on_thumbnail(
+            {"data": frame.tobytes(), "shape": frame.shape, "dtype": "uint16"}
+        )
+        self.assertEqual(panel._boxes, [])
+
+
 class TestAutoContrastIgnore(_QtTestCase):
     """MM-style 'ignore %' reference for the Overview's Auto contrast."""
 

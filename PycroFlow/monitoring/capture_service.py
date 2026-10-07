@@ -560,6 +560,12 @@ def _run_probe(max_index: int = 9) -> int:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    # Per-machine variables (.env): a GUI-spawned capture inherits the
+    # parent's environment, but a MANUALLY launched one (runbook / --probe)
+    # needs the registry URL too, else clip indexing is a silent no-op.
+    from PycroFlow.envfile import load_env_file
+
+    load_env_file()
     parser = argparse.ArgumentParser(
         prog="pycroflow-capture",
         description="Fluidics monitoring camera-capture service.",

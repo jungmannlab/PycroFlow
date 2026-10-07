@@ -284,6 +284,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the CURRENT FOV's acquisition (frames so far stay saved, honest
   partial-coverage record, immediate T3 interlock) and the protocol continues
   — distinct from the orchestrator Abort in the Run Sequence tab.
+- **Review fixes (third adversarial pass) + per-frame boxes**: the Overview
+  treats boxes as PER-FRAME data — a thumbnail without boxes clears the
+  overlay instead of leaving a previous frame's detections drawn over the
+  new image; `ImagingSystem.position_count()` is cached per run (one MM
+  query instead of a ZMQ round-trip per protocol step in the STEP_TIMING
+  logger); a manually launched `pycroflow-capture` now loads `.env` (clip
+  indexing was a silent no-op when the registry URL lived only there);
+  Auto/ignore-% re-renders once per change instead of up to three times;
+  per-FOV registry records carry the acquisition name (so multi-position
+  `_pos<N>` chains are distinguishable); the preview's detection params have
+  ONE source (`localize_params`) and a mid-preview sidebar change restarts
+  the segment so metrics and boxes agree; the `.env.template` coverage test
+  now scans the package for wired env-var literals (list-free).
 - **Multi-position acquisition reactivated** (`use_positions`): the dormant
   MM-position-list loop in `ImagingSystem` is reachable again — a new
   checkbox in the Experiment Design (img settings) threads through to the
