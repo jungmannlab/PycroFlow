@@ -284,6 +284,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the CURRENT FOV's acquisition (frames so far stay saved, honest
   partial-coverage record, immediate T3 interlock) and the protocol continues
   — distinct from the orchestrator Abort in the Run Sequence tab.
+- **Run Sequence "Go to" major-step selector**: a dropdown next to "Center on
+  current step" lists the run's rounds ("Start of run", "Round 1: <imager>",
+  …); selecting one centres all three subsystem lists on that round's first
+  step. Rebuilt per protocol, disabled when a bare sequence has no rounds.
 - **The Overview now shows frames during orchestrated runs** — the missing
   half of the Live tab. A shared `ThumbnailStreamer`
   (`live_analysis/thumbnails.py`) feeds the Overview from a latest-frame

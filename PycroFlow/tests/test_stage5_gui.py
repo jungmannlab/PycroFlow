@@ -2664,3 +2664,100 @@ class TestWebcamsTab(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestGotoMajorStep(unittest.TestCase):
+    """The Run Sequence tab's Go-to combo centres on round starts."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _tab(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+
+        svc = MagicMock(name="service")
+        svc.state = ExperimentState.LOADED
+        svc.experiment_design = {}
+        # Two exchange rounds (two non-dark img acquires); the fluid list's
+        # round-2 block begins at its first entry with round index 1.
+        svc.protocol = {
+            "fluid": {
+                "protocol_entries": [
+                    {
+                        "$type": "wait for signal",
+                        "target": "img",
+                        "value": "done imaging round img-0",
+                    },
+                    {"$type": "inject", "reservoir_id": 1, "volume": 10},
+                    {"$type": "inject", "reservoir_id": 2, "volume": 10},
+                ]
+            },
+            "img": {
+                "protocol_entries": [
+                    {
+                        "$type": "acquire",
+                        "frames": 1,
+                        "t_exp": 1,
+                        "message": "round_img-0-A",
+                    },
+                    {"$type": "signal", "value": "done imaging round img-0"},
+                    {
+                        "$type": "acquire",
+                        "frames": 1,
+                        "t_exp": 1,
+                        "message": "round_img-1-B",
+                    },
+                ]
+            },
+            "illu": {"protocol_entries": []},
+        }
+        tab = ExperimentTab(svc, MagicMock(name="bridge"))
+        tab._populate_steps()
+        return tab
+
+    def test_combo_lists_rounds_plus_start(self):
+        tab = self._tab()
+        items = [
+            tab.goto_combo.itemText(i) for i in range(tab.goto_combo.count())
+        ]
+        self.assertEqual(items[0], "Start of run")
+        self.assertEqual(len(items), 3)  # start + 2 rounds
+        self.assertIn("Round 1", items[1])
+        self.assertIn("Round 2", items[2])
+        self.assertTrue(tab.goto_combo.isEnabled())
+
+    def test_selecting_round_centres_each_list(self):
+        tab = self._tab()
+        # Select "Round 2" (data == round index 1).
+        self.assertEqual(tab.goto_combo.itemData(2), 1)
+        tab.goto_combo.setCurrentIndex(2)
+        tab._on_goto_selected(2)
+        # Round 2 begins at the top of each subsystem's round-2 block (the
+        # entry right after round 1's acquire marker — consistent with the
+        # current-round progress accounting): img entry 1, fluid entry 1.
+        self.assertEqual(tab.step_lists["img"].currentRow(), 1)
+        self.assertEqual(tab.step_lists["fluid"].currentRow(), 1)
+
+    def test_combo_disabled_without_rounds(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+
+        svc = MagicMock(name="service")
+        svc.state = ExperimentState.LOADED
+        svc.experiment_design = {}
+        svc.protocol = {
+            "fluid": {"protocol_entries": []},
+            "img": {"protocol_entries": []},
+            "illu": {"protocol_entries": []},
+        }
+        tab = ExperimentTab(svc, MagicMock(name="bridge"))
+        tab._populate_steps()
+        self.assertEqual(tab.goto_combo.count(), 1)  # just "Start of run"
+        self.assertFalse(tab.goto_combo.isEnabled())

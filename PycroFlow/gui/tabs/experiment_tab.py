@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QLabel,
     QListWidget,
+    QComboBox,
     QPlainTextEdit,
     QFileDialog,
     QGroupBox,
@@ -249,6 +250,15 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.center_btn = QPushButton("Center on current step")
         self.center_btn.clicked.connect(self._center_on_current)
         steps_head.addWidget(self.center_btn)
+        # Jump the three lists to the start of a major step (a round). The
+        # combo is repopulated per protocol with one entry per exchange round
+        # (and "Start of run"); selecting one centres all three lists on that
+        # round's first entry in each subsystem.
+        steps_head.addWidget(QLabel("Go to:"))
+        self.goto_combo = QComboBox()
+        self.goto_combo.setMinimumWidth(220)
+        self.goto_combo.activated.connect(self._on_goto_selected)
+        steps_head.addWidget(self.goto_combo)
         steps_head.addWidget(
             QLabel(
                 "Click a step to highlight the concurrent step in the other "
@@ -480,6 +490,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._reservoir_names = (
             (design.get("fluid") or {}).get("settings") or {}
         ).get("reservoir_names") or {}
+        self._populate_goto_combo()
         self._refresh_durations(protocol)
         self._overall_sw.reset()
         self._round_sw.reset()
@@ -620,6 +631,72 @@ class ExperimentTab(YamlDropMixin, QWidget):
             cur = prog.get(system, (0, 0))[0]
             cur = min(max(cur, 0), lst.count() - 1)
             lst.scrollToItem(lst.item(cur), _CENTER)
+
+    # --- major-step (round) navigation
+
+    def _populate_goto_combo(self):
+        """Fill the Go-to combo with one entry per round + "Start of run".
+
+        Each item's data is the 0-based round index (``-1`` for the start of
+        the run), which :meth:`_round_start_indices` maps to the first entry
+        of that round in each subsystem.
+        """
+        combo = self.goto_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Start of run", -1)
+        for r, name in enumerate(self._round_names):
+            label = "Round {}{}".format(
+                r + 1, ": {}".format(name) if name else ""
+            )
+            combo.addItem(label, r)
+        combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+        combo.setEnabled(combo.count() > 1)
+
+    def _round_start_indices(self, round_index):
+        """First entry index of ``round_index`` (0-based) per subsystem.
+
+        ``round_index < 0`` means the start of the run (index 0 everywhere).
+        A subsystem whose round starts past its list end is clamped to its
+        last entry so centring never raises.
+        """
+        out = {}
+        for system in _SYSTEMS:
+            rounds = self._round_of.get(system) or []
+            if round_index < 0:
+                out[system] = 0
+                continue
+            idx = next(
+                (i for i, r in enumerate(rounds) if r == round_index), None
+            )
+            if idx is None:
+                idx = max(len(rounds) - 1, 0)
+            out[system] = idx
+        return out
+
+    def _on_goto_selected(self, _index):
+        """Centre all three lists on the start of the selected round.
+
+        Each list is selected + centred on ITS OWN round-start index. The
+        per-list ``currentRowChanged`` cross-highlight (which would otherwise
+        re-select a *concurrent* step in the other lists and clobber their
+        round-starts) is blocked for the duration, so every list lands on the
+        round boundary.
+        """
+        round_index = self.goto_combo.currentData()
+        if round_index is None:
+            return
+        starts = self._round_start_indices(round_index)
+        for system in _SYSTEMS:
+            lst = self.step_lists[system]
+            if not lst.count():
+                continue
+            row = min(max(starts.get(system, 0), 0), lst.count() - 1)
+            lst.blockSignals(True)
+            lst.setCurrentRow(row)
+            lst.blockSignals(False)
+            lst.scrollToItem(lst.item(row), _CENTER)
 
     @staticmethod
     def _is_dark(entry):
