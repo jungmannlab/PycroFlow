@@ -94,15 +94,15 @@ imaging:
   # (datasheet / the Gate-2 harness flags used on this rig). Without the
   # camera_info block, live localization and the Live tab's MM preview stay
   # disabled (logged at startup + a dialog on the preview toggle).
-  # camera_info:
-  #   Baseline: 100.0       # camera offset (ADU)
-  #   Sensitivity: 0.46     # e-/ADU conversion
-  #   Gain: 1               # EM gain (1 for sCMOS)
-  #   Qe: 0.82              # quantum efficiency at the imaging wavelength
-  #   Pixelsize: 130        # sample-plane pixel size (nm)
-  # live_analysis:          # optional tuning (defaults in services/live_run.py)
-  #   localize_params: {Box Size: 7, Min. Net Gradient: 5000}
-  #   max_pending_frames: 256
+  camera_info:
+    Baseline: 100.0       # camera offset (ADU)
+    Sensitivity: 0.22     # e-/ADU conversion
+    Gain: 1               # EM gain (1 for sCMOS)
+    Qe: 1              # quantum efficiency at the imaging wavelength
+    Pixelsize: 130        # sample-plane pixel size (nm)
+  live_analysis:          # optional tuning (defaults in services/live_run.py)
+    localize_params: {Box Size: 7, Min. Net Gradient: 5000}
+    max_pending_frames: 256
   #   # archive_dir: '//server/share/archive/raw'  # enables the C15 move
   pfs_pars:
     tag_pfs: TIPFSOffset
