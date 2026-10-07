@@ -361,6 +361,55 @@ class TestLiveRunCoordinator(unittest.TestCase):
         self.assertFalse(any(r.payload.get("posted") for r in records))
 
 
+class TestLivePreviewSession(unittest.TestCase):
+    """MM-preview mode: metrics + thumbnails with no protocol running."""
+
+    def test_preview_streams_metrics_and_thumbnails_then_stops(self):
+        from PycroFlow.live_analysis.client_seam import CallbackClient
+        from PycroFlow.services.live_preview import LivePreviewSession
+
+        session = LivePreviewSession()
+        # No MM core on the emulated system -> looping MockFrameSource mode.
+        service = session.start(emu.EmulatedImagingSystem())
+        self.assertIsNotNone(service)
+        self.assertTrue(session.active)
+
+        seen = {"metrics": None, "thumbnail": None}
+        client = CallbackClient(
+            lambda u: (
+                seen.update({u.kind: u.payload}) if u.kind in seen else None
+            )
+        )
+        service.hub.add(client)
+        deadline = time.time() + 30
+        while time.time() < deadline and not (
+            seen["metrics"] and seen["thumbnail"]
+        ):
+            time.sleep(0.05)
+        session.stop()
+        self.assertTrue(session.wait(timeout=30))
+        self.assertFalse(session.active)
+
+        self.assertIsNotNone(seen["metrics"], "no metrics update arrived")
+        thumb = seen["thumbnail"]
+        self.assertIsNotNone(thumb, "no thumbnail update arrived")
+        # The Overview-renderable payload: raw bytes + shape + dtype.
+        self.assertIn("data", thumb)
+        self.assertEqual(len(thumb["shape"]), 2)
+        self.assertEqual(thumb["pixelsize_nm"], 130.0)
+
+    def test_preview_unavailable_without_camera_info(self):
+        from PycroFlow.services.live_preview import LivePreviewSession
+
+        class NoInfoImaging:
+            pass
+
+        session = LivePreviewSession()
+        self.assertIsNone(session.start(NoInfoImaging()))
+        self.assertIsNone(session.start(None))
+        self.assertFalse(session.active)
+
+
 class TestExperimentServiceLiveIntegration(unittest.TestCase):
 
     _PROTOCOL = {

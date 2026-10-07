@@ -371,10 +371,19 @@ class RamPeekFrameSource(FrameSource):
     lossless = False
 
     def __init__(
-        self, *, poll_s: float = 0.02, port: int = 4827, maxsize: int = 2000
+        self,
+        *,
+        poll_s: float = 0.02,
+        port: int = 4827,
+        maxsize: int = 2000,
+        camera_info: dict | None = None,
     ):
         self.poll_s = poll_s
         self.port = port
+        # MM tags don't carry picasso's photon-conversion keys; a caller that
+        # localizes the peeked stream (the Live-tab preview mode) passes the
+        # setup's camera_info here. None keeps the WP-4 view-only behaviour.
+        self._camera_info = dict(camera_info) if camera_info else None
         self._q: "queue.Queue[_PeekFrame]" = queue.Queue(maxsize=maxsize)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -383,6 +392,9 @@ class RamPeekFrameSource(FrameSource):
         self._read = 0
         self.n_missed = 0
         self.n_dropped = 0
+        # Newest peeked frame (ndarray) — a cheap display tap for thumbnails,
+        # independent of the (consumed) batch queue.
+        self.latest_frame = None
 
     def start(self) -> "RamPeekFrameSource":
         self._thread = threading.Thread(
@@ -392,7 +404,7 @@ class RamPeekFrameSource(FrameSource):
         return self
 
     def camera_info(self) -> dict | None:
-        return None
+        return dict(self._camera_info) if self._camera_info else None
 
     def frames_read(self) -> int:
         return self._read
@@ -425,6 +437,7 @@ class RamPeekFrameSource(FrameSource):
             self._last_index = idx
             h, w = hw
             arr = np.reshape(np.asarray(timg.pix), (h, w))
+            self.latest_frame = arr
             self._offer(_PeekFrame(idx, arr, tags.get("PositionIndex")))
             time.sleep(self.poll_s)
 
@@ -544,6 +557,8 @@ class MockFrameSource(FrameSource):
         self._rng = np.random.default_rng(seed)
         self._read = 0
         self._stop = threading.Event()
+        # Newest generated frame — display tap mirroring RamPeekFrameSource.
+        self.latest_frame = None
         # Deterministic camera info so localize_frames has what it needs.
         self._info = {
             "Baseline": 100,
@@ -604,7 +619,9 @@ class MockFrameSource(FrameSource):
             if not buf:
                 buf_start = i
                 buf_pos = pos
-            buf.append(self._make_frame())
+            frame = self._make_frame()
+            self.latest_frame = frame
+            buf.append(frame)
             if len(buf) >= batch_size:
                 yield Batch(np.stack(buf), buf_start, buf_pos)
                 self._read += len(buf)
@@ -839,6 +856,7 @@ SOURCE_RAM_PEEK = "ram-peek"
 SOURCE_MOCK = "mock"
 SOURCE_NDTIFF_DATASET = "ndtiff-dataset"
 SOURCE_IMAGE_QUEUE = "image-queue"
+SOURCE_INSTANCE = "instance"
 
 
 def make_frame_source(kind: str, **kwargs) -> FrameSource:
@@ -857,4 +875,9 @@ def make_frame_source(kind: str, **kwargs) -> FrameSource:
         return NdTiffDatasetFrameSource(**kwargs)
     if kind == SOURCE_IMAGE_QUEUE:
         return ImageQueueFrameSource(**kwargs)
+    if kind == SOURCE_INSTANCE:
+        # A pre-built source the caller owns (e.g. the Live-tab preview's
+        # RamPeek, which the session must start/stop and read thumbnails
+        # from) — the FovConfig stays declarative for every other kind.
+        return kwargs["source"]
     raise ValueError("unknown frame source {!r}".format(kind))

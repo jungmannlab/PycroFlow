@@ -29,6 +29,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the CURRENT FOV's acquisition (frames so far stay saved, honest
   partial-coverage record, immediate T3 interlock) and the protocol continues
   — distinct from the orchestrator Abort in the Run Sequence tab.
+- **MM live-preview mode in the Live tab**: a "Start MM preview" toggle
+  (`gui/tabs/live_tab.py` hosting the shell) watches Micro-Manager's own Live
+  view through the live pipeline with NO protocol running —
+  `services/live_preview.py` drives WP-4's non-destructive
+  `RamPeekFrameSource` (now accepting the setup's `camera_info` so the peeked
+  stream localizes) and pushes thumbnails to the shell's Overview from the
+  source's new `latest_frame` tap. Read-only by design: no registry records,
+  no laser interlock, lossy (view-only). On emulated setups the preview loops
+  synthetic `MockFrameSource` segments, so it demos and tests with no
+  instrument. A starting run stops any preview and disables the toggle (the
+  run owns the camera); tunables `preview_poll_s`/`preview_port` ride the
+  `live_analysis` config block.
 - **Registry auto-connect**: a shared from-env client factory
   (`services/registry.py`, `PAINT_REGISTRY_URL` / `PAINT_REGISTRY_TOKEN` /
   `PYCROFLOW_REGISTRY_BUFFER` → WP-3 `BufferedRegistryClient`; unset = quietly

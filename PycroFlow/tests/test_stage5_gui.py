@@ -138,12 +138,55 @@ class TestMainWindow(unittest.TestCase):
         )
         self.assertIs(w._live_connected, service)
         # The shell's bridge subscribed to the service's update hub.
-        self.assertIn(w.live_tab._bridge.seam_client, service.hub._clients)
+        self.assertIn(
+            w.live_tab.shell._bridge.seam_client, service.hub._clients
+        )
         w._on_experiment_state(
             ExperimentState.RUNNING, ExperimentState.FINISHED
         )
         self.assertIsNone(w._live_connected)
-        self.assertNotIn(w.live_tab._bridge.seam_client, service.hub._clients)
+        self.assertNotIn(
+            w.live_tab.shell._bridge.seam_client, service.hub._clients
+        )
+
+    def test_live_tab_preview_toggle(self):
+        """The MM-preview toggle connects the shell to the session's service,
+        bounces back when preview is unavailable, and run-lock stops it."""
+        from PycroFlow.gui.tabs.live_tab import LiveTabHost
+        from PycroFlow.live_analysis.service import LiveAnalysisService
+
+        calls = {"stop": 0}
+        service = LiveAnalysisService()
+
+        def stopped():
+            calls["stop"] += 1
+
+        # Unavailable: the toggle bounces back unchecked, no stop fired.
+        host = LiveTabHost(
+            on_start_preview=lambda: None, on_stop_preview=stopped
+        )
+        host.preview_btn.setChecked(True)
+        self.assertFalse(host.preview_btn.isChecked())
+        self.assertEqual(calls["stop"], 0)
+
+        # Available: shell subscribes; untoggling stops + unsubscribes.
+        host2 = LiveTabHost(
+            on_start_preview=lambda: service, on_stop_preview=stopped
+        )
+        host2.preview_btn.setChecked(True)
+        self.assertIn(host2.shell._bridge.seam_client, service.hub._clients)
+        host2.preview_btn.setChecked(False)
+        self.assertEqual(calls["stop"], 1)
+        self.assertNotIn(host2.shell._bridge.seam_client, service.hub._clients)
+
+        # Run lock while previewing: preview stops, toggle disables.
+        host2.preview_btn.setChecked(True)
+        host2.set_run_lock(True)
+        self.assertEqual(calls["stop"], 2)
+        self.assertFalse(host2.preview_btn.isChecked())
+        self.assertFalse(host2.preview_btn.isEnabled())
+        host2.set_run_lock(False)
+        self.assertTrue(host2.preview_btn.isEnabled())
 
     def test_window_title_has_version(self):
         from PycroFlow import __version__
