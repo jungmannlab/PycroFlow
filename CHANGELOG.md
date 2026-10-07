@@ -284,6 +284,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the CURRENT FOV's acquisition (frames so far stay saved, honest
   partial-coverage record, immediate T3 interlock) and the protocol continues
   — distinct from the orchestrator Abort in the Run Sequence tab.
+- **Box-overlay detection fixed (uint16 wraparound)**: `identify_boxes` fed
+  raw uint16 camera frames straight into picasso's numba gradient kernel,
+  whose unsigned arithmetic wraps around — background pixels got
+  astronomical "net gradients", flooding the overlay with boxes that ignored
+  the Min. Net Gradient threshold entirely (and drowned the real spots).
+  The frame is now cast to float32 first, exactly as picasso's own
+  `identify_in_frame` does ("otherwise numba goes crazy"); a regression test
+  pins that raising the threshold reduces detections and an absurd one finds
+  nothing. Affected every box pusher (preview, --demo, --live).
 - **Review fixes (third adversarial pass) + per-frame boxes**: the Overview
   treats boxes as PER-FRAME data — a thumbnail without boxes clears the
   overlay instead of leaving a previous frame's detections drawn over the

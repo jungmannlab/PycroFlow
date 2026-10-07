@@ -31,10 +31,16 @@ def identify_boxes(frame, box_size, min_net_gradient):
         detection is unavailable/failed — the overlay is best-effort.
     """
     try:
+        import numpy as np
         from picasso.localize import identify_in_image
 
+        # picasso's own identify_in_frame casts first ("otherwise numba goes
+        # crazy"): calling identify_in_image with a raw uint16 camera frame
+        # makes the numba gradient kernel WRAP AROUND on unsigned arithmetic
+        # — background pixels get astronomical "net gradients", flooding the
+        # overlay with boxes that no threshold can suppress.
         ys, xs, _ng = identify_in_image(
-            frame, float(min_net_gradient), int(box_size)
+            np.float32(frame), float(min_net_gradient), int(box_size)
         )
         out: list[float] = []
         for xi, yi in zip(xs, ys):

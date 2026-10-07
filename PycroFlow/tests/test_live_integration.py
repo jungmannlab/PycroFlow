@@ -445,6 +445,13 @@ class TestIdentifyBoxes(unittest.TestCase):
         h, w = frame.shape
         for x, y in zip(boxes[0::2], boxes[1::2]):
             self.assertTrue(0 <= x < w and 0 <= y < h)
+        # The threshold has TEETH: raising it strictly reduces detections and
+        # an absurd threshold finds nothing. (Regression for the uint16
+        # wraparound bug: raw camera frames fed to picasso's numba kernel
+        # produced astronomical gradients that NO threshold could suppress —
+        # box floods on background, insensitive to Min. Net Gradient.)
+        self.assertLessEqual(len(identify_boxes(frame, 7, 5000)), len(boxes))
+        self.assertEqual(identify_boxes(frame, 7, 1e9), [])
         # Garbage input degrades to None, never an exception.
         self.assertIsNone(identify_boxes(None, 7, 200))
 
