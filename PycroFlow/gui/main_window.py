@@ -408,7 +408,23 @@ class PycroFlowMainWindow(QMainWindow):
                 "the Imaging tab), then start Micro-Manager's Live mode.",
             )
             return None
-        return self._preview.start(imaging)
+        service = self._preview.start(imaging)
+        if service is None:
+            # The one enablement requirement beyond a connected imaging
+            # system is the picasso camera_info block — say so loudly, with
+            # the exact file to edit (the quiet status label was missed on
+            # the rig).
+            QMessageBox.warning(
+                self,
+                "Preview unavailable",
+                "Live localization needs the camera's picasso photon-"
+                "conversion info.\n\nAdd a `camera_info:` block (Baseline / "
+                "Sensitivity / Gain / Qe / Pixelsize) to the `imaging:` "
+                "section of configs/setups/{}.yaml — a commented template "
+                "is in the file — then reload the setup and reconnect "
+                "imaging.".format(self.setup_combo.currentText()),
+            )
+        return service
 
     # --- run-sequence helpers -----------------------------------------
 
