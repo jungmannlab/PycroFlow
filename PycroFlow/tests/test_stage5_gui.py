@@ -2756,6 +2756,36 @@ class TestGotoMajorStep(unittest.TestCase):
         self.assertEqual(tab.step_lists["fluid"].currentRow(), 0)
         self.assertEqual(tab.step_lists["img"].currentRow(), 0)
 
+    def test_goto_updates_the_parameter_box(self):
+        """Jumping via the dropdown refreshes the param box (the list signals
+        are blocked, so it must be refreshed explicitly)."""
+        tab = self._tab()
+        tab.goto_combo.setCurrentIndex(2)  # "Round 2"
+        tab._on_goto_selected(2)
+        # Anchored on the img round-2 acquire (row 2).
+        self.assertEqual(tab._current_sys, "img")
+        self.assertEqual(tab._current_row, 2)
+        self.assertIn("Imaging", tab.step_param_label.text())
+        self.assertGreater(tab.step_table.rowCount(), 0)
+
+    def test_clicking_already_current_row_updates_param_box(self):
+        """Clicking a row that is already current in another list still
+        switches the param box to it (itemClicked, not currentRowChanged)."""
+        tab = self._tab()
+        # Select fluid row 3 -> cross-highlight positions img at its
+        # concurrent row; the param box shows fluid.
+        tab._on_step_selected("fluid", 3)
+        self.assertEqual(tab._current_sys, "fluid")
+        # Now the operator clicks img's currently-selected row: itemClicked
+        # fires even though img's current row did not change, so the box must
+        # switch to img.
+        img = tab.step_lists["img"]
+        row = max(img.currentRow(), 0)
+        tab._on_step_selected("img", row)
+        self.assertEqual(tab._current_sys, "img")
+        self.assertEqual(tab._current_row, row)
+        self.assertIn("Imaging", tab.step_param_label.text())
+
     def test_combo_disabled_without_rounds(self):
         from unittest.mock import MagicMock
         from PycroFlow.services import ExperimentState

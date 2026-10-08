@@ -284,6 +284,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the CURRENT FOV's acquisition (frames so far stay saved, honest
   partial-coverage record, immediate T3 interlock) and the protocol continues
   — distinct from the orchestrator Abort in the Run Sequence tab.
+- **Step-parameter box now follows every selection** (fix): it refreshes when
+  jumping via the "Go to" dropdown (the list signals are blocked there, so it
+  is updated explicitly, anchored on the round's imaging step) and when
+  clicking a row that is already current in another list (wired to
+  `itemClicked`, which fires regardless of whether the row changed —
+  `currentRowChanged` did not). The handler was split so the box can update
+  without re-triggering the cross-list concurrent-step highlight.
 - **"Go to" selector lands on the imager injection** (fix): selecting "Round N"
   now centres the fluid list on that round's imager INJECTION (and img on its
   imaging prep), not the previous round's trailing wash — the targets are

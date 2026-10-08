@@ -330,8 +330,18 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._bridge.state_changed.connect(self._on_state_changed)
         self._bridge.log_message.connect(self._on_log)
         for system, lst in self.step_lists.items():
+            # currentRowChanged covers keyboard navigation; itemClicked also
+            # fires when the user clicks a row that is ALREADY current in that
+            # list (e.g. clicking back and forth between the systems), which
+            # currentRowChanged does not — both route to the same handler so
+            # the parameter box always follows the last interaction.
             lst.currentRowChanged.connect(
                 lambda row, s=system: self._on_step_selected(s, row)
+            )
+            lst.itemClicked.connect(
+                lambda item, s=system, lw=lst: self._on_step_selected(
+                    s, lw.row(item)
+                )
             )
         self.apply_btn.clicked.connect(self._on_apply)
         self._poll_timer.timeout.connect(self._poll_progress)
@@ -812,6 +822,14 @@ class ExperimentTab(YamlDropMixin, QWidget):
             lst.setCurrentRow(row)
             lst.blockSignals(False)
             lst.scrollToItem(lst.item(row), _CENTER)
+        # The list signals were blocked above, so refresh the parameter box
+        # explicitly — anchor on the round-defining imaging step (its own
+        # list is already positioned; no re-highlight).
+        for anchor in ("img", "fluid", "illu"):
+            lst = self.step_lists[anchor]
+            if lst.count() and lst.currentRow() >= 0:
+                self._show_step_params(anchor, lst.currentRow())
+                break
 
     @staticmethod
     def _is_dark(entry):
@@ -1076,6 +1094,11 @@ class ExperimentTab(YamlDropMixin, QWidget):
         if row < 0:
             # Deselection — e.g. from clearing another list, or repopulating.
             return
+        self._highlight_concurrent(system, row)
+        self._show_step_params(system, row)
+
+    def _highlight_concurrent(self, system, row):
+        """Select + centre the concurrent step in the OTHER two lists."""
         corr = self._concurrent_indices(system, row)
         for other, lst in self.step_lists.items():
             if other == system:
@@ -1089,11 +1112,20 @@ class ExperimentTab(YamlDropMixin, QWidget):
                 lst.setCurrentRow(-1)
             lst.blockSignals(False)
 
+    def _show_step_params(self, system, row):
+        """Populate the editable parameter box from ``system``'s step ``row``.
+
+        Separate from :meth:`_highlight_concurrent` so callers that have
+        already positioned the lists (the Go-to selector, which blocks the
+        list signals) can refresh the box without re-triggering the
+        cross-highlight.
+        """
         self._current_sys = system
         self._current_row = row
         self.step_table.setRowCount(0)
         entries = self._entries.get(system, [])
-        if row >= len(entries):
+        if row < 0 or row >= len(entries):
+            self.step_param_label.setText("Select a step above to view it.")
             self.apply_btn.setEnabled(False)
             return
         entry = entries[row]
