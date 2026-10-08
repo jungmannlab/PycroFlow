@@ -536,12 +536,13 @@ class DiagnosticsService:
         )
 
     def _check_monet_server(self, url: str) -> Tuple[CheckStatus, str]:
+        # Prefer monet's own client probe (authoritative, same token logic),
+        # but it lives in monet.io, which pulls in matplotlib/pandas/numpy/
+        # icecream — often absent on a minimal rig env even when `import monet`
+        # works. So fall back to a stdlib /health probe when it can't load.
         info = self._monet_server_auth(url)
         if info is None:
-            return (
-                CheckStatus.SKIP,
-                "cannot verify {} (monet.io unavailable)".format(url),
-            )
+            return self._probe_monet_health(url)
         detail = info.get("detail") or url
         if not info.get("reachable"):
             return CheckStatus.FAIL, "database server unreachable: {}".format(
@@ -557,19 +558,56 @@ class DiagnosticsService:
             "database server reachable but auth failed — {}".format(detail),
         )
 
+    def _probe_monet_health(self, url: str) -> Tuple[CheckStatus, str]:
+        """Reachability probe of a monet server using only stdlib HTTP.
+
+        Used when :func:`monet.io.check_server_auth` can't be imported. The
+        server's ``/health`` is public; ``/auth/whoami`` reports auth with the
+        ``PAINT_MONET_TOKEN`` monet itself would send.
+        """
+        base = url.rstrip("/")
+        reachable, code, body = self._probe_url(base + "/health")
+        if not reachable:
+            return (
+                CheckStatus.FAIL,
+                "database server unreachable: {} ({})".format(url, body),
+            )
+        if code != 200:
+            return CheckStatus.WARN, "{} answered /health with HTTP {}".format(
+                url, code
+            )
+        # Reachable; probe auth with the same token monet uses.
+        token = os.environ.get("PAINT_MONET_TOKEN")
+        _, auth_code, _ = self._probe_url(base + "/auth/whoami", token)
+        if auth_code in (401, 403):
+            return (
+                CheckStatus.WARN,
+                "reachable but auth failed (HTTP {} — check "
+                "PAINT_MONET_TOKEN): {}".format(auth_code, url),
+            )
+        return (
+            CheckStatus.OK,
+            "database server reachable ({} /health ok)".format(url),
+        )
+
     def _monet_server_auth(self, url: str):
         """Call monet's client-side server probe, or None if unavailable.
 
         Returns the :func:`monet.io.check_server_auth` dict (reachability +
-        auth), or None when monet.io can't be imported or is mocked.
+        auth), or None when monet.io can't be imported (its heavy import
+        chain) or is mocked — the caller then falls back to a stdlib probe.
         """
         try:
             from monet.io import check_server_auth
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "monet.io unavailable ({!r}); using stdlib probe", exc
+            )
             return None
         try:
             result = check_server_auth(url, timeout=self._http_timeout)
-        except Exception:  # never let a probe break the check
+        except Exception as exc:  # never let a probe break the check
+            logger.debug("monet check_server_auth raised: {!r}", exc)
             return None
         return result if isinstance(result, dict) else None
 

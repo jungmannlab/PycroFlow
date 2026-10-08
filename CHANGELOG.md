@@ -54,7 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whether that microscope's **calibration database is reachable** — a monet
   calibration-server URL is probed via `monet.io.check_server_auth`
   (`/health` + `/auth/whoami`, reporting reachable / authorized / auth-failed),
-  a legacy local `.xlsx` is checked for existence; whether the picasso-registry
+  falling back to a stdlib `/health` probe when `monet.io` can't be imported
+  (its matplotlib/pandas/icecream chain is often absent on a minimal rig env,
+  even when `import monet` works), and a legacy local `.xlsx` is checked for
+  existence; whether the picasso-registry
   is configured, its client importable, and its **`/health`** endpoint
   reachable (probing the base URL would 404 on the root route — reported as a
   false warning — so the public `/health` is used, returning `{status,

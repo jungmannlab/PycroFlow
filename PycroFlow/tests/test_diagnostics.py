@@ -437,6 +437,56 @@ class DiagnosticsTest(unittest.TestCase):
             )
         self.assertEqual(rows["monet · database"].status, CheckStatus.WARN)
 
+    def test_monet_database_fallback_probe_when_io_unavailable(self):
+        # monet.io can't be imported (heavy deps missing on a minimal rig) ->
+        # _monet_server_auth returns None -> stdlib /health probe is used.
+        fake = types.SimpleNamespace(
+            CONFIGS={"Mercury": {"database": "http://mibweather:8000"}},
+            PROTOCOLS={"Mercury": {}},
+        )
+        with (
+            mock.patch.object(
+                DiagnosticsService, "_import_monet", return_value=fake
+            ),
+            mock.patch.object(
+                DiagnosticsService, "_monet_server_auth", return_value=None
+            ),
+            mock.patch.object(
+                DiagnosticsService,
+                "_probe_url",
+                return_value=(True, 200, '{"status": "ok"}'),
+            ),
+        ):
+            rows = _by_name(
+                DiagnosticsService(_FakeSys(monet_setup="Mercury")).run_all()
+            )
+        row = rows["monet · database"]
+        self.assertEqual(row.status, CheckStatus.OK)
+        self.assertIn("reachable", row.detail)
+
+    def test_monet_database_fallback_unreachable_fails(self):
+        fake = types.SimpleNamespace(
+            CONFIGS={"Mercury": {"database": "http://mibweather:8000"}},
+            PROTOCOLS={"Mercury": {}},
+        )
+        with (
+            mock.patch.object(
+                DiagnosticsService, "_import_monet", return_value=fake
+            ),
+            mock.patch.object(
+                DiagnosticsService, "_monet_server_auth", return_value=None
+            ),
+            mock.patch.object(
+                DiagnosticsService,
+                "_probe_url",
+                return_value=(False, None, "connection refused"),
+            ),
+        ):
+            rows = _by_name(
+                DiagnosticsService(_FakeSys(monet_setup="Mercury")).run_all()
+            )
+        self.assertEqual(rows["monet · database"].status, CheckStatus.FAIL)
+
     def test_monet_database_local_file(self):
         import os
         import tempfile
