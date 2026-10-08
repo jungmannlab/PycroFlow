@@ -118,9 +118,9 @@ class TestMainWindow(unittest.TestCase):
 
     def test_builds_tabs(self):
         w = self._build()
-        self.assertEqual(w.tabs.count(), 7)
+        self.assertEqual(w.tabs.count(), 8)
         self.assertEqual(
-            [w.tabs.tabText(i) for i in range(7)],
+            [w.tabs.tabText(i) for i in range(8)],
             [
                 "Experiment Design",
                 "Run Sequence",
@@ -129,6 +129,7 @@ class TestMainWindow(unittest.TestCase):
                 "Webcams",
                 "Live",
                 "Monet",
+                "Doctor",
             ],
         )
 
@@ -2849,3 +2850,82 @@ class TestRunErrorSurfacing(unittest.TestCase):
         tab._check_finished()
         svc.finalize_if_done.assert_called_once()
         self.assertNotIn("aborted", tab.state_label.text().lower())
+
+
+class TestDoctorTab(unittest.TestCase):
+    """The Doctor tab renders DiagnosticsService results grouped + coloured."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    class _Dev:
+        def get_status(self):
+            return "ok"
+
+    class _Fluid:
+        multiplexer = None
+        valve_a = {}
+
+        def __init__(self):
+            self.pump_a = TestDoctorTab._Dev()
+            self.pump_out = TestDoctorTab._Dev()
+
+    class _Sys:
+        def __init__(self, fluid):
+            self.fluid_system = fluid
+            self.imaging_system = None
+            self.illumination_system = None
+
+        def connection_states(self):
+            return {
+                "fluid": self.fluid_system is not None,
+                "imaging": False,
+                "illumination": False,
+            }
+
+        def setup_name(self):
+            return "Emulator"
+
+        def is_emulated(self):
+            return True
+
+        def laser_options(self):
+            return []
+
+    def test_run_populates_tree_and_summary(self):
+        import os
+        from unittest.mock import patch
+        from PycroFlow.gui.widgets import worker
+        from PycroFlow.gui.tabs.doctor_tab import DoctorTab
+
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("PAINT_REGISTRY_URL", "PAINT_REGISTRY_TOKEN")
+        }
+        worker.set_synchronous(True)
+        try:
+            with patch.dict(os.environ, env, clear=True):
+                tab = DoctorTab(self._Sys(self._Fluid()), None)
+                tab.run_diagnostics()
+        finally:
+            worker.set_synchronous(False)
+
+        # Category parents with child rows, and a counted summary.
+        self.assertGreater(tab.tree.topLevelItemCount(), 0)
+        total_children = sum(
+            tab.tree.topLevelItem(i).childCount()
+            for i in range(tab.tree.topLevelItemCount())
+        )
+        self.assertGreater(total_children, 0)
+        self.assertIn("ok", tab.summary_label.text())
+        self.assertTrue(tab.run_btn.isEnabled())
+
+    def test_refresh_is_noop(self):
+        from PycroFlow.gui.tabs.doctor_tab import DoctorTab
+
+        tab = DoctorTab(self._Sys(None), None)
+        tab.refresh()  # must not raise or trigger I/O

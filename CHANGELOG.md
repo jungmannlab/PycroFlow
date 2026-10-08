@@ -42,6 +42,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Doctor tab + `doctor` CLI command — a diagnostics panel that verifies
+  which subsystems and connectors are actually working.** A new frontend-
+  agnostic `services.DiagnosticsService` runs a list of defensive checks (each
+  returns a typed `CheckResult`, never raises) grouped into Environment,
+  Subsystems and Connectors: the loaded setup; cached connection state plus a
+  real serial `get_status` round-trip to each fluid pump/valve/ibidi device; a
+  Micro-Manager Core ping; the monet config / laser lines; whether the
+  picasso-registry is configured, its client importable, and an HTTP
+  reachability probe of `PAINT_REGISTRY_URL` (any reply = reachable, 401/403 =
+  auth rejected, connection error = unreachable). Instrument pings are
+  **skipped while a run is active** so they never contend with the orchestrator
+  for the bus; the registry bearer token is sent in the probe header but never
+  echoed into a result. The GUI gets a **Doctor** tab (grouped, colour-coded
+  tree + Run button, auto-runs on first show, off the GUI thread); the CLI gets
+  `doctor`. Extending it is adding one method — built so new connectors
+  (e.g. a future monet HTTP power API) drop in.
 - **Tracked `.env.template`** documenting every per-machine environment
   variable (registry `PAINT_REGISTRY_URL`/`PAINT_REGISTRY_TOKEN`/
   `PYCROFLOW_REGISTRY_BUFFER`, monet paths + token, spill port, the

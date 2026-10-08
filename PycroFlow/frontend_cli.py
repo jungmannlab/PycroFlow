@@ -364,6 +364,45 @@ class PycroFlowInteractive(cmd.Cmd):
             return
         print(self.orchestrator.poll_protocol_finished())
 
+    def do_doctor(self, line):
+        """Health-check the subsystems and connectors (registry, monet).
+
+        Verifies — as far as is cheaply possible — which systems are actually
+        working, to help disentangle problems when a run misbehaves. Same
+        checks the GUI's Doctor tab runs.
+        """
+        from PycroFlow.services import (
+            CheckStatus,
+            DiagnosticsService,
+            summarize,
+        )
+
+        self._sync_services()
+        results = DiagnosticsService(
+            self._system_service, self._experiment_service
+        ).run_all()
+        glyph = {
+            CheckStatus.OK: "[ ok ]",
+            CheckStatus.WARN: "[warn]",
+            CheckStatus.FAIL: "[FAIL]",
+            CheckStatus.SKIP: "[skip]",
+        }
+        category = None
+        for r in results:
+            if r.category != category:
+                category = r.category
+                print("\n{}:".format(category))
+            print("  {} {:<28} {}".format(glyph[r.status], r.name, r.detail))
+        counts = summarize(results)
+        print(
+            "\n{} ok, {} warn, {} fail, {} skip".format(
+                counts[CheckStatus.OK],
+                counts[CheckStatus.WARN],
+                counts[CheckStatus.FAIL],
+                counts[CheckStatus.SKIP],
+            )
+        )
+
     # ######################### Direct Fluid Manipulation
 
     def do_pump(self, arg):

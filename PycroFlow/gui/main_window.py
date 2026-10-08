@@ -40,6 +40,7 @@ from PycroFlow.gui.tabs.imaging_tab import ImagingTab
 from PycroFlow.gui.tabs.monet_tab import MonetTab
 from PycroFlow.gui.tabs.webcams_tab import WebcamsTab
 from PycroFlow.gui.tabs.live_tab import LiveTabHost
+from PycroFlow.gui.tabs.doctor_tab import DoctorTab
 from PycroFlow.services.live_preview import LivePreviewSession
 
 # Experiment states during which hardware must not be touched manually (the
@@ -120,6 +121,13 @@ class PycroFlowMainWindow(QMainWindow):
             self._system_service, on_config_changed=self._attach_monitoring
         )
         self.monet_tab = MonetTab()
+        # Diagnostics: verifies which subsystems + connectors (registry, monet)
+        # are actually working. Reads both services — SystemService for the live
+        # hardware, ExperimentService for the run state (so instrument pings are
+        # skipped while the orchestrator owns the bus).
+        self.doctor_tab = DoctorTab(
+            self._system_service, self._experiment_service
+        )
         # WP-LIVE-INT: the WP-GUI operator shell as a tab, passive until a run
         # creates a LiveAnalysisService (connected in _on_experiment_state) or
         # the operator toggles the MM preview (LivePreviewSession — watch
@@ -143,6 +151,7 @@ class PycroFlowMainWindow(QMainWindow):
         self.tabs.addTab(self.webcams_tab, "Webcams")
         self.tabs.addTab(self.live_tab, "Live")
         self.tabs.addTab(self.monet_tab, "Monet")
+        self.tabs.addTab(self.doctor_tab, "Doctor")
         self.setCentralWidget(self.tabs)
 
         # Lock manual hardware access (setup/connect, fluid manual controls,

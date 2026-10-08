@@ -120,6 +120,26 @@ class ProtocolControlTest(unittest.TestCase):
         self.assertIn("ibidi valve write timeout", out)
         self.assertNotIn("True", out)
 
+    def test_doctor_prints_report(self):
+        import os
+
+        cli = _cli()  # nothing connected
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("PAINT_REGISTRY_URL", "PAINT_REGISTRY_TOKEN")
+        }
+        buf = io.StringIO()
+        with patch.dict(os.environ, env, clear=True), redirect_stdout(buf):
+            cli.do_doctor("")
+        out = buf.getvalue()
+        self.assertIn("Environment", out)
+        self.assertIn("Subsystems", out)
+        self.assertIn("Connectors", out)
+        # Summary line with the four counts.
+        self.assertIn("ok,", out)
+        self.assertIn("skip", out)
+
     def test_get_protocol_iter_queries_all_systems(self):
         cli = _cli_with_orchestrator()
         cli.do_get_protocol_iter("")
