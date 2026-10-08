@@ -12,6 +12,7 @@ from.
 """
 
 import ast
+import re
 import time
 
 from PyQt6.QtCore import Qt, QTimer
@@ -654,45 +655,159 @@ class ExperimentTab(YamlDropMixin, QWidget):
         combo.blockSignals(False)
         combo.setEnabled(combo.count() > 1)
 
-    def _round_start_indices(self, round_index):
-        """First entry index of ``round_index`` (0-based) per subsystem.
+    @staticmethod
+    def _nondark_round_tag(entry):
+        """The ``img-<N>`` round tag of a non-dark imaging acquire, or None.
 
-        ``round_index < 0`` means the start of the run (index 0 everywhere).
-        A subsystem whose round starts past its list end is clamped to its
-        last entry so centring never raises.
+        Parsed from the acquire ``message`` (``'round_img-1-EGFR'`` ->
+        ``'img-1'``); the per-round signal values embed the same tag
+        (``'done flushing img-1'`` / ``'done setting power round img-1'``), so
+        it correlates the round across all three subsystems.
         """
-        out = {}
-        for system in _SYSTEMS:
-            rounds = self._round_of.get(system) or []
-            if round_index < 0:
-                out[system] = 0
-                continue
-            idx = next(
-                (i for i, r in enumerate(rounds) if r == round_index), None
-            )
-            if idx is None:
-                idx = max(len(rounds) - 1, 0)
-            out[system] = idx
+        if not isinstance(entry, dict):
+            return None
+        m = re.search(r"(img-\d+)", str(entry.get("message", "")))
+        return m.group(1) if m else None
+
+    @staticmethod
+    def _block_start(entries, idx):
+        """Walk back from ``idx`` over contiguous ``wait for signal`` entries.
+
+        Lands on the top of the step's prep block (its power/flush waits), so
+        centring shows the whole round-start, not just the acquire line.
+        """
+        i = idx
+        while (
+            i > 0
+            and isinstance(entries[i - 1], dict)
+            and entries[i - 1].get("$type") == "wait for signal"
+        ):
+            i -= 1
+        return i
+
+    def _goto_targets(self, round_index):
+        """Per-subsystem index to centre for the selected major step.
+
+        ``round_index < 0`` is the start of the run (0 everywhere). Otherwise
+        each list lands on the START of that round's own work — the imager
+        INJECTION for fluid, the imaging prep/acquire for img, the power-set
+        for illu — rather than the previous round's trailing wash (which the
+        round-block boundary lumps in first). Falls back to the round-block
+        start when a tag can't be correlated, and clamps to the list end.
+        """
+        out = {s: 0 for s in _SYSTEMS}
+        if round_index < 0:
+            return out
+        img_entries = self._entries.get("img", [])
+        nondark = [
+            i
+            for i, e in enumerate(img_entries)
+            if isinstance(e, dict)
+            and e.get("$type") == "acquire"
+            and not self._is_dark(e)
+        ]
+        if round_index >= len(nondark):
+            return {
+                s: max(len(self._entries.get(s, [])) - 1, 0) for s in _SYSTEMS
+            }
+        acq_idx = nondark[round_index]
+        tag = self._nondark_round_tag(img_entries[acq_idx])
+
+        # img: the top of this acquire's prep block.
+        out["img"] = self._block_start(img_entries, acq_idx)
+
+        if tag is None:  # unparseable — fall back to the round-block starts.
+            for system in ("fluid", "illu"):
+                rounds = self._round_of.get(system) or []
+                idx = next(
+                    (i for i, r in enumerate(rounds) if r == round_index),
+                    None,
+                )
+                out[system] = idx if idx is not None else 0
+            return out
+
+        # fluid: the imager injection — the inject just before this round's
+        # "done flushing <tag>" signal, PROVIDED that signal precedes the
+        # round's "done imaging <tag>" wait (i.e. the imager is injected
+        # before imaging). For a pre-loaded initial imager the flushing is the
+        # post-imaging wash, so there is no pre-injection -> stay at 0.
+        out["fluid"] = self._fluid_injection_index(tag)
+        # illu: the power-set that precedes this round's "done setting power"
+        # signal.
+        out["illu"] = self._illu_power_index(tag)
         return out
+
+    def _fluid_injection_index(self, tag):
+        fluid = self._entries.get("fluid", [])
+        flush_i = self._signal_index(fluid, "done flushing {}".format(tag))
+        wait_i = self._wait_index(fluid, "done imaging round {}".format(tag))
+        if flush_i is None or (wait_i is not None and wait_i < flush_i):
+            return 0  # pre-loaded initial imager (or no match): run start
+        # Back up over the contiguous inject(s) feeding this flush signal.
+        i = flush_i
+        while (
+            i > 0
+            and isinstance(fluid[i - 1], dict)
+            and fluid[i - 1].get("$type") == "inject"
+        ):
+            i -= 1
+        return i
+
+    def _illu_power_index(self, tag):
+        illu = self._entries.get("illu", [])
+        sig_i = self._signal_index(
+            illu, "done setting power round {}".format(tag)
+        )
+        if sig_i is None:
+            return 0
+        i = sig_i
+        while (
+            i > 0
+            and isinstance(illu[i - 1], dict)
+            and illu[i - 1].get("$type") in ("set power", "set shutter")
+        ):
+            i -= 1
+        return i
+
+    @staticmethod
+    def _signal_index(entries, value):
+        for i, e in enumerate(entries):
+            if (
+                isinstance(e, dict)
+                and e.get("$type") == "signal"
+                and e.get("value") == value
+            ):
+                return i
+        return None
+
+    @staticmethod
+    def _wait_index(entries, value):
+        for i, e in enumerate(entries):
+            if (
+                isinstance(e, dict)
+                and e.get("$type") == "wait for signal"
+                and e.get("value") == value
+            ):
+                return i
+        return None
 
     def _on_goto_selected(self, _index):
         """Centre all three lists on the start of the selected round.
 
-        Each list is selected + centred on ITS OWN round-start index. The
-        per-list ``currentRowChanged`` cross-highlight (which would otherwise
-        re-select a *concurrent* step in the other lists and clobber their
-        round-starts) is blocked for the duration, so every list lands on the
-        round boundary.
+        Each list is selected + centred on the START of that round's own work
+        (see :meth:`_goto_targets`). The per-list ``currentRowChanged``
+        cross-highlight (which would otherwise re-select a *concurrent* step in
+        the other lists and clobber the targets) is blocked for the duration.
         """
         round_index = self.goto_combo.currentData()
         if round_index is None:
             return
-        starts = self._round_start_indices(round_index)
+        targets = self._goto_targets(round_index)
         for system in _SYSTEMS:
             lst = self.step_lists[system]
             if not lst.count():
                 continue
-            row = min(max(starts.get(system, 0), 0), lst.count() - 1)
+            row = min(max(targets.get(system, 0), 0), lst.count() - 1)
             lst.blockSignals(True)
             lst.setCurrentRow(row)
             lst.blockSignals(False)

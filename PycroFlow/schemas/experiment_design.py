@@ -177,6 +177,23 @@ class ExchangeExperiment(BaseModel):
         "acquisition round each, in this order.",
     )
 
+    @model_validator(mode="after")
+    def _initial_imager_not_in_imagers(self):
+        """``initial_imager`` is already-in-the-sample, so its injection is
+        skipped; listing it again in ``imagers`` would image it twice (once
+        pre-loaded, once re-injected). Catch that misconfiguration loudly.
+        """
+        if self.initial_imager and self.initial_imager in (self.imagers or []):
+            raise ValueError(
+                "initial_imager {!r} must not also appear in imagers: it is "
+                "the imager ALREADY in the sample (imaged first, injection "
+                "skipped), so listing it in the exchange rounds would image "
+                "it twice. List only the imagers to inject after it.".format(
+                    self.initial_imager
+                )
+            )
+        return self
+
 
 class SphResiExperiment(BaseModel):
     """SPH-RESI experiment design."""

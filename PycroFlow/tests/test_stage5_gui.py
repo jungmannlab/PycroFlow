@@ -2684,8 +2684,9 @@ class TestGotoMajorStep(unittest.TestCase):
         svc = MagicMock(name="service")
         svc.state = ExperimentState.LOADED
         svc.experiment_design = {}
-        # Two exchange rounds (two non-dark img acquires); the fluid list's
-        # round-2 block begins at its first entry with round index 1.
+        # Initial-imager exchange: round 1 (img-0) is pre-loaded (no fluid
+        # injection, washed AFTER imaging); round 2 (img-1) injects its imager
+        # before imaging. Mirrors the real builder's signal tags.
         svc.protocol = {
             "fluid": {
                 "protocol_entries": [
@@ -2694,8 +2695,10 @@ class TestGotoMajorStep(unittest.TestCase):
                         "target": "img",
                         "value": "done imaging round img-0",
                     },
+                    {"$type": "inject", "reservoir_id": 3, "volume": 10},
+                    {"$type": "signal", "value": "done flushing img-0"},
                     {"$type": "inject", "reservoir_id": 1, "volume": 10},
-                    {"$type": "inject", "reservoir_id": 2, "volume": 10},
+                    {"$type": "signal", "value": "done flushing img-1"},
                 ]
             },
             "img": {
@@ -2732,17 +2735,26 @@ class TestGotoMajorStep(unittest.TestCase):
         self.assertIn("Round 2", items[2])
         self.assertTrue(tab.goto_combo.isEnabled())
 
-    def test_selecting_round_centres_each_list(self):
+    def test_selecting_round_centres_on_imager_injection(self):
+        """Round N lands on its imager INJECTION (fluid) / imaging prep (img),
+        NOT the previous round's trailing wash."""
         tab = self._tab()
-        # Select "Round 2" (data == round index 1).
-        self.assertEqual(tab.goto_combo.itemData(2), 1)
+        self.assertEqual(tab.goto_combo.itemData(2), 1)  # "Round 2"
         tab.goto_combo.setCurrentIndex(2)
         tab._on_goto_selected(2)
-        # Round 2 begins at the top of each subsystem's round-2 block (the
-        # entry right after round 1's acquire marker — consistent with the
-        # current-round progress accounting): img entry 1, fluid entry 1.
-        self.assertEqual(tab.step_lists["img"].currentRow(), 1)
-        self.assertEqual(tab.step_lists["fluid"].currentRow(), 1)
+        # Round 2's imager injection is fluid[3] (the inject before
+        # "done flushing img-1"), NOT fluid[1] (the wash after round 1).
+        self.assertEqual(tab.step_lists["fluid"].currentRow(), 3)
+        self.assertEqual(tab.step_lists["img"].currentRow(), 2)
+
+    def test_round_1_initial_imager_stays_at_run_top(self):
+        """Round 1 with a pre-loaded initial imager has no injection before
+        imaging, so fluid stays at the run start (step 0)."""
+        tab = self._tab()
+        tab.goto_combo.setCurrentIndex(1)  # "Round 1"
+        tab._on_goto_selected(1)
+        self.assertEqual(tab.step_lists["fluid"].currentRow(), 0)
+        self.assertEqual(tab.step_lists["img"].currentRow(), 0)
 
     def test_combo_disabled_without_rounds(self):
         from unittest.mock import MagicMock

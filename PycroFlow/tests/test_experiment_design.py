@@ -654,3 +654,39 @@ class TestUsePositions(unittest.TestCase):
         )
         cfg = configs.assemble_imaging_config(setup, design)
         self.assertTrue(cfg["use_positions"])
+
+
+class TestInitialImagerValidation(unittest.TestCase):
+    """initial_imager must not also be an exchange round (double-imaging)."""
+
+    def _design(self, initial, imagers):
+        return {
+            "base_name": "x",
+            "fluid": {
+                "settings": {
+                    "vol_wash": 10,
+                    "vol_reagent": 5,
+                    "reservoir_names": {1: "R1", 2: "R2", 3: "R3"},
+                    "experiment": {
+                        "type": "Exchange",
+                        "wash_buffer": "R3",
+                        "initial_imager": initial,
+                        "imagers": imagers,
+                    },
+                }
+            },
+            "img": {"settings": {"t_exp": 100, "frames": 100}},
+        }
+
+    def test_overlap_rejected(self):
+        with self.assertRaises(Exception) as ctx:
+            validate_experiment_design(self._design("R1", ["R1", "R2"]))
+        self.assertIn("twice", str(ctx.exception).lower())
+
+    def test_separate_initial_and_imagers_ok(self):
+        model = validate_experiment_design(self._design("R1", ["R2"]))
+        self.assertEqual(model.fluid.settings.experiment.initial_imager, "R1")
+
+    def test_no_initial_imager_ok(self):
+        model = validate_experiment_design(self._design(None, ["R1", "R2"]))
+        self.assertIsNone(model.fluid.settings.experiment.initial_imager)

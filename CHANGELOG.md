@@ -284,6 +284,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the CURRENT FOV's acquisition (frames so far stay saved, honest
   partial-coverage record, immediate T3 interlock) and the protocol continues
   — distinct from the orchestrator Abort in the Run Sequence tab.
+- **"Go to" selector lands on the imager injection** (fix): selecting "Round N"
+  now centres the fluid list on that round's imager INJECTION (and img on its
+  imaging prep), not the previous round's trailing wash — the targets are
+  resolved from the per-round signal tags, so a pre-loaded initial-imager
+  round 1 correctly stays at the run start. Imaging-timing audit: the exchange
+  builder is correct (every non-dark acquire has its imager freshly injected
+  or pre-loaded; every dark check follows a wash).
+- **Exchange design validation**: `initial_imager` may no longer also appear in
+  `imagers` — it is the imager ALREADY in the sample (imaged first, injection
+  skipped), so listing it as an exchange round too would image it twice. The
+  design now fails validation with a clear message instead of silently
+  double-imaging.
 - **Run Sequence "Go to" major-step selector**: a dropdown next to "Center on
   current step" lists the run's rounds ("Start of run", "Round 1: <imager>",
   …); selecting one centres all three subsystem lists on that round's first
