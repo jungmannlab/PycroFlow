@@ -1,5 +1,6 @@
 """Tests for the frontend-agnostic DiagnosticsService (Doctor checks)."""
 
+import types
 import unittest
 from unittest import mock
 
@@ -44,6 +45,7 @@ class _FakeSys:
         setup="Emulator",
         emulated=True,
         lasers=None,
+        monet_setup=None,
     ):
         self.fluid_system = fluid
         self.imaging_system = imaging
@@ -51,6 +53,7 @@ class _FakeSys:
         self._setup = setup
         self._emulated = emulated
         self._lasers = lasers or []
+        self._monet_setup = monet_setup
 
     def connection_states(self):
         return {
@@ -67,6 +70,9 @@ class _FakeSys:
 
     def laser_options(self):
         return self._lasers
+
+    def get_monet_setup(self):
+        return self._monet_setup
 
 
 class _FakeExp:
@@ -228,6 +234,85 @@ class DiagnosticsTest(unittest.TestCase):
             results = DiagnosticsService(_FakeSys()).run_all()
         for r in results:
             self.assertNotIn(secret, r.detail)
+
+    def test_monet_configs_loaded_ok(self):
+        fake = types.SimpleNamespace(
+            CONFIGS={"Mercury": {}}, PROTOCOLS={"Mercury": {}}
+        )
+        with mock.patch.object(
+            DiagnosticsService, "_import_monet", return_value=fake
+        ):
+            rows = _by_name(DiagnosticsService(_FakeSys()).run_all())
+        self.assertEqual(rows["monet · library"].status, CheckStatus.OK)
+        self.assertEqual(rows["monet · configs"].status, CheckStatus.OK)
+        self.assertIn("1 config", rows["monet · configs"].detail)
+
+    def test_monet_configs_without_protocols_warn(self):
+        fake = types.SimpleNamespace(CONFIGS={"Mercury": {}}, PROTOCOLS={})
+        with mock.patch.object(
+            DiagnosticsService, "_import_monet", return_value=fake
+        ):
+            rows = _by_name(DiagnosticsService(_FakeSys()).run_all())
+        self.assertEqual(rows["monet · configs"].status, CheckStatus.WARN)
+
+    def test_monet_not_installed_warns_and_skips(self):
+        with mock.patch.object(
+            DiagnosticsService, "_import_monet", return_value=None
+        ):
+            rows = _by_name(DiagnosticsService(_FakeSys()).run_all())
+        self.assertEqual(rows["monet · library"].status, CheckStatus.WARN)
+        self.assertEqual(rows["monet · configs"].status, CheckStatus.SKIP)
+
+    def test_monet_microscope_skipped_without_setup(self):
+        fake = types.SimpleNamespace(CONFIGS={"Mercury": {}}, PROTOCOLS={})
+        with mock.patch.object(
+            DiagnosticsService, "_import_monet", return_value=fake
+        ):
+            rows = _by_name(
+                DiagnosticsService(_FakeSys(monet_setup=None)).run_all()
+            )
+        self.assertEqual(rows["monet · microscope"].status, CheckStatus.SKIP)
+
+    def test_monet_microscope_found(self):
+        fake = types.SimpleNamespace(
+            CONFIGS={"Mercury": {}}, PROTOCOLS={"Mercury": {}}
+        )
+        with mock.patch.object(
+            DiagnosticsService, "_import_monet", return_value=fake
+        ):
+            rows = _by_name(
+                DiagnosticsService(_FakeSys(monet_setup="Mercury")).run_all()
+            )
+        row = rows["monet · microscope"]
+        self.assertEqual(row.status, CheckStatus.OK)
+        self.assertIn("Mercury", row.detail)
+
+    def test_monet_microscope_config_without_protocol_warns(self):
+        fake = types.SimpleNamespace(CONFIGS={"Mercury": {}}, PROTOCOLS={})
+        with mock.patch.object(
+            DiagnosticsService, "_import_monet", return_value=fake
+        ):
+            rows = _by_name(
+                DiagnosticsService(_FakeSys(monet_setup="Mercury")).run_all()
+            )
+        row = rows["monet · microscope"]
+        self.assertEqual(row.status, CheckStatus.WARN)
+        self.assertIn("no protocol", row.detail)
+
+    def test_monet_microscope_not_found_fails(self):
+        fake = types.SimpleNamespace(
+            CONFIGS={"Mercury": {}}, PROTOCOLS={"Mercury": {}}
+        )
+        with mock.patch.object(
+            DiagnosticsService, "_import_monet", return_value=fake
+        ):
+            rows = _by_name(
+                DiagnosticsService(_FakeSys(monet_setup="Venus")).run_all()
+            )
+        row = rows["monet · microscope"]
+        self.assertEqual(row.status, CheckStatus.FAIL)
+        self.assertIn("Venus", row.detail)
+        self.assertIn("Mercury", row.detail)  # lists what is available
 
     def test_summarize_counts(self):
         results = DiagnosticsService(_FakeSys(fluid=_FakeFluid())).run_all()

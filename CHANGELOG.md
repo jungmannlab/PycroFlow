@@ -48,7 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns a typed `CheckResult`, never raises) grouped into Environment,
   Subsystems and Connectors: the loaded setup; cached connection state plus a
   real serial `get_status` round-trip to each fluid pump/valve/ibidi device; a
-  Micro-Manager Core ping; the monet config / laser lines; whether the
+  Micro-Manager Core ping; the monet laser lines, whether monet's
+  config/protocol YAMLs loaded, and whether the requested microscope
+  (`illumination.config`) is present in `monet.CONFIGS`/`PROTOCOLS`; whether the
   picasso-registry is configured, its client importable, and an HTTP
   reachability probe of `PAINT_REGISTRY_URL` (any reply = reachable, 401/403 =
   auth rejected, connection error = unreachable). Instrument pings are

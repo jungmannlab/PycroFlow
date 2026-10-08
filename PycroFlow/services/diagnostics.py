@@ -8,8 +8,9 @@ service: it runs a list of named checks and returns structured
 Each check is defensive — it never raises (an unexpected error becomes a
 ``FAIL`` row) — and verifies as much as is cheaply possible without side
 effects: cached connection state, a serial ``get_status`` round-trip to each
-fluid device, a Micro-Manager Core ping, the monet library/config, and an HTTP
-reachability probe of the picasso-registry.
+fluid device, a Micro-Manager Core ping, the monet library plus whether its
+config/protocol YAMLs loaded and the requested microscope was found, and an
+HTTP reachability probe of the picasso-registry.
 
 Checks that talk to the instruments (the serial pings, the MM Core ping) are
 **skipped while a run is active** so they never contend with the orchestrator
@@ -278,7 +279,17 @@ class DiagnosticsService:
                 "Connectors",
                 self._check_registry_reachable,
             ),
-            self._run("monet", "Connectors", self._check_monet),
+            self._run(
+                "monet · library", "Connectors", self._check_monet_library
+            ),
+            self._run(
+                "monet · configs", "Connectors", self._check_monet_configs
+            ),
+            self._run(
+                "monet · microscope",
+                "Connectors",
+                self._check_monet_microscope,
+            ),
         ]
 
     def _check_registry_client(self) -> Tuple[CheckStatus, str]:
@@ -342,19 +353,100 @@ class DiagnosticsService:
                 self._http_timeout
             )
 
-    def _check_monet(self) -> Tuple[CheckStatus, str]:
+    @staticmethod
+    def _import_monet():
+        """Return the ``monet`` module, or None if it cannot be imported."""
         try:
             import monet
+
+            return monet
         except Exception:
+            return None
+
+    def _monet_setup_name(self) -> Optional[str]:
+        """The monet ``CONFIGS`` key the loaded setup illuminates with.
+
+        This is the *microscope* requested (``illumination.config``), which may
+        differ from the setup's own name. None when no setup is loaded.
+        """
+        getter = getattr(self._sys, "get_monet_setup", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter()
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+    def _check_monet_library(self) -> Tuple[CheckStatus, str]:
+        monet = self._import_monet()
+        if monet is None:
             return CheckStatus.WARN, "monet is not installed"
-        configs = getattr(monet, "CONFIGS", None)
-        if isinstance(configs, dict):
-            return CheckStatus.OK, "local library; {} config(s)".format(
-                len(configs)
+        # In tests / without the real package monet is a MagicMock, whose
+        # CONFIGS is not a real dict — flag that rather than reporting healthy.
+        if not isinstance(getattr(monet, "CONFIGS", None), dict):
+            return (
+                CheckStatus.WARN,
+                "monet imported but appears mocked (CONFIGS is not a dict)",
             )
+        return CheckStatus.OK, "monet library importable (local)"
+
+    def _check_monet_configs(self) -> Tuple[CheckStatus, str]:
+        """Whether monet's config + protocol YAMLs have been loaded."""
+        monet = self._import_monet()
+        if monet is None:
+            return CheckStatus.SKIP, "monet not installed"
+        configs = getattr(monet, "CONFIGS", None)
+        protocols = getattr(monet, "PROTOCOLS", None)
+        if not isinstance(configs, dict) or not isinstance(protocols, dict):
+            return (
+                CheckStatus.WARN,
+                "CONFIGS/PROTOCOLS not loaded (monet uninitialised or mocked)",
+            )
+        if not configs:
+            return CheckStatus.WARN, "no monet configs loaded (0 microscopes)"
+        detail = "{} config(s), {} protocol(s)".format(
+            len(configs), len(protocols)
+        )
+        if not protocols:
+            return (
+                CheckStatus.WARN,
+                "configs loaded but no protocols — " + detail,
+            )
+        return CheckStatus.OK, detail
+
+    def _check_monet_microscope(self) -> Tuple[CheckStatus, str]:
+        """Whether the microscope the setup requests exists in monet."""
+        name = self._monet_setup_name()
+        if not name:
+            return (
+                CheckStatus.SKIP,
+                "no microscope requested (no setup / illumination config)",
+            )
+        monet = self._import_monet()
+        if monet is None:
+            return CheckStatus.SKIP, "monet not installed"
+        configs = getattr(monet, "CONFIGS", None)
+        protocols = getattr(monet, "PROTOCOLS", None)
+        if not isinstance(configs, dict):
+            return (
+                CheckStatus.WARN,
+                "cannot verify {!r}: monet.CONFIGS unavailable".format(name),
+            )
+        in_configs = name in configs
+        in_protocols = isinstance(protocols, dict) and name in protocols
+        if in_configs and in_protocols:
+            return CheckStatus.OK, "{!r} found (config + protocol)".format(
+                name
+            )
+        if in_configs:
+            return (
+                CheckStatus.WARN,
+                "{!r} has a config but no protocol".format(name),
+            )
+        have = ", ".join(sorted(configs)) if configs else "none"
         return (
-            CheckStatus.WARN,
-            "monet imported but CONFIGS unavailable (mocked?)",
+            CheckStatus.FAIL,
+            "{!r} not found in monet configs (have: {})".format(name, have),
         )
 
 
