@@ -9,8 +9,9 @@ Each check is defensive — it never raises (an unexpected error becomes a
 ``FAIL`` row) — and verifies as much as is cheaply possible without side
 effects: cached connection state, a serial ``get_status`` round-trip to each
 fluid device, a Micro-Manager Core ping, the monet library plus whether its
-config/protocol YAMLs loaded and the requested microscope was found, and an
-HTTP reachability probe of the picasso-registry.
+config/protocol YAMLs loaded, the requested microscope was found, and its
+calibration database (server URL or local file) is reachable, and an HTTP
+reachability probe of the picasso-registry's ``/health`` endpoint.
 
 Checks that talk to the instruments (the serial pings, the MM Core ping) are
 **skipped while a run is active** so they never contend with the orchestrator
@@ -25,6 +26,7 @@ sent in the probe's ``Authorization`` header but never echoed back.
 from __future__ import annotations
 
 import enum
+import json
 import os
 import socket
 import time
@@ -290,6 +292,11 @@ class DiagnosticsService:
                 "Connectors",
                 self._check_monet_microscope,
             ),
+            self._run(
+                "monet · database",
+                "Connectors",
+                self._check_monet_database,
+            ),
         ]
 
     def _check_registry_client(self) -> Tuple[CheckStatus, str]:
@@ -310,21 +317,51 @@ class DiagnosticsService:
         return CheckStatus.OK, "client available; token {}".format(token)
 
     def _check_registry_reachable(self) -> Tuple[CheckStatus, str]:
-        url = os.environ.get("PAINT_REGISTRY_URL")
-        if not url:
+        """Probe the registry's public ``/health`` endpoint.
+
+        Hitting the base URL would 404 on most API servers (the root path has
+        no route) and read as a false warning, so we probe ``/health``, which
+        picasso-registry serves unauthenticated as ``{status, version}``.
+        """
+        base = os.environ.get("PAINT_REGISTRY_URL")
+        if not base:
             return (
                 CheckStatus.SKIP,
                 "not configured (PAINT_REGISTRY_URL unset)",
             )
-        return self._http_probe(url, os.environ.get("PAINT_REGISTRY_TOKEN"))
+        url = base.rstrip("/") + "/health"
+        reachable, code, body = self._probe_url(
+            url, os.environ.get("PAINT_REGISTRY_TOKEN")
+        )
+        if not reachable:
+            return CheckStatus.FAIL, "unreachable: {}".format(body)
+        if code == 200:
+            info = self._parse_health(body)
+            return CheckStatus.OK, (
+                "healthy ({})".format(info) if info else "reachable (HTTP 200)"
+            )
+        if code == 404:
+            return (
+                CheckStatus.WARN,
+                "reachable but /health 404 (old or misconfigured server?)",
+            )
+        if code in (401, 403):
+            return (
+                CheckStatus.WARN,
+                "reachable but auth rejected (HTTP {} — check "
+                "PAINT_REGISTRY_TOKEN)".format(code),
+            )
+        return CheckStatus.WARN, "reachable (HTTP {})".format(code)
 
-    def _http_probe(
-        self, url: str, token: Optional[str]
-    ) -> Tuple[CheckStatus, str]:
-        """GET ``url`` with a short timeout; any HTTP reply means reachable.
+    def _probe_url(
+        self, url: str, token: Optional[str] = None
+    ) -> Tuple[bool, Optional[int], str]:
+        """GET ``url`` with a short timeout.
 
-        The bearer ``token`` is sent in the ``Authorization`` header but never
-        echoed into the returned detail.
+        Returns ``(reachable, http_code, body_or_reason)``: ``reachable`` is
+        True whenever the server answered at all (any HTTP status, including an
+        error status, means the host is up). Any bearer ``token`` goes in the
+        ``Authorization`` header and is never returned in the body/reason.
         """
         req = urllib.request.Request(url, method="GET")
         if token:
@@ -333,25 +370,34 @@ class DiagnosticsService:
             with urllib.request.urlopen(
                 req, timeout=self._http_timeout
             ) as resp:
-                return CheckStatus.OK, "reachable ({} HTTP {})".format(
-                    url, resp.getcode()
-                )
+                body = resp.read(512).decode("utf-8", "replace")
+                return True, resp.getcode(), body
         except urllib.error.HTTPError as exc:
-            if exc.code in (401, 403):
-                return (
-                    CheckStatus.WARN,
-                    "reachable but auth rejected (HTTP {} — check "
-                    "PAINT_REGISTRY_TOKEN)".format(exc.code),
-                )
-            return CheckStatus.WARN, "reachable ({} HTTP {})".format(
-                url, exc.code
-            )
+            return True, exc.code, exc.reason or ""
         except urllib.error.URLError as exc:
-            return CheckStatus.FAIL, "unreachable: {}".format(exc.reason)
+            return False, None, str(exc.reason)
         except (TimeoutError, socket.timeout):
-            return CheckStatus.FAIL, "timed out after {:.0f}s".format(
-                self._http_timeout
+            return (
+                False,
+                None,
+                "timed out after {:.0f}s".format(self._http_timeout),
             )
+
+    @staticmethod
+    def _parse_health(body: str) -> Optional[str]:
+        """Pull ``status`` / ``version`` out of a JSON ``/health`` body."""
+        try:
+            data = json.loads(body)
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        parts = []
+        if data.get("status") is not None:
+            parts.append("status={}".format(data["status"]))
+        if data.get("version") is not None:
+            parts.append("version={}".format(data["version"]))
+        return ", ".join(parts) if parts else None
 
     @staticmethod
     def _import_monet():
@@ -448,6 +494,84 @@ class DiagnosticsService:
             CheckStatus.FAIL,
             "{!r} not found in monet configs (have: {})".format(name, have),
         )
+
+    def _check_monet_database(self) -> Tuple[CheckStatus, str]:
+        """Whether the microscope's calibration database is reachable.
+
+        monet configs name the calibration store in ``database``: nowadays a
+        monet calibration *server* URL (``http(s)://…``), historically a local
+        ``.xlsx`` file. A URL is probed via :func:`monet.io.check_server_auth`
+        (``GET /health`` + ``/auth/whoami``); a file path is checked for
+        existence.
+        """
+        name = self._monet_setup_name()
+        if not name:
+            return CheckStatus.SKIP, "no microscope requested"
+        monet = self._import_monet()
+        if monet is None:
+            return CheckStatus.SKIP, "monet not installed"
+        configs = getattr(monet, "CONFIGS", None)
+        if not isinstance(configs, dict):
+            return CheckStatus.SKIP, "monet.CONFIGS unavailable"
+        mconfig = configs.get(name)
+        if not isinstance(mconfig, dict):
+            return CheckStatus.SKIP, "no config for {!r}".format(name)
+        db = mconfig.get("database")
+        if not isinstance(db, str) or not db:
+            return (
+                CheckStatus.WARN,
+                "config {!r} names no calibration database".format(name),
+            )
+        if db.startswith("http://") or db.startswith("https://"):
+            return self._check_monet_server(db)
+        # Legacy local calibration file (e.g. an .xlsx workbook).
+        if os.path.exists(db):
+            return CheckStatus.OK, "local calibration file present: {}".format(
+                db
+            )
+        return (
+            CheckStatus.WARN,
+            "local calibration file not found (path may be relative to "
+            "monet's working dir): {}".format(db),
+        )
+
+    def _check_monet_server(self, url: str) -> Tuple[CheckStatus, str]:
+        info = self._monet_server_auth(url)
+        if info is None:
+            return (
+                CheckStatus.SKIP,
+                "cannot verify {} (monet.io unavailable)".format(url),
+            )
+        detail = info.get("detail") or url
+        if not info.get("reachable"):
+            return CheckStatus.FAIL, "database server unreachable: {}".format(
+                detail
+            )
+        if info.get("ok"):
+            return (
+                CheckStatus.OK,
+                "database server reachable + authorized — {}".format(detail),
+            )
+        return (
+            CheckStatus.WARN,
+            "database server reachable but auth failed — {}".format(detail),
+        )
+
+    def _monet_server_auth(self, url: str):
+        """Call monet's client-side server probe, or None if unavailable.
+
+        Returns the :func:`monet.io.check_server_auth` dict (reachability +
+        auth), or None when monet.io can't be imported or is mocked.
+        """
+        try:
+            from monet.io import check_server_auth
+        except Exception:
+            return None
+        try:
+            result = check_server_auth(url, timeout=self._http_timeout)
+        except Exception:  # never let a probe break the check
+            return None
+        return result if isinstance(result, dict) else None
 
 
 __all__ = [

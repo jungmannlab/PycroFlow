@@ -314,6 +314,165 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertIn("Venus", row.detail)
         self.assertIn("Mercury", row.detail)  # lists what is available
 
+    def test_registry_probes_health_endpoint(self):
+        import os
+
+        os.environ["PAINT_REGISTRY_URL"] = "http://mibweather:8001"
+        seen = {}
+
+        def _fake_urlopen(req, timeout=None):
+            seen["url"] = req.full_url
+            resp = mock.MagicMock()
+            resp.getcode.return_value = 200
+            resp.read.return_value = b'{"status": "ok", "version": "9.9"}'
+            resp.__enter__.return_value = resp
+            resp.__exit__.return_value = False
+            return resp
+
+        with mock.patch(
+            "PycroFlow.services.diagnostics.urllib.request.urlopen",
+            side_effect=_fake_urlopen,
+        ):
+            rows = _by_name(DiagnosticsService(_FakeSys()).run_all())
+        # Probes /health, not the bare base URL (which would 404).
+        self.assertEqual(seen["url"], "http://mibweather:8001/health")
+        row = rows["Registry · reachability"]
+        self.assertEqual(row.status, CheckStatus.OK)
+        self.assertIn("9.9", row.detail)
+
+    def test_registry_health_404_warns_not_fail(self):
+        import os
+
+        os.environ["PAINT_REGISTRY_URL"] = "http://mibweather:8001"
+        err = urllib.error.HTTPError(
+            "http://mibweather:8001/health", 404, "Not Found", None, None
+        )
+        with mock.patch(
+            "PycroFlow.services.diagnostics.urllib.request.urlopen",
+            side_effect=err,
+        ):
+            rows = _by_name(DiagnosticsService(_FakeSys()).run_all())
+        row = rows["Registry · reachability"]
+        self.assertEqual(row.status, CheckStatus.WARN)
+        self.assertIn("404", row.detail)
+
+    def test_monet_database_no_entry_warns(self):
+        fake = types.SimpleNamespace(
+            CONFIGS={"Mercury": {}}, PROTOCOLS={"Mercury": {}}
+        )
+        with mock.patch.object(
+            DiagnosticsService, "_import_monet", return_value=fake
+        ):
+            rows = _by_name(
+                DiagnosticsService(_FakeSys(monet_setup="Mercury")).run_all()
+            )
+        self.assertEqual(rows["monet · database"].status, CheckStatus.WARN)
+
+    def test_monet_database_server_reachable_ok(self):
+        fake = types.SimpleNamespace(
+            CONFIGS={"Mercury": {"database": "http://mibweather:8002"}},
+            PROTOCOLS={"Mercury": {}},
+        )
+        info = {
+            "reachable": True,
+            "ok": True,
+            "detail": "authenticated as 'mercury' (scope: write)",
+        }
+        with (
+            mock.patch.object(
+                DiagnosticsService, "_import_monet", return_value=fake
+            ),
+            mock.patch.object(
+                DiagnosticsService, "_monet_server_auth", return_value=info
+            ),
+        ):
+            rows = _by_name(
+                DiagnosticsService(_FakeSys(monet_setup="Mercury")).run_all()
+            )
+        self.assertEqual(rows["monet · database"].status, CheckStatus.OK)
+
+    def test_monet_database_server_unreachable_fails(self):
+        fake = types.SimpleNamespace(
+            CONFIGS={"Mercury": {"database": "http://mibweather:8002"}},
+            PROTOCOLS={"Mercury": {}},
+        )
+        info = {
+            "reachable": False,
+            "ok": False,
+            "detail": "server unreachable: connection refused",
+        }
+        with (
+            mock.patch.object(
+                DiagnosticsService, "_import_monet", return_value=fake
+            ),
+            mock.patch.object(
+                DiagnosticsService, "_monet_server_auth", return_value=info
+            ),
+        ):
+            rows = _by_name(
+                DiagnosticsService(_FakeSys(monet_setup="Mercury")).run_all()
+            )
+        self.assertEqual(rows["monet · database"].status, CheckStatus.FAIL)
+
+    def test_monet_database_server_auth_failed_warns(self):
+        fake = types.SimpleNamespace(
+            CONFIGS={"Mercury": {"database": "http://mibweather:8002"}},
+            PROTOCOLS={"Mercury": {}},
+        )
+        info = {
+            "reachable": True,
+            "ok": False,
+            "detail": "401 — token invalid",
+        }
+        with (
+            mock.patch.object(
+                DiagnosticsService, "_import_monet", return_value=fake
+            ),
+            mock.patch.object(
+                DiagnosticsService, "_monet_server_auth", return_value=info
+            ),
+        ):
+            rows = _by_name(
+                DiagnosticsService(_FakeSys(monet_setup="Mercury")).run_all()
+            )
+        self.assertEqual(rows["monet · database"].status, CheckStatus.WARN)
+
+    def test_monet_database_local_file(self):
+        import os
+        import tempfile
+
+        fd, path = tempfile.mkstemp(suffix=".xlsx")
+        os.close(fd)
+        try:
+            fake = types.SimpleNamespace(
+                CONFIGS={"Mercury": {"database": path}},
+                PROTOCOLS={"Mercury": {}},
+            )
+            with mock.patch.object(
+                DiagnosticsService, "_import_monet", return_value=fake
+            ):
+                rows = _by_name(
+                    DiagnosticsService(
+                        _FakeSys(monet_setup="Mercury")
+                    ).run_all()
+                )
+            self.assertEqual(rows["monet · database"].status, CheckStatus.OK)
+        finally:
+            os.remove(path)
+
+        # Missing file -> WARN (may be relative to monet's cwd).
+        fake_missing = types.SimpleNamespace(
+            CONFIGS={"Mercury": {"database": "/no/such/power_database.xlsx"}},
+            PROTOCOLS={"Mercury": {}},
+        )
+        with mock.patch.object(
+            DiagnosticsService, "_import_monet", return_value=fake_missing
+        ):
+            rows = _by_name(
+                DiagnosticsService(_FakeSys(monet_setup="Mercury")).run_all()
+            )
+        self.assertEqual(rows["monet · database"].status, CheckStatus.WARN)
+
     def test_summarize_counts(self):
         results = DiagnosticsService(_FakeSys(fluid=_FakeFluid())).run_all()
         counts = summarize(results)

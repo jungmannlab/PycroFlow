@@ -49,11 +49,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Subsystems and Connectors: the loaded setup; cached connection state plus a
   real serial `get_status` round-trip to each fluid pump/valve/ibidi device; a
   Micro-Manager Core ping; the monet laser lines, whether monet's
-  config/protocol YAMLs loaded, and whether the requested microscope
-  (`illumination.config`) is present in `monet.CONFIGS`/`PROTOCOLS`; whether the
-  picasso-registry is configured, its client importable, and an HTTP
-  reachability probe of `PAINT_REGISTRY_URL` (any reply = reachable, 401/403 =
-  auth rejected, connection error = unreachable). Instrument pings are
+  config/protocol YAMLs loaded, whether the requested microscope
+  (`illumination.config`) is present in `monet.CONFIGS`/`PROTOCOLS`, and
+  whether that microscope's **calibration database is reachable** — a monet
+  calibration-server URL is probed via `monet.io.check_server_auth`
+  (`/health` + `/auth/whoami`, reporting reachable / authorized / auth-failed),
+  a legacy local `.xlsx` is checked for existence; whether the picasso-registry
+  is configured, its client importable, and its **`/health`** endpoint
+  reachable (probing the base URL would 404 on the root route — reported as a
+  false warning — so the public `/health` is used, returning `{status,
+  version}`; 401/403 = auth rejected, connection error = unreachable).
+  Instrument pings are
   **skipped while a run is active** so they never contend with the orchestrator
   for the bus; the registry bearer token is sent in the probe header but never
   echoed into a result. The GUI gets a **Doctor** tab (grouped, colour-coded
