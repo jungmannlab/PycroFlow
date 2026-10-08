@@ -137,6 +137,42 @@ class TestExperimentService(unittest.TestCase):
         # abort() with no protocol loaded must not raise.
         ExperimentService().abort()
 
+    def _running_svc_with_mock_orch(self):
+        svc = ExperimentService()
+        svc._orchestrator = MagicMock(name="orch")
+        svc._live = MagicMock(name="live")
+        svc._set_state(ExperimentState.RUNNING)
+        return svc
+
+    def test_finalize_if_done_errored_aborts(self):
+        # A fatal step error -> ABORTED, driven by the service so every
+        # frontend transitions identically (through observers).
+        svc = self._running_svc_with_mock_orch()
+        svc._orchestrator.poll_protocol_finished.return_value = True
+        svc._orchestrator.poll_protocol_errored.return_value = True
+        self.assertIs(svc.finalize_if_done(), ExperimentState.ABORTED)
+        self.assertIs(svc.state, ExperimentState.ABORTED)
+
+    def test_finalize_if_done_clean_finish_ends(self):
+        svc = self._running_svc_with_mock_orch()
+        svc._orchestrator.poll_protocol_finished.return_value = True
+        svc._orchestrator.poll_protocol_errored.return_value = False
+        self.assertIs(svc.finalize_if_done(), ExperimentState.FINISHED)
+        self.assertIs(svc.state, ExperimentState.FINISHED)
+
+    def test_finalize_if_done_still_running_is_noop(self):
+        svc = self._running_svc_with_mock_orch()
+        svc._orchestrator.poll_protocol_finished.return_value = False
+        self.assertIsNone(svc.finalize_if_done())
+        self.assertIs(svc.state, ExperimentState.RUNNING)
+
+    def test_finalize_if_done_noop_when_not_running(self):
+        svc = ExperimentService()
+        svc._orchestrator = MagicMock(name="orch")
+        svc._orchestrator.poll_protocol_finished.return_value = True
+        # Not in RUNNING (e.g. already FINISHED/IDLE) -> no transition.
+        self.assertIsNone(svc.finalize_if_done())
+
     def test_attach_systems_sets_refs(self):
         svc = ExperimentService()
         f, i, lum = object(), object(), object()

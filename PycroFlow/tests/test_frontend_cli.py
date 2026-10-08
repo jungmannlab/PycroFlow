@@ -96,11 +96,29 @@ class ProtocolControlTest(unittest.TestCase):
 
     def test_is_protocol_done_prints(self):
         cli = _cli_with_orchestrator()
+        cli.orchestrator.poll_protocol_errored.return_value = False
         cli.orchestrator.poll_protocol_finished.return_value = True
         buf = io.StringIO()
         with redirect_stdout(buf):
             cli.do_is_protocol_done("")
         self.assertIn("True", buf.getvalue())
+
+    def test_is_protocol_done_reports_error(self):
+        # A fatal step error also marks the run finished; it must surface as
+        # an error, not as a normal "True" completion.
+        cli = _cli_with_orchestrator()
+        cli.orchestrator.poll_protocol_errored.return_value = True
+        cli.orchestrator.poll_protocol_finished.return_value = True
+        cli.orchestrator.protocol_error_message.return_value = (
+            "ibidi valve write timeout"
+        )
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cli.do_is_protocol_done("")
+        out = buf.getvalue()
+        self.assertIn("ERRORED", out)
+        self.assertIn("ibidi valve write timeout", out)
+        self.assertNotIn("True", out)
 
     def test_get_protocol_iter_queries_all_systems(self):
         cli = _cli_with_orchestrator()
@@ -181,15 +199,33 @@ class LifecycleTest(unittest.TestCase):
 
     def test_exit_closes_and_returns_true(self):
         cli = _cli_with_orchestrator()
+        cli.orchestrator.poll_protocol_errored.return_value = False
         cli.orchestrator.poll_protocol_finished.return_value = True
         self.assertTrue(cli.do_exit(""))
         cli.orchestrator.end_orchestration.assert_called_once()
 
     def test_close_aborts_when_not_finished(self):
         cli = _cli_with_orchestrator()
+        cli.orchestrator.poll_protocol_errored.return_value = False
         cli.orchestrator.poll_protocol_finished.return_value = False
         cli.close()
         cli.orchestrator.abort_orchestration.assert_called_once()
+
+    def test_close_reports_error_and_aborts(self):
+        # A fatal step error marks the run finished too; close() must not end
+        # it as a normal completion — it aborts and reports the error.
+        cli = _cli_with_orchestrator()
+        cli.orchestrator.poll_protocol_errored.return_value = True
+        cli.orchestrator.poll_protocol_finished.return_value = True
+        cli.orchestrator.protocol_error_message.return_value = (
+            "ibidi valve write timeout"
+        )
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cli.close()
+        cli.orchestrator.abort_orchestration.assert_called_once()
+        cli.orchestrator.end_orchestration.assert_not_called()
+        self.assertIn("ibidi valve write timeout", buf.getvalue())
 
     def test_close_without_orchestrator_is_safe(self):
         _cli().close()  # orchestrator is None -> no-op

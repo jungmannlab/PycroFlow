@@ -27,6 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `has_errored()` / `error_message()`; the Run Sequence tab surfaces the
     failure (red state + log line) and moves to ABORTED instead of reporting a
     normal finish — non-blocking (no modal from the poll callback).
+  - **Follow-up hardening (code review):** the fatal-abort path now also tells
+    *every* subsystem to abort its in-flight work (notably setting the imaging
+    `acq_abort`) before marking the run finished, so a mid-acquisition movie is
+    stopped rather than left running while the run reports done. The terminal
+    "run is over" decision is centralized in `ExperimentService.finalize_if_done()`
+    (errored → ABORTED, clean → FINISHED) and shared by the GUI poll and the
+    CLI, so the CLI (`is_protocol_done` / exit) now reports a fatal abort as an
+    error instead of a normal completion. `IbidiMultiplexer` cleanups: the
+    retry re-raise chains the original timeout (`raise … from`); the port
+    reopen runs under the device lock; and `connect`/reopen share one
+    `_open_serial` helper.
 
 
 ### Added

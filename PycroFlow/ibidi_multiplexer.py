@@ -168,21 +168,33 @@ class IbidiMultiplexer(_ValveABC):
     # -- connection -----------------------------------------------------------
     def connect(self, port, baud=115200, timeout=2):
         """Open the serial port and confirm the device identifies as ``MX``."""
-        port = self._normalize_port(port)
-        self._port, self._baud, self._timeout = port, baud, timeout
-        self._serial = Serial(port, baudrate=baud, timeout=timeout)
+        self._port = self._normalize_port(port)
+        self._baud, self._timeout = baud, timeout
+        self._open_serial()
         ident = self.identify()
         if DEVICE_ID not in ident:
             logger.warning(
                 "ibidi multiplexer on {} returned unexpected id {!r} "
-                "(expected to contain {!r})".format(port, ident, DEVICE_ID)
+                "(expected to contain {!r})".format(
+                    self._port, ident, DEVICE_ID
+                )
             )
         else:
             logger.info(
                 "ibidi multiplexer connected on {} ({} channels)".format(
-                    port, self.channels
+                    self._port, self.channels
                 )
             )
+
+    def _open_serial(self):
+        """Open the serial port from the remembered connection parameters.
+
+        Shared by :meth:`connect` and :meth:`_reopen` so there is a single
+        place that constructs the :class:`~serial.Serial` handle.
+        """
+        self._serial = Serial(
+            self._port, baudrate=self._baud, timeout=self._timeout
+        )
 
     @staticmethod
     def _normalize_port(port):
@@ -249,29 +261,33 @@ class IbidiMultiplexer(_ValveABC):
             "ibidi command {!r} failed after {} attempts: {!r}".format(
                 cmd, self.command_retries + 1, last_exc
             )
-        )
+        ) from last_exc
 
     def _reopen(self):
-        """Close and reopen the serial port for a retry. Returns success."""
+        """Close and reopen the serial port for a retry (best effort).
+
+        Runs under ``self._lock`` so the reassignment of ``self._serial`` is
+        serialized with any concurrent :meth:`_command` write/read, rather
+        than swapping the handle out from under an in-flight call.
+        """
         if self._port is None:
-            return False
-        try:
-            if self._serial is not None:
-                self._serial.close()
-        except (
-            Exception
-        ):  # noqa: BLE001 - already broken; closing is best-effort
-            pass
-        try:
-            self._serial = Serial(
-                self._port, baudrate=self._baud, timeout=self._timeout
-            )
-            return True
-        except SerialException as exc:
-            logger.warning(
-                "ibidi port reopen on {} failed: {!r}".format(self._port, exc)
-            )
-            return False
+            return
+        with self._lock:
+            try:
+                if self._serial is not None:
+                    self._serial.close()
+            except (
+                Exception
+            ):  # noqa: BLE001 - already broken; closing is best-effort
+                pass
+            try:
+                self._open_serial()
+            except SerialException as exc:
+                logger.warning(
+                    "ibidi port reopen on {} failed: {!r}".format(
+                        self._port, exc
+                    )
+                )
 
     @staticmethod
     def _ok(reply):

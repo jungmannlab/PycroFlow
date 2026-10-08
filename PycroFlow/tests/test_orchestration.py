@@ -301,10 +301,11 @@ class TestFatalStepAbort(unittest.TestCase):
                 ]
             },
         }
+        img = EmulatedImagingSystem()
         po = por.ProtocolOrchestrator(
             protocol,
             fluid_system=_FailingFluid(),
-            imaging_system=EmulatedImagingSystem(),
+            imaging_system=img,
         )
         po.start_orchestration()
         po.start_protocol()
@@ -317,3 +318,7 @@ class TestFatalStepAbort(unittest.TestCase):
         )
         self.assertTrue(po.poll_protocol_errored())
         self.assertIn("valve boom", po.protocol_error_message() or "")
+        # The fatal abort must also stop the *other* subsystems' in-flight
+        # work (not only the failing fluid handler), so a mid-acquisition
+        # imaging movie is told to abort before the run is marked finished.
+        self.assertTrue(img.aborted, "sibling imaging system was not aborted")

@@ -939,27 +939,21 @@ class ExperimentTab(YamlDropMixin, QWidget):
         run controls and unlocks the hardware tabs via the usual state-change
         handlers.
         """
-        if not (
-            self._service.state is ExperimentState.RUNNING
-            and self._service.is_finished()
-        ):
-            return
-        # A run can reach "finished" two ways: completing all steps, or a
+        # A run can reach a terminal state two ways: completing all steps, or a
         # handler aborting it on an unrecoverable step error (e.g. the ibidi
-        # valve failing after its retries). Surface the latter as an error +
-        # move to ABORTED instead of a silent normal finish. The surfacing is
+        # valve failing after its retries). The service centralizes that
+        # decision and drives the transition (through abort()/end(), notifying
+        # observers); here we only add the loud error surfacing. It is
         # NON-blocking — this runs on the progress-poll timer, so a modal
-        # dialog here would freeze the event loop.
-        if self._service.has_errored() is True:
+        # dialog would freeze the event loop.
+        terminal = self._service.finalize_if_done()
+        if terminal is ExperimentState.ABORTED:
             msg = self._service.error_message() or "unknown error"
-            self._service.abort()
             self._on_log("RUN ABORTED — step error: {}".format(msg))
             self.state_label.setText("aborted — step error (see log)")
             self.state_label.setStyleSheet(
                 "color: #d9534f; font-weight: bold;"
             )
-        else:
-            self._service.end()
 
     def _set_substep_visible(self, system, visible):
         for w in self.substep_bars[system]:

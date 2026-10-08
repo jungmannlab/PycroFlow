@@ -346,9 +346,21 @@ class PycroFlowInteractive(cmd.Cmd):
             )
 
     def do_is_protocol_done(self, line):
-        """Start the protocol"""
+        """Report whether the running protocol has finished — or errored.
+
+        A fatal step error (e.g. the ibidi multiplexer's serial write failing
+        after its retries) aborts the run and also marks it finished, so the
+        error is checked first; otherwise it would read as a normal completion.
+        """
         if not self.orchestrator:
             print("Start orchestration first.")
+            return
+        if self.orchestrator.poll_protocol_errored():
+            print(
+                "ERRORED — run aborted on a step error: {}".format(
+                    self.orchestrator.protocol_error_message() or "unknown"
+                )
+            )
             return
         print(self.orchestrator.poll_protocol_finished())
 
@@ -742,7 +754,17 @@ class PycroFlowInteractive(cmd.Cmd):
 
     def close(self):
         if self.orchestrator:
-            if self.orchestrator.poll_protocol_finished():
+            # A fatal step error marks the run finished too, so check the
+            # error state first — otherwise an aborted run would be ended as
+            # if it had completed normally.
+            if self.orchestrator.poll_protocol_errored():
+                print(
+                    "Run aborted on a step error: {}".format(
+                        self.orchestrator.protocol_error_message() or "unknown"
+                    )
+                )
+                self.orchestrator.abort_orchestration()
+            elif self.orchestrator.poll_protocol_finished():
                 self.orchestrator.end_orchestration()
             else:
                 self.orchestrator.abort_orchestration()

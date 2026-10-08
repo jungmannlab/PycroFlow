@@ -650,17 +650,20 @@ class TestMainWindow(unittest.TestCase):
             "illu": (0, 0),
         }
         svc.step_progress.return_value = {}
-        svc.is_finished.return_value = True
+        svc.finalize_if_done.return_value = ExperimentState.FINISHED
         tab = ExperimentTab(svc, MagicMock(name="bridge"))
         tab._populate_steps()
-        # Polling notices completion and ends the run (-> FINISHED).
+        # Polling delegates the terminal decision to the service.
         tab._poll_progress()
-        svc.end.assert_called_once()
-        # While still running but not finished, it does not end.
-        svc.end.reset_mock()
-        svc.is_finished.return_value = False
+        svc.finalize_if_done.assert_called()
+        # A clean finish does not paint the error label.
+        self.assertNotIn("aborted", tab.state_label.text().lower())
+        # While still running the service returns None and nothing terminal
+        # happens.
+        svc.finalize_if_done.reset_mock()
+        svc.finalize_if_done.return_value = None
         tab._poll_progress()
-        svc.end.assert_not_called()
+        svc.finalize_if_done.assert_called()
 
     def test_controls_reset_after_run_finishes(self):
         from unittest.mock import MagicMock
@@ -2822,13 +2825,13 @@ class TestRunErrorSurfacing(unittest.TestCase):
 
         svc = MagicMock(name="service")
         svc.state = ExperimentState.RUNNING
-        svc.is_finished.return_value = True
-        svc.has_errored.return_value = True  # real True -> error branch
+        # The service centralizes the terminal decision; a fatal error ->
+        # ABORTED. The tab only adds the loud surfacing.
+        svc.finalize_if_done.return_value = ExperimentState.ABORTED
         svc.error_message.return_value = "ibidi valve write timeout"
         tab = ExperimentTab(svc, MagicMock(name="bridge"))
         tab._check_finished()  # must NOT block (no modal dialog)
-        svc.abort.assert_called_once()
-        svc.end.assert_not_called()
+        svc.finalize_if_done.assert_called_once()
         self.assertIn("aborted", tab.state_label.text().lower())
         self.assertIn("ibidi valve write timeout", tab.log_view.toPlainText())
 
@@ -2839,11 +2842,10 @@ class TestRunErrorSurfacing(unittest.TestCase):
 
         svc = MagicMock(name="service")
         svc.state = ExperimentState.RUNNING
-        svc.is_finished.return_value = True
-        # Real service returns a real bool; a bare Mock (truthy) must NOT be
-        # mistaken for an error (the `is True` guard handles this).
-        svc.has_errored.return_value = False
+        # A clean completion -> FINISHED; the tab must not paint the error
+        # label or log an abort.
+        svc.finalize_if_done.return_value = ExperimentState.FINISHED
         tab = ExperimentTab(svc, MagicMock(name="bridge"))
         tab._check_finished()
-        svc.end.assert_called_once()
-        svc.abort.assert_not_called()
+        svc.finalize_if_done.assert_called_once()
+        self.assertNotIn("aborted", tab.state_label.text().lower())

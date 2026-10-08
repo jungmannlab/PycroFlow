@@ -152,6 +152,9 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         )
         self.txchange = threadexchange
         self.system = None  # is set in Handler subclasses
+        # Set by ProtocolOrchestrator to abort every subsystem at once on a
+        # fatal step error; None when the handler runs standalone (tests).
+        self._abort_all_hook = None
         self.protocol_iter = 0
         # Progress within the current step as (current, total, label), or
         # None when the current step has no meaningful sub-progress. Set by
@@ -347,6 +350,16 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
             self.send_message("ERROR: " + msg)
             self.txchange["abort_flag"].set()
             self.txchange["abort_protocol_flag"].set()
+            # Stop every subsystem's in-flight work (e.g. a mid-acquisition
+            # imaging movie) before marking the run finished, so we never
+            # declare a subsystem done while its hardware is still acting.
+            try:
+                if self._abort_all_hook is not None:
+                    self._abort_all_hook()
+                elif self.system is not None:
+                    self.system.abort_execution()
+            except Exception as exc3:  # noqa: BLE001 - cleanup must not raise
+                logger.warning("error aborting subsystems: {!r}", exc3)
             for key in list(self.txchange.keys()):
                 if key.endswith("_finished"):
                     self.txchange[key].set()
@@ -706,7 +719,43 @@ class ProtocolOrchestrator:
             illumination_system, protocol.get("illu", []), self.threadexchange
         )
 
+        # Let a handler's fatal-abort path stop *every* subsystem's in-flight
+        # work (not just its own), e.g. set the imaging acq_abort so a
+        # mid-acquisition movie halts before the run is marked finished.
+        for handler in (
+            self.fluid_handler,
+            self.imaging_handler,
+            self.illumination_handler,
+        ):
+            handler._abort_all_hook = self._abort_all_systems
+
         self.protocol = protocol
+
+    def _abort_all_systems(self):
+        """Abort every subsystem's in-flight execution (best effort).
+
+        Mirrors what :meth:`AbstractSystemHandler.housekeeping` does on a
+        client abort, but reaches all subsystems at once so a handler's
+        :meth:`~AbstractSystemHandler._fatal_abort` can stop the others'
+        hardware (notably the imaging ``acq_abort``) before declaring the run
+        finished.
+        """
+        for handler in (
+            self.fluid_handler,
+            self.imaging_handler,
+            self.illumination_handler,
+        ):
+            system = getattr(handler, "system", None)
+            if system is None:
+                continue
+            try:
+                system.abort_execution()
+            except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+                logger.warning(
+                    "abort_execution failed for {}: {!r}",
+                    getattr(handler, "target", "?"),
+                    exc,
+                )
 
     def start_orchestration(self):
         self.fluid_handler.start()

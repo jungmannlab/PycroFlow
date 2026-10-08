@@ -537,10 +537,18 @@ class ExperimentService:
             out[key] = getter() if getter is not None else None
         return out
 
-    def is_finished(self) -> bool:
+    def _orch(self, method: str, default):
+        """Call a no-arg orchestrator poll, or return ``default`` if unloaded.
+
+        Collapses the identical ``if self._orchestrator is None`` guard shared
+        by the finish/error pollers below.
+        """
         if self._orchestrator is None:
-            return False
-        return self._orchestrator.poll_protocol_finished()
+            return default
+        return getattr(self._orchestrator, method)()
+
+    def is_finished(self) -> bool:
+        return self._orch("poll_protocol_finished", False)
 
     def has_errored(self) -> bool:
         """True when the run aborted on an unrecoverable step error.
@@ -550,15 +558,36 @@ class ExperimentService:
         than hanging; frontends check this to surface it as an error and move
         to ABORTED instead of reporting a normal finish.
         """
-        if self._orchestrator is None:
-            return False
-        return self._orchestrator.poll_protocol_errored()
+        return self._orch("poll_protocol_errored", False)
 
     def error_message(self) -> Optional[str]:
         """The message of the fatal error that aborted the run, or None."""
-        if self._orchestrator is None:
+        return self._orch("protocol_error_message", None)
+
+    def finalize_if_done(self) -> Optional["ExperimentState"]:
+        """Finalize the active run if it has reached a terminal state.
+
+        Centralizes the "run is over" decision so every frontend (the GUI
+        progress poll and the CLI) transitions identically — the state change
+        goes through :meth:`abort` / :meth:`end`, which notify state observers,
+        rather than each frontend re-implementing it.
+
+        Returns
+        -------
+        ExperimentState or None
+            :attr:`ExperimentState.ABORTED` when the run ended on a fatal step
+            error, :attr:`ExperimentState.FINISHED` on a clean completion, or
+            ``None`` if the run is still in progress (nothing was changed).
+        """
+        if self._state is not ExperimentState.RUNNING:
             return None
-        return self._orchestrator.protocol_error_message()
+        if not self.is_finished():
+            return None
+        if self.has_errored():
+            self.abort()
+            return ExperimentState.ABORTED
+        self.end()
+        return ExperimentState.FINISHED
 
     # --- Observers ----------------------------------------------------
 

@@ -461,10 +461,12 @@ class IbidiRetryTest(unittest.TestCase):
         self.assertTrue(mx._ok(mx._command("SET:Valve:3:0")))
 
     def test_persistent_timeout_raises_after_retries(self):
-        from serial import SerialException
+        from serial import SerialException, SerialTimeoutException
 
         mx = self._mx(fail_times=99)  # never recovers
-        with self.assertRaises(SerialException):
+        with self.assertRaises(SerialException) as ctx:
             mx._command("SET:Valve:3:0")
         # 1 initial + 3 retries = 4 write attempts.
         self.assertEqual(mx._serial._writes, 4)
+        # The original timeout is preserved as the cause (not swallowed).
+        self.assertIsInstance(ctx.exception.__cause__, SerialTimeoutException)
