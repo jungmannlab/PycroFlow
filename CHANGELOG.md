@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed / Changed
+
+- **ibidi valve failures no longer silently hang a run; they retry, then
+  abort loudly.** Root cause of a lost overnight run (diagnosed from the rig
+  logs): the ibidi multiplexer's serial write intermittently times out
+  (`SerialTimeoutException`), which crashed the fluid handler thread — the
+  exception was only logged by the thread hook while imaging hung forever on
+  a `wait for signal` that would never fire. Now:
+  - **Safety margin:** `IbidiMultiplexer._command` retries a failed serial
+    command (`command_retries`, default 3; `retry_delay`, default 0.3 s),
+    reopening the port between attempts, so a transient USB hiccup is absorbed.
+    Both overridable in the setup's `multiplexer:` block.
+  - **Loud abort:** a step that still fails after its retries no longer kills
+    one thread silently. `AbstractSystemHandler` catches it, logs it loudly,
+    records it on the thread exchange (new `error_flag` / `error_message`),
+    sets the abort flags so every subsystem's waits return immediately (no
+    hang), and drives the run to a terminal state. `ExperimentService` exposes
+    `has_errored()` / `error_message()`; the Run Sequence tab surfaces the
+    failure (red state + log line) and moves to ABORTED instead of reporting a
+    normal finish — non-blocking (no modal from the poll callback).
+
+
 ### Added
 
 - **Tracked `.env.template`** documenting every per-machine environment

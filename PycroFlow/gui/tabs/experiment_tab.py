@@ -434,6 +434,8 @@ class ExperimentTab(YamlDropMixin, QWidget):
 
     def _on_state_changed(self, old, new):
         self.state_label.setText(new.value)
+        # Clear any red "aborted — step error" styling from a prior run.
+        self.state_label.setStyleSheet("")
         self._refresh_controls(new)
         if new is ExperimentState.ORCHESTRATING:
             # Imaging is connected by now: fold the MM position-list count
@@ -937,10 +939,26 @@ class ExperimentTab(YamlDropMixin, QWidget):
         run controls and unlocks the hardware tabs via the usual state-change
         handlers.
         """
-        if (
+        if not (
             self._service.state is ExperimentState.RUNNING
             and self._service.is_finished()
         ):
+            return
+        # A run can reach "finished" two ways: completing all steps, or a
+        # handler aborting it on an unrecoverable step error (e.g. the ibidi
+        # valve failing after its retries). Surface the latter as an error +
+        # move to ABORTED instead of a silent normal finish. The surfacing is
+        # NON-blocking — this runs on the progress-poll timer, so a modal
+        # dialog here would freeze the event loop.
+        if self._service.has_errored() is True:
+            msg = self._service.error_message() or "unknown error"
+            self._service.abort()
+            self._on_log("RUN ABORTED — step error: {}".format(msg))
+            self.state_label.setText("aborted — step error (see log)")
+            self.state_label.setStyleSheet(
+                "color: #d9534f; font-weight: bold;"
+            )
+        else:
             self._service.end()
 
     def _set_substep_visible(self, system, visible):

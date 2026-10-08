@@ -2803,3 +2803,47 @@ class TestGotoMajorStep(unittest.TestCase):
         tab._populate_steps()
         self.assertEqual(tab.goto_combo.count(), 1)  # just "Start of run"
         self.assertFalse(tab.goto_combo.isEnabled())
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestRunErrorSurfacing(unittest.TestCase):
+    """A run aborted on a step error surfaces loudly + non-blocking."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_errored_finish_aborts_and_shows_error(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+
+        svc = MagicMock(name="service")
+        svc.state = ExperimentState.RUNNING
+        svc.is_finished.return_value = True
+        svc.has_errored.return_value = True  # real True -> error branch
+        svc.error_message.return_value = "ibidi valve write timeout"
+        tab = ExperimentTab(svc, MagicMock(name="bridge"))
+        tab._check_finished()  # must NOT block (no modal dialog)
+        svc.abort.assert_called_once()
+        svc.end.assert_not_called()
+        self.assertIn("aborted", tab.state_label.text().lower())
+        self.assertIn("ibidi valve write timeout", tab.log_view.toPlainText())
+
+    def test_clean_finish_still_ends_normally(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+
+        svc = MagicMock(name="service")
+        svc.state = ExperimentState.RUNNING
+        svc.is_finished.return_value = True
+        # Real service returns a real bool; a bare Mock (truthy) must NOT be
+        # mistaken for an error (the `is True` guard handles this).
+        svc.has_errored.return_value = False
+        tab = ExperimentTab(svc, MagicMock(name="bridge"))
+        tab._check_finished()
+        svc.end.assert_called_once()
+        svc.abort.assert_not_called()

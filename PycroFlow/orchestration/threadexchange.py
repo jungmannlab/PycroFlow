@@ -62,6 +62,12 @@ class ThreadExchange(dict):
         tx["abort_protocol_flag"] = threading.Event()
         tx["abort_flag"] = threading.Event()
         tx["graceful_stop_flag"] = threading.Event()
+        # Set by a handler when a protocol step fails unrecoverably, so the
+        # run aborts loudly instead of one thread dying while the others hang
+        # (see AbstractSystemHandler._fatal_abort). The message is a 1-element
+        # list so it is shared mutably across the handler threads.
+        tx["error_flag"] = threading.Event()
+        tx["error_message"] = [None]
         tx["signal_registry"] = SignalRegistry()
         return tx
 

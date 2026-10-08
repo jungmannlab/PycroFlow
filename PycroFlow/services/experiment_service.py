@@ -542,6 +542,24 @@ class ExperimentService:
             return False
         return self._orchestrator.poll_protocol_finished()
 
+    def has_errored(self) -> bool:
+        """True when the run aborted on an unrecoverable step error.
+
+        A hardware fault (e.g. the ibidi multiplexer's serial write failing
+        after its retries) aborts the whole run via the orchestrator rather
+        than hanging; frontends check this to surface it as an error and move
+        to ABORTED instead of reporting a normal finish.
+        """
+        if self._orchestrator is None:
+            return False
+        return self._orchestrator.poll_protocol_errored()
+
+    def error_message(self) -> Optional[str]:
+        """The message of the fatal error that aborted the run, or None."""
+        if self._orchestrator is None:
+            return None
+        return self._orchestrator.protocol_error_message()
+
     # --- Observers ----------------------------------------------------
 
     def add_state_observer(self, fn: StateObserver) -> None:

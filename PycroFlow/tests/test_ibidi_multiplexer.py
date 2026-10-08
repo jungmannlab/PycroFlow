@@ -414,3 +414,57 @@ class IbidiLegacyArchitectureIntegrationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FlakySerial:
+    """Serial stub whose write times out the first ``fail_times`` calls."""
+
+    def __init__(self, fail_times):
+        self._fail_times = fail_times
+        self._writes = 0
+        self._last = b""
+
+    def write(self, data):
+        self._writes += 1
+        if self._writes <= self._fail_times:
+            from serial import SerialTimeoutException
+
+            raise SerialTimeoutException("Write timeout")
+        self._last = data
+
+    def read_until(self, expected=b";", size=None):
+        return b"OK;"
+
+    def reset_input_buffer(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class IbidiRetryTest(unittest.TestCase):
+    """Serial-write safety margin: retry transient timeouts, raise on
+    persistent ones (so orchestration can abort loudly)."""
+
+    def _mx(self, fail_times):
+        from PycroFlow.ibidi_multiplexer import IbidiMultiplexer
+
+        mx = IbidiMultiplexer(
+            "7", connect=False, command_retries=3, retry_delay=0
+        )
+        mx._serial = _FlakySerial(fail_times)
+        mx._port = None  # no reopen; retries hit the same (recovering) stub
+        return mx
+
+    def test_transient_timeout_is_retried(self):
+        mx = self._mx(fail_times=2)  # 3rd write succeeds, within 3 retries
+        self.assertTrue(mx._ok(mx._command("SET:Valve:3:0")))
+
+    def test_persistent_timeout_raises_after_retries(self):
+        from serial import SerialException
+
+        mx = self._mx(fail_times=99)  # never recovers
+        with self.assertRaises(SerialException):
+            mx._command("SET:Valve:3:0")
+        # 1 initial + 3 retries = 4 write attempts.
+        self.assertEqual(mx._serial._writes, 4)

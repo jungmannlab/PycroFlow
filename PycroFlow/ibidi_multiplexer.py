@@ -61,7 +61,7 @@ import time
 # ``serial.Serial``) so it can be patched independently of the Hamilton bus,
 # which patches the shared ``serial.Serial`` global. See the emulator's
 # ``patch_ibidi_serial``.
-from serial import Serial
+from serial import Serial, SerialException
 from loguru import logger
 
 from PycroFlow.hal.valves import Valve as _ValveABC
@@ -77,6 +77,15 @@ WIRE_CLOSED = 1
 #: Seconds between consecutive single-valve commands when switching
 #: sequentially, so their actuation currents do not overlap.
 DEFAULT_SWITCH_DELAY = 0.01
+
+# Serial-write safety margin: a flaky USB-serial link to the ibidi occasionally
+# times out on a single valve write (observed on the rig). Rather than let one
+# transient hiccup kill a run, retry the command a few times — reopening the
+# port between attempts — before giving up. Only a genuinely persistent fault
+# then propagates (to a loud orchestration abort). Both overridable via the
+# setup's ``multiplexer:`` block.
+DEFAULT_COMMAND_RETRIES = 3
+DEFAULT_RETRY_DELAY = 0.3
 
 
 class IbidiMultiplexer(_ValveABC):
@@ -123,6 +132,8 @@ class IbidiMultiplexer(_ValveABC):
         connect=True,
         batch_valves=False,
         switch_delay=DEFAULT_SWITCH_DELAY,
+        command_retries=DEFAULT_COMMAND_RETRIES,
+        retry_delay=DEFAULT_RETRY_DELAY,
         **kwargs,
     ):
         self.address = address
@@ -130,8 +141,15 @@ class IbidiMultiplexer(_ValveABC):
         self.line_ending = line_ending
         self.batch_valves = bool(batch_valves)
         self.switch_delay = float(switch_delay)
+        # Serial-write safety margin (see module constants).
+        self.command_retries = max(0, int(command_retries))
+        self.retry_delay = float(retry_delay)
         self._lock = threading.Lock()
         self._serial = None
+        # Remembered so a failed write can reopen the port and retry.
+        self._port = None
+        self._baud = baud
+        self._timeout = timeout
 
         # Default to private, never-set events so direct hardware use before
         # orchestration starts does not dereference a None flag. The
@@ -151,6 +169,7 @@ class IbidiMultiplexer(_ValveABC):
     def connect(self, port, baud=115200, timeout=2):
         """Open the serial port and confirm the device identifies as ``MX``."""
         port = self._normalize_port(port)
+        self._port, self._baud, self._timeout = port, baud, timeout
         self._serial = Serial(port, baudrate=baud, timeout=timeout)
         ident = self.identify()
         if DEVICE_ID not in ident:
@@ -187,21 +206,72 @@ class IbidiMultiplexer(_ValveABC):
 
     # -- low-level command ----------------------------------------------------
     def _command(self, cmd):
-        """Send one ``;``-terminated command and return the stripped reply."""
+        """Send one ``;``-terminated command and return the stripped reply.
+
+        Serial errors (notably the rig's intermittent write timeout) are
+        retried up to :attr:`command_retries` times, reopening the port
+        between attempts (:attr:`retry_delay` apart), so a transient USB
+        hiccup doesn't abort a run. A fault that persists across all attempts
+        re-raises the last :class:`~serial.SerialException` — the caller
+        (orchestration) turns that into a loud run abort rather than a hang.
+        """
         if self._serial is None:
             raise RuntimeError("ibidi multiplexer is not connected")
         if not cmd.endswith(TERMINATOR):
             cmd = cmd + TERMINATOR
         payload = (cmd + self.line_ending).encode()
-        with self._lock:
-            reset = getattr(self._serial, "reset_input_buffer", None)
-            if callable(reset):
-                reset()
-            self._serial.write(payload)
-            raw = self._serial.read_until(TERMINATOR.encode())
-        reply = raw.decode(errors="replace").strip()
-        logger.debug("ibidi {!r} -> {!r}".format(cmd, reply))
-        return reply
+        last_exc = None
+        for attempt in range(self.command_retries + 1):
+            if attempt:
+                logger.warning(
+                    "ibidi {!r} serial error ({!r}); retry {}/{} after "
+                    "reopening the port".format(
+                        cmd, last_exc, attempt, self.command_retries
+                    )
+                )
+                time.sleep(self.retry_delay)
+                # Best-effort reopen; retry the write regardless (the timeout
+                # may be transient on the existing connection).
+                self._reopen()
+            try:
+                with self._lock:
+                    reset = getattr(self._serial, "reset_input_buffer", None)
+                    if callable(reset):
+                        reset()
+                    self._serial.write(payload)
+                    raw = self._serial.read_until(TERMINATOR.encode())
+                reply = raw.decode(errors="replace").strip()
+                logger.debug("ibidi {!r} -> {!r}".format(cmd, reply))
+                return reply
+            except SerialException as exc:
+                last_exc = exc
+        raise SerialException(
+            "ibidi command {!r} failed after {} attempts: {!r}".format(
+                cmd, self.command_retries + 1, last_exc
+            )
+        )
+
+    def _reopen(self):
+        """Close and reopen the serial port for a retry. Returns success."""
+        if self._port is None:
+            return False
+        try:
+            if self._serial is not None:
+                self._serial.close()
+        except (
+            Exception
+        ):  # noqa: BLE001 - already broken; closing is best-effort
+            pass
+        try:
+            self._serial = Serial(
+                self._port, baudrate=self._baud, timeout=self._timeout
+            )
+            return True
+        except SerialException as exc:
+            logger.warning(
+                "ibidi port reopen on {} failed: {!r}".format(self._port, exc)
+            )
+            return False
 
     @staticmethod
     def _ok(reply):

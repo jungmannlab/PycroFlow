@@ -228,11 +228,18 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
                         )
                     )
             started = time.perf_counter()
+            fatal = None
             try:
                 if typed is not None:
                     dispatch_entry(typed, self)
                 else:
                     self.execute_protocol_entry(self.protocol_iter)
+            except Exception as exc:  # noqa: BLE001 - see _fatal_abort
+                # A step failed unrecoverably (e.g. a hardware fault that
+                # survived its own retries). Abort the WHOLE run loudly here
+                # rather than letting this thread die silently while the other
+                # subsystems hang on a signal that will never fire.
+                fatal = exc
             finally:
                 # Record what the step actually took, next to what it was
                 # estimated to take, so the estimates can be improved by
@@ -243,6 +250,9 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
                     nsteps,
                     time.perf_counter() - started,
                 )
+            if fatal is not None:
+                self._fatal_abort(step, fatal)
+                return
 
             self.protocol_iter += 1
 
@@ -305,6 +315,43 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
             logger.info("{} {}", STEP_TIMING_TAG, json.dumps(record))
         except Exception as exc:  # timing must never break a run
             logger.debug("could not log step timing: {!r}", exc)
+
+    def _fatal_abort(self, step, exc):
+        """Abort the whole run loudly after a step failed unrecoverably.
+
+        Without this a hardware fault (e.g. the ibidi multiplexer's serial
+        write failing after its retries) would raise out of this handler's
+        thread and only be logged by the thread hook — the other subsystems
+        would then hang forever on a ``wait for signal`` that never fires.
+        Instead we:
+
+        * log the failure loudly (ERROR, with traceback);
+        * record it on the shared exchange (``error_flag`` + ``error_message``)
+          so the frontend can surface it as an error rather than a normal
+          completion;
+        * set both abort flags so every subsystem's ``wait_xchange`` returns
+          immediately (no hang); and
+        * set every ``*_finished`` flag so the run reaches a terminal state
+          the service's ``poll_protocol_finished`` observes.
+        """
+        msg = "{} step {} ({}) failed: {!r}".format(
+            self.target,
+            self.protocol_iter + 1,
+            (step or {}).get("$type") if isinstance(step, dict) else step,
+            exc,
+        )
+        logger.opt(exception=exc).error("FATAL: aborting run — {}", msg)
+        try:
+            self.txchange["error_message"][0] = msg
+            self.txchange["error_flag"].set()
+            self.send_message("ERROR: " + msg)
+            self.txchange["abort_flag"].set()
+            self.txchange["abort_protocol_flag"].set()
+            for key in list(self.txchange.keys()):
+                if key.endswith("_finished"):
+                    self.txchange[key].set()
+        except Exception as exc2:  # noqa: BLE001 - abort must never raise on
+            logger.error("error while aborting run: {!r}", exc2)
 
     def get_current_protocol_iter(self, arg=None):
         return self.protocol_iter
@@ -735,6 +782,17 @@ class ProtocolOrchestrator:
         ]
         finished = [ev.is_set() for ev in events]
         return all(finished)
+
+    def poll_protocol_errored(self):
+        """True once a handler aborted the run on an unrecoverable step error
+        (see :meth:`AbstractSystemHandler._fatal_abort`)."""
+        flag = self.threadexchange.get("error_flag")
+        return bool(flag.is_set()) if flag is not None else False
+
+    def protocol_error_message(self):
+        """The message of the fatal error that aborted the run, or None."""
+        holder = self.threadexchange.get("error_message")
+        return holder[0] if holder else None
 
     def end_orchestration(self):
         logger.debug("setting graceful stop flag")
