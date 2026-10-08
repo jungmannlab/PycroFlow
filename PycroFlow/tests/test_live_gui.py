@@ -591,3 +591,80 @@ class TestInertControls(_QtTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPerFrameBoxes(_QtTestCase):
+    """Boxes are per-frame: a thumbnail without boxes clears the overlay."""
+
+    def test_stale_boxes_cleared_on_boxless_frame(self):
+        import numpy as np
+
+        from PycroFlow.gui.live.panels import OverviewZoom
+
+        panel = OverviewZoom()
+        frame = np.zeros((32, 32), dtype=np.uint16)
+        panel._on_thumbnail(
+            {
+                "data": frame.tobytes(),
+                "shape": frame.shape,
+                "dtype": "uint16",
+                "boxes": [10.0, 12.0],
+                "box_size": 7,
+            }
+        )
+        self.assertEqual(panel._boxes, [10.0, 12.0])
+        # The next frame arrives WITHOUT boxes (identify failed / overlay
+        # off): the previous frame's detections must NOT stay drawn.
+        panel._on_thumbnail(
+            {"data": frame.tobytes(), "shape": frame.shape, "dtype": "uint16"}
+        )
+        self.assertEqual(panel._boxes, [])
+
+
+class TestAutoContrastIgnore(_QtTestCase):
+    """MM-style 'ignore %' reference for the Overview's Auto contrast."""
+
+    def test_auto_uses_ignore_percentiles(self):
+        import numpy as np
+
+        from PycroFlow.gui.live.panels import OverviewZoom
+
+        panel = OverviewZoom()
+        raw = np.arange(10000, dtype=np.uint16).reshape(100, 100)
+        panel._set_image_from_bytes(raw.tobytes(), raw.shape, "uint16")
+
+        panel.ignore_pct.setValue(10.0)  # valueChanged triggers auto
+        self.assertEqual(panel.black.value(), int(np.percentile(raw, 10)))
+        self.assertEqual(panel.white.value(), int(np.percentile(raw, 90)))
+
+        # 0 % = true min/max, like MM with the reference at zero.
+        panel.ignore_pct.setValue(0.0)
+        panel._auto_contrast()
+        self.assertEqual(panel.black.value(), 0)
+        self.assertEqual(panel.white.value(), 9999)
+
+    def test_latched_auto_restretches_each_frame_until_manual_edit(self):
+        import numpy as np
+
+        from PycroFlow.gui.live.panels import OverviewZoom
+
+        panel = OverviewZoom()
+        panel.ignore_pct.setValue(0.0)
+        dim = np.full((16, 16), 50, dtype=np.uint16)
+        dim[0, 0], dim[0, 1] = 10, 200
+        bright = (dim * 100).astype(np.uint16)
+
+        panel.auto_btn.setChecked(True)  # latch -> MM-style autostretch
+        panel._set_image_from_bytes(dim.tobytes(), dim.shape, "uint16")
+        self.assertEqual((panel.black.value(), panel.white.value()), (10, 200))
+        panel._set_image_from_bytes(bright.tobytes(), bright.shape, "uint16")
+        self.assertEqual(
+            (panel.black.value(), panel.white.value()), (1000, 20000)
+        )
+
+        # A manual black/white edit takes back control: auto unlatches and
+        # the next frame no longer overwrites the chosen window.
+        panel.black.setValue(42)
+        self.assertFalse(panel.auto_btn.isChecked())
+        panel._set_image_from_bytes(dim.tobytes(), dim.shape, "uint16")
+        self.assertEqual(panel.black.value(), 42)

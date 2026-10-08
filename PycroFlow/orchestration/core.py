@@ -28,6 +28,7 @@ The matching imaging-only and combined fluid+imaging snippets live in
 """
 
 import abc
+import json
 import queue
 import threading
 import time
@@ -151,6 +152,9 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         )
         self.txchange = threadexchange
         self.system = None  # is set in Handler subclasses
+        # Set by ProtocolOrchestrator to abort every subsystem at once on a
+        # fatal step error; None when the handler runs standalone (tests).
+        self._abort_all_hook = None
         self.protocol_iter = 0
         # Progress within the current step as (current, total, label), or
         # None when the current step has no meaningful sub-progress. Set by
@@ -226,10 +230,32 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
                             step, exc
                         )
                     )
-            if typed is not None:
-                dispatch_entry(typed, self)
-            else:
-                self.execute_protocol_entry(self.protocol_iter)
+            started = time.perf_counter()
+            fatal = None
+            try:
+                if typed is not None:
+                    dispatch_entry(typed, self)
+                else:
+                    self.execute_protocol_entry(self.protocol_iter)
+            except Exception as exc:  # noqa: BLE001 - see _fatal_abort
+                # A step failed unrecoverably (e.g. a hardware fault that
+                # survived its own retries). Abort the WHOLE run loudly here
+                # rather than letting this thread die silently while the other
+                # subsystems hang on a signal that will never fire.
+                fatal = exc
+            finally:
+                # Record what the step actually took, next to what it was
+                # estimated to take, so the estimates can be improved by
+                # mining a few run logs (protocols.timing_analysis).
+                self._log_step_timing(
+                    step,
+                    self.protocol_iter,
+                    nsteps,
+                    time.perf_counter() - started,
+                )
+            if fatal is not None:
+                self._fatal_abort(step, fatal)
+                return
 
             self.protocol_iter += 1
 
@@ -242,6 +268,103 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
         logger.debug(f"setting {self.target + '_finished'} flag.")
         self.txchange[self.target + "_finished"].set()
         return
+
+    def _log_step_timing(self, step, index, nsteps, elapsed):
+        """Emit one machine-parseable timing record for a finished step.
+
+        The line carries both the measured duration and the duration
+        :mod:`PycroFlow.protocols.timing` predicted, so a run's log is enough
+        to score and improve the estimator — see
+        :mod:`PycroFlow.protocols.timing_analysis`.
+        """
+        try:
+            from PycroFlow.protocols.timing import (
+                STEP_TIMING_TAG,
+                estimate_entry_duration,
+            )
+
+            entry = step if isinstance(step, dict) else {}
+            record = {
+                "system": self.target,
+                "step": index + 1,
+                "nsteps": nsteps,
+                "type": entry.get("$type"),
+                "actual_s": round(float(elapsed), 3),
+                "estimate_s": round(
+                    estimate_entry_duration(
+                        entry,
+                        self.protocol.get("parameters"),
+                        positions=getattr(
+                            getattr(self, "system", None),
+                            "position_count",
+                            lambda: 1,
+                        )(),
+                    ),
+                    3,
+                ),
+            }
+            # The fields the estimator models, so a log alone explains a miss.
+            for key in (
+                "volume",
+                "velocity",
+                "frames",
+                "t_exp",
+                "duration",
+                "reservoir_id",
+                "delay",
+            ):
+                if entry.get(key) is not None:
+                    record[key] = entry[key]
+            logger.info("{} {}", STEP_TIMING_TAG, json.dumps(record))
+        except Exception as exc:  # timing must never break a run
+            logger.debug("could not log step timing: {!r}", exc)
+
+    def _fatal_abort(self, step, exc):
+        """Abort the whole run loudly after a step failed unrecoverably.
+
+        Without this a hardware fault (e.g. the ibidi multiplexer's serial
+        write failing after its retries) would raise out of this handler's
+        thread and only be logged by the thread hook — the other subsystems
+        would then hang forever on a ``wait for signal`` that never fires.
+        Instead we:
+
+        * log the failure loudly (ERROR, with traceback);
+        * record it on the shared exchange (``error_flag`` + ``error_message``)
+          so the frontend can surface it as an error rather than a normal
+          completion;
+        * set both abort flags so every subsystem's ``wait_xchange`` returns
+          immediately (no hang); and
+        * set every ``*_finished`` flag so the run reaches a terminal state
+          the service's ``poll_protocol_finished`` observes.
+        """
+        msg = "{} step {} ({}) failed: {!r}".format(
+            self.target,
+            self.protocol_iter + 1,
+            (step or {}).get("$type") if isinstance(step, dict) else step,
+            exc,
+        )
+        logger.opt(exception=exc).error("FATAL: aborting run — {}", msg)
+        try:
+            self.txchange["error_message"][0] = msg
+            self.txchange["error_flag"].set()
+            self.send_message("ERROR: " + msg)
+            self.txchange["abort_flag"].set()
+            self.txchange["abort_protocol_flag"].set()
+            # Stop every subsystem's in-flight work (e.g. a mid-acquisition
+            # imaging movie) before marking the run finished, so we never
+            # declare a subsystem done while its hardware is still acting.
+            try:
+                if self._abort_all_hook is not None:
+                    self._abort_all_hook()
+                elif self.system is not None:
+                    self.system.abort_execution()
+            except Exception as exc3:  # noqa: BLE001 - cleanup must not raise
+                logger.warning("error aborting subsystems: {!r}", exc3)
+            for key in list(self.txchange.keys()):
+                if key.endswith("_finished"):
+                    self.txchange[key].set()
+        except Exception as exc2:  # noqa: BLE001 - abort must never raise on
+            logger.error("error while aborting run: {!r}", exc2)
 
     def get_current_protocol_iter(self, arg=None):
         return self.protocol_iter
@@ -596,7 +719,43 @@ class ProtocolOrchestrator:
             illumination_system, protocol.get("illu", []), self.threadexchange
         )
 
+        # Let a handler's fatal-abort path stop *every* subsystem's in-flight
+        # work (not just its own), e.g. set the imaging acq_abort so a
+        # mid-acquisition movie halts before the run is marked finished.
+        for handler in (
+            self.fluid_handler,
+            self.imaging_handler,
+            self.illumination_handler,
+        ):
+            handler._abort_all_hook = self._abort_all_systems
+
         self.protocol = protocol
+
+    def _abort_all_systems(self):
+        """Abort every subsystem's in-flight execution (best effort).
+
+        Mirrors what :meth:`AbstractSystemHandler.housekeeping` does on a
+        client abort, but reaches all subsystems at once so a handler's
+        :meth:`~AbstractSystemHandler._fatal_abort` can stop the others'
+        hardware (notably the imaging ``acq_abort``) before declaring the run
+        finished.
+        """
+        for handler in (
+            self.fluid_handler,
+            self.imaging_handler,
+            self.illumination_handler,
+        ):
+            system = getattr(handler, "system", None)
+            if system is None:
+                continue
+            try:
+                system.abort_execution()
+            except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+                logger.warning(
+                    "abort_execution failed for {}: {!r}",
+                    getattr(handler, "target", "?"),
+                    exc,
+                )
 
     def start_orchestration(self):
         self.fluid_handler.start()
@@ -672,6 +831,17 @@ class ProtocolOrchestrator:
         ]
         finished = [ev.is_set() for ev in events]
         return all(finished)
+
+    def poll_protocol_errored(self):
+        """True once a handler aborted the run on an unrecoverable step error
+        (see :meth:`AbstractSystemHandler._fatal_abort`)."""
+        flag = self.threadexchange.get("error_flag")
+        return bool(flag.is_set()) if flag is not None else False
+
+    def protocol_error_message(self):
+        """The message of the fatal error that aborted the run, or None."""
+        holder = self.threadexchange.get("error_message")
+        return holder[0] if holder else None
 
     def end_orchestration(self):
         logger.debug("setting graceful stop flag")

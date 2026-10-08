@@ -11,6 +11,21 @@ from __future__ import annotations
 from loguru import logger
 
 
+from PycroFlow.configs import HAMILTON_MVP, IBIDI_MULTIFLOW
+
+
+def _as_wavelength(value):
+    """Return ``value`` as an int wavelength if it parses, else unchanged.
+
+    monet config keys may be YAML ints (``640``) or strings (``'640'``); the
+    experiment design's ``laser`` field is an int.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
 def _load_yaml_or_dict(config):
     """Return ``config`` as a dict: load YAML if a path, else pass through.
 
@@ -52,6 +67,7 @@ class SystemService:
         self.illumination_system = illumination_system
         self._setup = None
         self._setup_name = None
+        self._monet_config = None
 
     # --- Setup (per-microscope hardware) -------------------------------
 
@@ -68,10 +84,11 @@ class SystemService:
         dict
             The parsed setup config.
         """
-        from PycroFlow.configs import load_setup
+        from PycroFlow.configs import load_setup, monet_config
 
         self._setup = load_setup(name)
         self._setup_name = self._setup.get("setup", name)
+        self._monet_config = monet_config(self._setup)
         if self._setup.get("emulated"):
             # Warm the emulator import on THIS (main) thread. Importing the
             # tests package runs install_hardware_mocks(), whose subprocess
@@ -84,9 +101,18 @@ class SystemService:
     def setup(self):
         return self._setup
 
-    def get_monet_setup(self):
-        """Return the setup name (a ``monet.CONFIGS`` key) for Monet."""
+    def setup_name(self):
+        """Return the loaded setup's own name (as in the setup selector)."""
         return self._setup_name
+
+    def get_monet_setup(self):
+        """Return the monet ``CONFIGS`` key the loaded setup illuminates with.
+
+        This names the *microscope* whose lasers are driven, which need not be
+        the setup's own name (e.g. an ``Ibidi`` fluidics setup running on the
+        ``Mercury`` microscope declares ``illumination.config: Mercury``).
+        """
+        return self._monet_config
 
     def is_emulated(self) -> bool:
         """Whether the loaded setup runs against emulated hardware."""
@@ -98,39 +124,67 @@ class SystemService:
         Empty when no setup is loaded. Used by the GUI to restrict the
         experiment design's reservoir-id inputs to the setup's hardware.
         """
-        if not self._setup:
-            return []
-        manifold = (self._setup.get("hamilton", {}) or {}).get(
-            "reservoir_a_manifold", []
-        )
-        ids = [e["id"] for e in manifold if isinstance(e, dict) and "id" in e]
+        from PycroFlow.configs import setup_reservoirs
+
+        ids = [
+            e["id"]
+            for e in setup_reservoirs(self._setup)
+            if isinstance(e, dict) and "id" in e
+        ]
         return sorted(ids)
 
     def laser_options(self) -> list:
         """Laser lines (wavelengths) defined in the setup's monet config.
 
-        Empty when no setup is loaded or monet/the config is unavailable
-        (e.g. monet not installed or mocked in tests). Used by the GUI to
-        offer the experiment design's ``laser`` field as a dropdown.
+        monet configs come in two shapes: a multi-laser one with a ``lasers``
+        mapping keyed by wavelength, and a single-laser one that names its
+        line in ``index[monet.LASER_TAG]`` only. Both are read here, so the
+        GUI's laser dropdown is populated either way.
+
+        Returns
+        -------
+        list
+            Wavelengths (ints where they parse as such), sorted. Empty when
+            no setup is loaded, monet/the config is unavailable (not
+            installed, or mocked in tests), or the config names no laser —
+            the design's ``laser`` field stays typeable in that case.
         """
         name = self.get_monet_setup()
         if not name:
             return []
         try:
             import monet
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "no laser options: monet import failed: {!r}".format(exc)
+            )
             return []
         configs = getattr(monet, "CONFIGS", None)
         if not isinstance(configs, dict):
+            logger.debug("no laser options: monet.CONFIGS is unavailable")
             return []
-        lasers = (
-            (configs.get(name) or {}).get("lasers")
-            if isinstance(configs.get(name), dict)
-            else None
+        mconfig = configs.get(name)
+        if not isinstance(mconfig, dict):
+            logger.warning(
+                "no laser options: monet config {!r} not found (have: "
+                "{})".format(name, sorted(configs))
+            )
+            return []
+
+        lasers = mconfig.get("lasers")
+        if isinstance(lasers, dict) and lasers:
+            return sorted(_as_wavelength(k) for k in lasers)
+        # Single-laser config: the line lives in the database index instead.
+        index = mconfig.get("index")
+        tag = getattr(monet, "LASER_TAG", "wavelength [nm]")
+        if isinstance(index, dict) and index.get(tag) is not None:
+            return [_as_wavelength(index[tag])]
+        logger.warning(
+            "monet config {!r} declares no lasers (neither a 'lasers' "
+            "mapping nor index[{!r}]); the design's laser field stays "
+            "free-text".format(name, tag)
         )
-        if not isinstance(lasers, dict):
-            return []
-        return sorted(lasers.keys())
+        return []
 
     # --- Connection ----------------------------------------------------
 
@@ -195,9 +249,14 @@ class SystemService:
         interface = hamilton["interface"]
 
         if self.is_emulated():
-            from PycroFlow.tests.emulators import patch_serial
+            from PycroFlow.tests.emulators import (
+                patch_serial,
+                patch_ibidi_serial,
+            )
 
-            with patch_serial():
+            # patch_ibidi_serial is a no-op unless the setup wires an ibidi
+            # multiplexer (whose driver opens its own serial port).
+            with patch_serial(), patch_ibidi_serial():
                 ha.connect(interface["COM"], interface["baud"])
                 self.fluid_system = ha.LegacyArchitecture(hamilton, tubing)
         else:
@@ -209,7 +268,15 @@ class SystemService:
         self.fluid_system._assign_protocol(
             {"parameters": dict(parameters), "protocol_entries": []}
         )
+        # Remember the design's reservoir names so the live schematic can
+        # label ports and mark which reservoirs the design actually uses.
+        self._store_reservoir_names(settings.get("reservoir_names"))
         return self.fluid_system
+
+    def _store_reservoir_names(self, reservoir_names) -> None:
+        """Stash the design's ``{id: name}`` on the fluid system (for labels)."""
+        if self.fluid_system is not None:
+            self.fluid_system._reservoir_names = dict(reservoir_names or {})
 
     def connect_imaging(self, imaging_config=None):
         """Build and connect the imaging system.
@@ -246,14 +313,24 @@ class SystemService:
         """Build the illumination system.
 
         For an emulated setup an :class:`EmulatedIlluminationSystem` is built.
-        Otherwise a real :class:`PycroFlow.illumination.IlluminationSystem`
-        is built, given the microscope setup's monet config name; its monet
-        control loads lazily on first laser use.
+        Otherwise the setup's monet config name is validated against
+        ``monet.CONFIGS`` and a real
+        :class:`PycroFlow.illumination.IlluminationSystem` is built with it.
+        The lasers themselves still open lazily on first use, so connecting
+        does not claim the laser COM port (the Monet tab stays usable) — but a
+        misconfigured setup fails here instead of mid-run.
 
         Returns
         -------
         object
             The constructed illumination system.
+
+        Raises
+        ------
+        RuntimeError
+            The setup declares no monet config name.
+        KeyError
+            The monet config name is not among ``monet.CONFIGS``.
         """
         if self.is_emulated():
             from PycroFlow.tests.emulators import EmulatedIlluminationSystem
@@ -262,10 +339,46 @@ class SystemService:
         else:
             import PycroFlow.illumination as il
 
-            self.illumination_system = il.IlluminationSystem(
-                setup=self.get_monet_setup()
-            )
+            name = self.get_monet_setup()
+            self._check_monet_config(name)
+            self.illumination_system = il.IlluminationSystem(setup=name)
         return self.illumination_system
+
+    @staticmethod
+    def _check_monet_config(name) -> None:
+        """Verify ``name`` is a usable monet config key. Raise if it is not.
+
+        When monet is absent or mocked (``CONFIGS`` is not a dict, as in the
+        test suite) the check is skipped with a warning rather than failing —
+        the same defensiveness as :meth:`laser_options`.
+        """
+        if not name:
+            raise RuntimeError(
+                "the loaded setup declares no monet config; set "
+                "'illumination: {config: <monet CONFIGS key>}' in its "
+                "setup YAML"
+            )
+        try:
+            import monet
+        except Exception as exc:
+            logger.warning(
+                "monet is not importable ({!r}); connecting illumination "
+                "without validating config {!r}".format(exc, name)
+            )
+            return
+        configs = getattr(monet, "CONFIGS", None)
+        if not isinstance(configs, dict):
+            logger.warning(
+                "monet.CONFIGS is unavailable; connecting illumination "
+                "without validating config {!r}".format(name)
+            )
+            return
+        if name not in configs:
+            raise KeyError(
+                "monet config {!r} does not exist. The setup's "
+                "illumination.config must name the microscope's monet "
+                "config; available: {}".format(name, sorted(configs))
+            )
 
     # --- Disconnection -------------------------------------------------
 
@@ -342,10 +455,611 @@ class SystemService:
         self._require("fluid_system")
         self.fluid_system.deliver_fluid(reservoir_id, volume)
 
+    def sync_fluid_reservoirs(self, fluid) -> bool:
+        """Re-apply an experiment design's reservoirs to the live system.
+
+        The fluid system is built from the design at connect time, but the
+        design keeps being edited afterwards. Adding a reservoir and
+        re-translating would otherwise leave the connected system routing by
+        the old list, and the run would die on the first step touching the
+        new one. Call this whenever the design may have changed (the GUI does
+        it on translate); it rebuilds the reservoir bookkeeping only, with no
+        serial reconnect.
+
+        Parameters
+        ----------
+        fluid : dict
+            The design's ``fluid`` section (or a bare settings dict).
+
+        Returns
+        -------
+        bool
+            True if the live system was updated, False if there was nothing
+            to update (not connected, no setup, or an emulated/simple system
+            that does not take a reservoir config).
+        """
+        if self.fluid_system is None or self._setup is None:
+            return False
+        update = getattr(self.fluid_system, "update_reservoirs", None)
+        if not callable(update):
+            return False
+        settings = fluid.get("settings", fluid) if fluid else {}
+        if not settings:
+            return False
+        from PycroFlow.configs import assemble_hamilton_config
+
+        hamilton, _ = assemble_hamilton_config(self._setup, settings)
+        update(hamilton)
+        # Keep the schematic's port names/usage in step with the new design.
+        self._store_reservoir_names(settings.get("reservoir_names"))
+        logger.debug(
+            "fluid reservoirs re-synced from the design: {}".format(
+                sorted(getattr(self.fluid_system, "reservoir_paths", {}))
+            )
+        )
+        return True
+
+    def routable_reservoirs(self) -> list:
+        """Reservoir ids the connected fluid system can currently route to."""
+        if self.fluid_system is None:
+            return []
+        return sorted(getattr(self.fluid_system, "reservoir_paths", {}) or {})
+
+    def fluid_reservoir_labels(self) -> dict:
+        """Per-reservoir ``{name, used, used_vol, total_vol}`` for the schematic.
+
+        Combines the setup's wired reservoir ids with the connected design's
+        ``reservoir_names`` (labels), ``reservoir_paths`` (which ids the design
+        routes to), and the live volume counters the fluid handler keeps
+        (``reservoir_totals`` = planned inject volume, ``reservoir_used`` =
+        pumped so far). Empty when no fluid system is connected — the schematic
+        then leaves every port neutral. Reads cached attributes only (no serial
+        I/O), so it is safe to poll continuously during a run.
+
+        Returns
+        -------
+        dict
+            ``{reservoir_id: {'name': str | None, 'used': bool,
+            'used_vol': float µl, 'total_vol': float µl}}`` over every
+            reservoir wired in the setup manifold.
+        """
+        fs = self.fluid_system
+        if fs is None:
+            return {}
+        names = getattr(fs, "_reservoir_names", {}) or {}
+        used = set(getattr(fs, "reservoir_paths", {}) or {})
+        totals = getattr(fs, "reservoir_totals", {}) or {}
+        pumped = getattr(fs, "reservoir_used", {}) or {}
+        labels = {}
+        for rid in self.reservoir_ids():
+            labels[rid] = {
+                "name": names.get(rid) or names.get(str(rid)),
+                "used": rid in used,
+                "used_vol": float(pumped.get(rid, 0) or 0),
+                "total_vol": float(totals.get(rid, 0) or 0),
+            }
+        return labels
+
+    def fluid_waste_labels(self) -> dict:
+        """Per-waste-sink ``{used_vol, total_vol}`` for the schematic gauges.
+
+        Mirrors :meth:`fluid_reservoir_labels` for the waste sinks the fluid
+        handler tracks: ``waste`` (the extraction pump's sink — fills live as
+        injects/pump-outs run, planned total from the protocol) and, when the
+        setup wires it, ``flush_waste`` (fed only by the prep flush/fill
+        routines, so it stays empty during a run). Reads cached attributes
+        only (no serial I/O). Empty when no fluid system is connected.
+
+        Returns
+        -------
+        dict
+            ``{sink: {'used_vol': float µl, 'total_vol': float µl}}`` for each
+            waste sink present (``'waste'`` always; ``'flush_waste'`` only when
+            wired in the setup).
+        """
+        fs = self.fluid_system
+        if fs is None:
+            return {}
+        totals = getattr(fs, "waste_totals", {}) or {}
+        used = getattr(fs, "waste_used", {}) or {}
+        sinks = ["waste"]
+        if self._tubing_wires_flush_waste((self._setup or {}).get("fluid")):
+            sinks.append("flush_waste")
+        labels = {}
+        for sink in sinks:
+            u = float(used.get(sink, 0) or 0)
+            t = float(totals.get(sink, 0) or 0)
+            # flush_waste has no protocol-planned total; once it has received
+            # any volume, treat that as its expected fill so the gauge reads
+            # against a total rather than staying blank.
+            if t <= 0 and u > 0:
+                t = u
+            labels[sink] = {"used_vol": u, "total_vol": t}
+        return labels
+
+    def reservoir_route(self, reservoir_id) -> dict:
+        """Return the ``{valve address: position}`` map for a reservoir.
+
+        Read from the setup's manifold, so it answers "what would setting
+        the valves to this reservoir actually do?" whether or not the loaded
+        design uses it. Empty dict if the id is not wired.
+        """
+        from PycroFlow.configs import setup_reservoirs
+
+        for entry in setup_reservoirs(self._setup):
+            if entry.get("id") == reservoir_id:
+                return dict(entry.get("valve_pos") or {})
+        return {}
+
+    def _valve_labels(self) -> dict:
+        """Map each valve address in the setup to a human-readable name."""
+        fluid = (self._setup or {}).get("fluid") or {}
+        labels = {}
+        pumps = fluid.get("pumps") or {}
+        for name in ("pump_a", "pump_out"):
+            address = (pumps.get(name) or {}).get("address")
+            if address is not None:
+                labels[address] = name
+        mux = fluid.get("multiplexer") or {}
+        if mux.get("driver") == IBIDI_MULTIFLOW:
+            labels[mux.get("address", "ibidi")] = "ibidi multiplexer"
+        for valve in mux.get("valves") or []:
+            address = valve.get("address")
+            if address is not None:
+                labels[address] = "MVP valve {}".format(address)
+        return labels
+
+    def describe_reservoir_route(self, reservoir_id) -> str:
+        """Describe, in words, how a reservoir is reached.
+
+        Spells out which valve goes where — including that the ibidi
+        multiplexer opens several channels at once and closes the rest — so
+        the manual controls say what they are about to do to the hardware.
+
+        Returns
+        -------
+        str
+            A one-line description, or an explanatory line when the
+            reservoir is not wired / no setup is loaded.
+        """
+        if self._setup is None:
+            return "No setup loaded."
+        route = self.reservoir_route(reservoir_id)
+        if not route:
+            return "Reservoir {} is not wired in setup {!r}.".format(
+                reservoir_id, self._setup_name
+            )
+        labels = self._valve_labels()
+        parts = []
+        for address, position in route.items():
+            name = labels.get(address, "valve {}".format(address))
+            if isinstance(position, (list, tuple, set)):
+                channels = ", ".join(str(c) for c in position)
+                parts.append(
+                    "{} opens channels {} (all others closed)".format(
+                        name, channels
+                    )
+                )
+            else:
+                parts.append("{} → {}".format(name, position))
+        in_design = False
+        if self.fluid_system is not None:
+            in_design = reservoir_id in getattr(
+                self.fluid_system, "reservoir_paths", {}
+            )
+        return "Reservoir {}: {}. {}".format(
+            reservoir_id,
+            "; ".join(parts),
+            (
+                "Used by the loaded experiment design."
+                if in_design
+                else "Wired in the setup, not used by the design."
+            ),
+        )
+
     def set_valves(self, reservoir_id: int) -> None:
-        """Route the manifold valves to access ``reservoir_id`` (manual)."""
+        """Route the manifold valves to access ``reservoir_id`` (manual).
+
+        Manual control is not limited to the reservoirs the loaded experiment
+        design names: any reservoir wired in the *setup's* manifold can be
+        reached, which is what testing the plumbing needs. Design-selected
+        reservoirs still go through the fluid system's own routing.
+
+        Raises
+        ------
+        KeyError
+            ``reservoir_id`` is not wired in the setup's manifold.
+        """
         self._require("fluid_system")
-        self.fluid_system._set_valves(reservoir_id)
+        try:
+            self.fluid_system._set_valves(reservoir_id)
+            return
+        except KeyError:
+            pass  # not part of the design; fall back to the setup manifold
+        from PycroFlow.configs import setup_reservoirs
+
+        for entry in setup_reservoirs(self._setup):
+            if entry.get("id") == reservoir_id:
+                self.fluid_system.set_valve_positions(entry["valve_pos"])
+                return
+        raise KeyError(
+            "reservoir {!r} is not wired in setup {!r}'s fluid.reservoirs "
+            "(which wires {})".format(
+                reservoir_id, self._setup_name, self.reservoir_ids()
+            )
+        )
+
+    def has_multiplexer(self) -> bool:
+        """True when the loaded setup multiplexes reservoirs with an ibidi unit.
+
+        Determined from the setup config, so it is answerable before the
+        fluid system is connected (the GUI uses it to show the ibidi-only
+        "close all valves" control).
+        """
+        fluid = (self._setup or {}).get("fluid") or {}
+        mux = fluid.get("multiplexer") or {}
+        return mux.get("driver") == IBIDI_MULTIFLOW
+
+    def close_all_valves(self) -> None:
+        """Close every ibidi multiplexer channel — route to nothing (manual).
+
+        Leaves all channels closed so no reservoir feeds the pump. Only
+        meaningful for setups using the ibidi multiplexer; the Hamilton MVP
+        rotary valves are always at exactly one position and have nothing to
+        close.
+
+        Raises
+        ------
+        RuntimeError
+            The connected fluid system has no ibidi multiplexer.
+        """
+        self._require("fluid_system")
+        mux = getattr(self.fluid_system, "multiplexer", None)
+        if mux is None:
+            raise RuntimeError(
+                "the connected fluid system has no ibidi multiplexer to "
+                "close"
+            )
+        mux.close_all()
+
+    def toggle_multiplexer_channel(self, channel):
+        """Flip one ibidi channel open<->closed, ignoring reservoir routing.
+
+        A raw manual override for probing the plumbing: opens the channel if
+        it is closed (or its state is unknown) and closes it if open, leaving
+        every other channel untouched — unlike :meth:`set_valves`, which opens
+        a reservoir's whole route exclusively.
+
+        Parameters
+        ----------
+        channel : int
+            Channel to toggle (1..channels).
+
+        Returns
+        -------
+        bool
+            The channel's new open state (True = open/flowing).
+
+        Raises
+        ------
+        RuntimeError
+            The connected fluid system has no ibidi multiplexer.
+        """
+        self._require("fluid_system")
+        mux = getattr(self.fluid_system, "multiplexer", None)
+        if mux is None:
+            raise RuntimeError(
+                "the connected fluid system has no ibidi multiplexer"
+            )
+        states = getattr(mux, "channel_states", []) or []
+        idx = channel - 1
+        current = states[idx] if 0 <= idx < len(states) else None
+        new_open = not bool(current)
+        mux.set_channel(channel, new_open)
+        return new_open
+
+    def toggle_pump_valve(self, pump_name):
+        """Flip a pump's syringe valve between its 'in' and 'out' ports.
+
+        A raw manual override of the syringe routing: ``'in'`` connects the
+        syringe to the multiplexer (reservoir) side, ``'out'`` to the sample
+        side. An unknown current position resolves to ``'in'``.
+
+        Parameters
+        ----------
+        pump_name : str
+            ``'pump_a'`` or ``'pump_out'``.
+
+        Returns
+        -------
+        str
+            The new valve position (``'in'`` or ``'out'``).
+
+        Raises
+        ------
+        KeyError
+            No pump of that name exists on the fluid system.
+        """
+        self._require("fluid_system")
+        pump = getattr(self.fluid_system, pump_name, None)
+        if pump is None:
+            raise KeyError(
+                "no such pump on fluid_system: {!r}".format(pump_name)
+            )
+        new_pos = "out" if getattr(pump, "valve_pos", None) == "in" else "in"
+        pump.set_valve(new_pos)
+        return new_pos
+
+    # --- Live fluid schematic (topology + valve/syringe state) ----------
+
+    def fluid_topology(self):
+        """Describe the fluid wiring for the live schematic, from the setup.
+
+        Read purely from the loaded setup config (not the connected
+        hardware), so the schematic can be drawn before anything is
+        connected and reflects exactly what the YAML wires. Only the ibidi
+        multiplexer layout is described here — the pump/sample/waste macro
+        topology is fixed for the legacy architecture.
+
+        The ibidi ports are numbered left-to-right, bottom-to-top on their
+        physical grid (``grid_cols`` wide, default 6): port 1 lower left, port
+        6 lower right, port 7 directly above port 1. The *tubing* between ports
+        meanders — that shape is captured by ``edges`` (traced from each
+        reservoir's route), not by the port numbering. The grid geometry is
+        returned so the widget can place each port without re-deriving it.
+
+        Returns
+        -------
+        dict or None
+            ``None`` when no setup is loaded. Otherwise a dict with
+            ``'pumps'`` (which of pump_a / pump_out exist) and
+            ``'multiplexer'`` — ``None`` when the setup has no ibidi unit,
+            else ``{channels, cols, rows, pump_channel, ports, edges}``.
+            ``ports[ch]['reservoir']`` is the reservoir *tapped* at that
+            channel (the last channel in its ``valve_pos`` route — the leaf);
+            ``ports[ch]['used_by']`` lists every reservoir whose route opens
+            the channel (so shared bridge channels are visible); ``edges``
+            are the ``(from, to)`` manifold links traced by consecutive
+            channels in each route; ``routes`` maps each reservoir id to its
+            ordered channel list (for highlighting one reservoir's path).
+        """
+        if self._setup is None:
+            return None
+        fluid = self._setup.get("fluid") or {}
+        pumps = fluid.get("pumps") or {}
+        topo = {
+            "pumps": {
+                "pump_a": "pump_a" in pumps,
+                "pump_out": "pump_out" in pumps,
+            },
+            "multiplexer": None,
+            "valves": None,
+            # flush_waste is a distinct waste sink only when the setup's
+            # tubing actually wires it (``pump_a -> flush_waste``).
+            "flush_waste": self._tubing_wires_flush_waste(fluid),
+        }
+        mux = fluid.get("multiplexer") or {}
+        driver = mux.get("driver")
+        if driver == HAMILTON_MVP:
+            topo["valves"] = self._mvp_valves_topology(mux)
+            return topo
+        if driver != IBIDI_MULTIFLOW:
+            return topo
+
+        address = mux.get("address", "ibidi")
+        channels = int(mux.get("channels", 24))
+        cols = int(mux.get("grid_cols", 6)) or 6
+        rows = (channels + cols - 1) // cols
+        pump_channel = int(mux.get("pump_channel", 1))
+
+        ports = {
+            ch: {"reservoir": None, "used_by": []}
+            for ch in range(1, channels + 1)
+        }
+        edges = set()
+        routes = {}
+        from PycroFlow.configs import setup_reservoirs
+
+        for entry in setup_reservoirs(self._setup):
+            if not isinstance(entry, dict):
+                continue
+            rid = entry.get("id")
+            chans = self._ibidi_channels(entry.get("valve_pos"), address)
+            if rid is not None:
+                routes[rid] = chans
+            for ch in chans:
+                if ch in ports:
+                    ports[ch]["used_by"].append(rid)
+            # Consecutive channels in a route trace the manifold path from
+            # the pump to the reservoir; their union is the wiring tree.
+            for a, b in zip(chans, chans[1:]):
+                if a in ports and b in ports:
+                    edges.add((a, b))
+            if chans:
+                tap = chans[-1]  # the leaf: last channel in the route
+                if tap in ports:
+                    ports[tap]["reservoir"] = rid
+        topo["multiplexer"] = {
+            "channels": channels,
+            "cols": cols,
+            "rows": rows,
+            "pump_channel": pump_channel,
+            "ports": ports,
+            "edges": sorted(edges),
+            "routes": routes,
+        }
+        return topo
+
+    @staticmethod
+    def _ibidi_channels(valve_pos, address):
+        """Extract a reservoir's ibidi channel list from its ``valve_pos``.
+
+        Accepts a single channel (``{ibidi: 3}``) or a list
+        (``{ibidi: [1, 3]}``); returns ``[]`` when the mapping names no ibidi
+        channel.
+        """
+        if not isinstance(valve_pos, dict):
+            return []
+        pos = valve_pos.get(address)
+        if pos is None:
+            return []
+        if isinstance(pos, (list, tuple)):
+            return [int(c) for c in pos]
+        return [int(pos)]
+
+    def _mvp_valves_topology(self, mux):
+        """Describe chained Hamilton MVP rotary valves for the schematic.
+
+        The setup lists the valves in chain order (root first — the one wired
+        to the pump); each reservoir's ``valve_pos`` names the port to select
+        on every valve on its path. A rotary valve selects exactly one port at
+        a time, so each port either **taps** a reservoir (the leaf valve of its
+        route) or **bridges** to the next valve downstream.
+
+        Returns
+        -------
+        dict
+            ``{'valves': [ {address, index, ports, taps, bridges}, ...],
+            'routes': {reservoir_id: [(valve_address, port), ...]}}`` — ``taps``
+            maps a port to the reservoir tapped there, ``bridges`` maps a port
+            to the downstream valve address it chains to, and each route lists
+            ``(valve, port)`` from the root valve to the reservoir's leaf.
+        """
+        from PycroFlow.configs import setup_reservoirs
+
+        valves_cfg = mux.get("valves") or []
+        addrs = [v.get("address") for v in valves_cfg]
+        addr_index = {a: i for i, a in enumerate(addrs)}
+        valves = [
+            {
+                "address": v.get("address"),
+                "index": i,
+                "ports": self._valve_port_count(v.get("valve_type")),
+                "taps": {},
+                "bridges": {},
+            }
+            for i, v in enumerate(valves_cfg)
+        ]
+        routes = {}
+        for entry in setup_reservoirs(self._setup):
+            if not isinstance(entry, dict):
+                continue
+            rid = entry.get("id")
+            vp = entry.get("valve_pos")
+            if not isinstance(vp, dict):
+                continue
+            # (chain index, valve address, port) for the MVP valves this
+            # reservoir routes through, ordered root -> leaf.
+            chain = sorted(
+                (
+                    (addr_index[a], a, p)
+                    for a, p in vp.items()
+                    if a in addr_index
+                ),
+                key=lambda t: t[0],
+            )
+            if not chain:
+                continue
+            routes[rid] = [(a, p) for _i, a, p in chain]
+            for k in range(len(chain) - 1):
+                i, _a, p = chain[k]
+                valves[i]["bridges"][p] = chain[k + 1][1]  # downstream address
+            i, _a, p = chain[-1]
+            valves[i]["taps"][p] = rid  # leaf: this port taps the reservoir
+        return {"valves": valves, "routes": routes}
+
+    @staticmethod
+    def _tubing_wires_flush_waste(fluid):
+        """True when the setup's tubing wires a ``flush_waste`` sink.
+
+        Handles both the assembled tuple-keyed form (``{(from, to): vol}``)
+        and the raw list-of-segments form (``[{from, to, volume}, ...]``).
+        """
+        tubing = (fluid or {}).get("tubing") or {}
+        if isinstance(tubing, dict):
+            return any(
+                isinstance(k, (tuple, list)) and "flush_waste" in k
+                for k in tubing
+            )
+        if isinstance(tubing, list):
+            return any(
+                isinstance(s, dict)
+                and "flush_waste" in (s.get("from"), s.get("to"))
+                for s in tubing
+            )
+        return False
+
+    @staticmethod
+    def _valve_port_count(valve_type):
+        """Number of selectable ports from a valve type like ``'8-5'``."""
+        try:
+            return int(str(valve_type).split("-")[0])
+        except (TypeError, ValueError):
+            return 8
+
+    def fluid_state(self):
+        """Snapshot the live valve and syringe state for the schematic.
+
+        Reads only cached driver attributes — ``multiplexer.channel_states``
+        and each pump's ``valve_pos`` / ``target_volume`` — so it issues
+        **no** serial traffic and is safe to poll continuously, including
+        while the orchestrator owns the bus during a run.
+
+        Returns
+        -------
+        dict or None
+            ``None`` when no fluid system is connected. Otherwise
+            ``{'multiplexer', 'pump_a', 'pump_out'}``. ``multiplexer`` is
+            ``{'channels', 'open'}`` (or ``None``) where ``open[i]`` is the
+            last-commanded state of channel ``i+1`` (True = open/flowing) or
+            ``None`` when unknown (e.g. after a raw ``SETALL``). ``valves`` is
+            ``{valve_address: last-selected position}`` for chained MVP rotary
+            valves (empty for an ibidi setup). Each pump is
+            ``{'valve', 'volume', 'capacity'}``; ``valve`` is the syringe
+            port — ``'in'`` (the multiplexer side) or ``'out'`` (the sample
+            side).
+        """
+        fs = self.fluid_system
+        if fs is None:
+            return None
+        state = {
+            "multiplexer": None,
+            "valves": {},
+            "pump_a": None,
+            "pump_out": None,
+        }
+        mux = getattr(fs, "multiplexer", None)
+        if mux is not None:
+            states = list(getattr(mux, "channel_states", []) or [])
+            state["multiplexer"] = {
+                "channels": int(getattr(mux, "channels", len(states))),
+                "open": states,
+            }
+        # Rotary MVP valve positions (last commanded, cached in-process). The
+        # pump's own Y-valve is in ``valve_a`` too; harmless, the schematic
+        # only reads the reservoir-multiplexer addresses from the topology.
+        for addr, valve in (getattr(fs, "valve_a", {}) or {}).items():
+            state["valves"][addr] = getattr(valve, "valve_pos", None)
+        for name in ("pump_a", "pump_out"):
+            state[name] = self._pump_snapshot(getattr(fs, name, None))
+        return state
+
+    @staticmethod
+    def _pump_snapshot(pump):
+        """Cached ``{valve, volume, capacity}`` for a pump (no serial poll)."""
+        if pump is None:
+            return None
+        capacity = float(getattr(pump, "syringe_volume", 0) or 0)
+        # target_volume is the commanded syringe fill, updated in-process on
+        # every pickup/dispense; get_current_volume() would poll the bus.
+        volume = float(getattr(pump, "target_volume", 0) or 0)
+        if capacity > 0:
+            volume = max(0.0, min(volume, capacity))
+        return {
+            "valve": getattr(pump, "valve_pos", None),
+            "volume": volume,
+            "capacity": capacity,
+        }
 
     def stop_all_moves(self) -> None:
         """Emergency stop on the fluid system. Safe to call from anywhere."""

@@ -134,11 +134,28 @@ class ImagingSystem(AbstractSystem):
 
         self.handler_ref = None
 
+        # WP-LIVE-INT: optional live-analysis frame tap. When the live-run
+        # coordinator attaches a FrameTap here, record_movie brackets each FOV
+        # and image_process_fn tees every frame into it (plus honors its
+        # end-this-FOV early-abort). None = no live analysis, zero overhead.
+        self.frame_tap = None
+        # On-disk path of the most recently finished acquisition's dataset
+        # (best-effort; None when unknown) — the live-run coordinator stamps
+        # it on the FOV's archive config at end-of-FOV.
+        self.last_dataset_path = None
+
         # Within-acquisition progress (for the GUI step bar): frames acquired
-        # so far / total, and whether an acquisition is currently running.
+        # so far / total, whether an acquisition is currently running, and —
+        # under use_positions — which MM position-list entry is being imaged.
         self.curr_frame = 0
         self.curr_n_frames = 0
         self.acquiring = False
+        self.curr_position = 0
+        self.n_positions = 0
+        # position_count() cache — one MM query per run (reset when a
+        # protocol is assigned), so per-step consumers (timing log, ETA)
+        # never repeat the ZMQ round-trip.
+        self._position_count = None
 
         # PFS logging
         # self.pfs_pars = {  # for Mercury
@@ -210,6 +227,8 @@ class ImagingSystem(AbstractSystem):
 
     def _assign_protocol(self, protocol):
         self.protocol = protocol
+        # New run: re-read MM's position list on the next position_count().
+        self._position_count = None
 
     def execute_protocol_entry(self, i):
         """execute protocol entry i"""
@@ -255,17 +274,32 @@ class ImagingSystem(AbstractSystem):
             pos_list = (
                 self.studio.get_position_list_manager().get_position_list()
             )
-            for i in range(pos_list.get_number_of_positions()):
-                pos = pos_list.get_position(i)
-                logger.debug("moving to position {:d}".format(i))
-                pos.go_to_position(pos, self.core)
-                self.core.set_property(
-                    self.pfs_pars["tag_status"],
-                    self.pfs_pars["prop_state"],
-                    "On",
+            n = pos_list.get_number_of_positions()
+            if n == 0:
+                logger.warning(
+                    "use_positions is on but MM's position list is empty — "
+                    "acquiring the current position only. Save positions in "
+                    "MM (Stage Position List) before the run."
                 )
-                acq_name_p = acq_name + "_pos{:d}".format(i)  # + str(pos)
-                self.record_movie(acq_name_p, acquisition_config)
+                self.record_movie(acq_name, acquisition_config)
+                return
+            self.n_positions = n
+            try:
+                for i in range(n):
+                    self.curr_position = i
+                    pos = pos_list.get_position(i)
+                    logger.debug("moving to position {:d}".format(i))
+                    pos.go_to_position(pos, self.core)
+                    self.core.set_property(
+                        self.pfs_pars["tag_status"],
+                        self.pfs_pars["prop_state"],
+                        "On",
+                    )
+                    acq_name_p = acq_name + "_pos{:d}".format(i)  # + str(pos)
+                    self.record_movie(acq_name_p, acquisition_config)
+            finally:
+                self.curr_position = 0
+                self.n_positions = 0
 
     def pause_execution(self):
         """Pause protocol execution.
@@ -367,26 +401,47 @@ class ImagingSystem(AbstractSystem):
         self.studio.get_application().refresh_gui()
         if self.protocol["parameters"].get("show_progress"):
             self.probar = ProgressBar("Acquisition", n_frames)
-        with Acquisition(
-            directory=acq_dir,
-            name=acq_name,
-            show_display=self.protocol["parameters"].get("show_display", True),
-            image_process_fn=self.image_process_fn,
-        ) as acq:
-            events = multi_d_acquisition_events(
-                num_time_points=n_frames,
-                time_interval_s=0,  # t_exp/1000,
-                # channel_group=chan_group, channels=[filter],
-                channel_exposures_ms=[t_exp],
-                order="tcpz",
-            )
-            acq.acquire(events)
-            if self.protocol["parameters"].get("show_display", True):
+        # WP-LIVE-INT: bracket the FOV for the live-analysis tap (try/finally
+        # so the reader always gets its end-of-FOV sentinel, even when the
+        # acquisition raises — otherwise the live pipeline would wait forever).
+        viewer = None  # only assigned on the show_display path below
+        self.last_dataset_path = None
+        tap = self.frame_tap
+        if tap is not None:
+            tap.start_fov(acq_name, acquisition_config)
+        try:
+            with Acquisition(
+                directory=acq_dir,
+                name=acq_name,
+                show_display=self.protocol["parameters"].get(
+                    "show_display", True
+                ),
+                image_process_fn=self.image_process_fn,
+            ) as acq:
+                events = multi_d_acquisition_events(
+                    num_time_points=n_frames,
+                    time_interval_s=0,  # t_exp/1000,
+                    # channel_group=chan_group, channels=[filter],
+                    channel_exposures_ms=[t_exp],
+                    order="tcpz",
+                )
+                acq.acquire(events)
                 try:
-                    viewer = acq.get_viewer()
+                    # Actual on-disk dataset dir (pycromanager may suffix
+                    # the requested name) — consumed by the live-analysis
+                    # archive step. Best-effort only.
+                    self.last_dataset_path = acq.get_dataset().path
                 except Exception:
-                    viewer = None
-                    pass
+                    self.last_dataset_path = None
+                if self.protocol["parameters"].get("show_display", True):
+                    try:
+                        viewer = acq.get_viewer()
+                    except Exception:
+                        viewer = None
+                        pass
+        finally:
+            if tap is not None:
+                tap.end_fov()
         time.sleep(0.2)
         if viewer is not None and self.protocol["parameters"].get(
             "close_display_after_acquisition", True
@@ -399,17 +454,58 @@ class ImagingSystem(AbstractSystem):
         logger.debug("acquired all images of {:s}".format(acq_name))
 
     def get_step_progress(self):
-        """Frames acquired so far within the current acquisition.
+        """Frames acquired so far within the current acquire step.
 
         Returns
         -------
         tuple or None
-            ``(current_frame, total_frames, 'frames')`` while acquiring,
-            else ``None``.
+            ``(current, total, label)`` while acquiring, else ``None``.
+            Under ``use_positions`` the bar spans ALL positions of the step
+            (``current = position_index * frames + frame``) and the label
+            names the position being imaged.
         """
-        if self.acquiring and self.curr_n_frames:
-            return (self.curr_frame, self.curr_n_frames, "frames")
-        return None
+        if not (self.acquiring and self.curr_n_frames):
+            return None
+        if self.n_positions > 1:
+            return (
+                self.curr_position * self.curr_n_frames + self.curr_frame,
+                self.n_positions * self.curr_n_frames,
+                "frames \u00b7 pos {}/{}".format(
+                    self.curr_position + 1, self.n_positions
+                ),
+            )
+        return (self.curr_frame, self.curr_n_frames, "frames")
+
+    def position_count(self):
+        """MM position-list length when ``use_positions`` is on, else 1.
+
+        Drives the multi-position factor of the duration estimates
+        (:func:`PycroFlow.protocols.timing.estimate_entry_duration`).
+        Best-effort: any MM hiccup degrades to 1, never raises. The MM query
+        runs ONCE per assigned protocol (cached) — per-step consumers (the
+        STEP_TIMING log) must not pay a ZMQ round-trip per step, and the ETA
+        and the per-step records then agree even if the operator edits MM's
+        list mid-run (the acquisition loop itself always reads the live list).
+        """
+        if not self.config.get("use_positions", False):
+            return 1
+        if self._position_count is not None:
+            return self._position_count
+        try:
+            pos_list = (
+                self.studio.get_position_list_manager().get_position_list()
+            )
+            self._position_count = max(
+                1, int(pos_list.get_number_of_positions())
+            )
+        except Exception as exc:  # noqa: BLE001 - estimate-only, stay soft
+            logger.warning(
+                "could not read MM's position list ({!r}); assuming 1".format(
+                    exc
+                )
+            )
+            self._position_count = 1
+        return self._position_count
 
     def image_process_fn(self, img, meta, event_queue):
         if self.protocol["parameters"].get("show_progress"):
@@ -449,6 +545,16 @@ class ImagingSystem(AbstractSystem):
                     to the end. Execute 'resume_protocol' when ready."
                 )
                 # abort the acquisition
+                event_queue.put(None)
+
+        # WP-LIVE-INT: tee the frame to the live-analysis tap (non-blocking,
+        # exception-proof inside the tap) and honor its end-this-FOV request —
+        # the live early-abort ends ONLY the current MDA (frames so far stay
+        # saved); the protocol continues with its next entry.
+        tap = self.frame_tap
+        if tap is not None:
+            tap.push(img, meta)
+            if tap.fov_end_requested():
                 event_queue.put(None)
 
         # should the acquisition be aborted?

@@ -1,11 +1,11 @@
 {
   "reservoir_vols": {
-    "1": 96,
-    "2": 96,
-    "3": 96,
-    "4": 96,
-    "5": 96,
-    "6": 9005
+    "1": 950,
+    "2": 950,
+    "3": 950,
+    "4": 950,
+    "5": 950,
+    "6": 9000
   },
   "steps": {
     "fluid": [
@@ -15,22 +15,10 @@
         "value": "done imaging round img-0"
       },
       {
-        "$type": "pump_out",
-        "extractionfactor": 1,
-        "volume": 1
-      },
-      {
         "$type": "inject",
         "delay": 5,
         "reservoir_id": 6,
         "volume": 1800
-      },
-      {
-        "$type": "inject",
-        "delay": 5,
-        "extractionfactor": 0,
-        "reservoir_id": 6,
-        "volume": 1
       },
       {
         "$type": "signal",
@@ -42,22 +30,10 @@
         "value": "done imaging round dark-0"
       },
       {
-        "$type": "pump_out",
-        "extractionfactor": 1,
-        "volume": 1
-      },
-      {
         "$type": "inject",
         "delay": 5,
         "reservoir_id": 1,
-        "volume": 95
-      },
-      {
-        "$type": "inject",
-        "delay": 5,
-        "extractionfactor": 0,
-        "reservoir_id": 1,
-        "volume": 1
+        "volume": 855
       },
       {
         "$type": "signal",
@@ -69,22 +45,16 @@
         "value": "done imaging round img-1"
       },
       {
-        "$type": "pump_out",
-        "extractionfactor": 1,
-        "volume": 1
+        "$type": "inject",
+        "delay": 5,
+        "reservoir_id": 1,
+        "volume": 95
       },
       {
         "$type": "inject",
         "delay": 5,
         "reservoir_id": 6,
         "volume": 1800
-      },
-      {
-        "$type": "inject",
-        "delay": 5,
-        "extractionfactor": 0,
-        "reservoir_id": 6,
-        "volume": 1
       },
       {
         "$type": "signal",
@@ -96,22 +66,10 @@
         "value": "done imaging round img-dark-1"
       },
       {
-        "$type": "pump_out",
-        "extractionfactor": 1,
-        "volume": 1
-      },
-      {
         "$type": "inject",
         "delay": 5,
         "reservoir_id": 2,
-        "volume": 95
-      },
-      {
-        "$type": "inject",
-        "delay": 5,
-        "extractionfactor": 0,
-        "reservoir_id": 2,
-        "volume": 1
+        "volume": 855
       },
       {
         "$type": "signal",
@@ -123,22 +81,16 @@
         "value": "done imaging round img-2"
       },
       {
-        "$type": "pump_out",
-        "extractionfactor": 1,
-        "volume": 1
+        "$type": "inject",
+        "delay": 5,
+        "reservoir_id": 2,
+        "volume": 95
       },
       {
         "$type": "inject",
         "delay": 5,
         "reservoir_id": 6,
         "volume": 1800
-      },
-      {
-        "$type": "inject",
-        "delay": 5,
-        "extractionfactor": 0,
-        "reservoir_id": 6,
-        "volume": 1
       },
       {
         "$type": "signal",
@@ -150,22 +102,10 @@
         "value": "done imaging round img-dark-2"
       },
       {
-        "$type": "pump_out",
-        "extractionfactor": 1,
-        "volume": 1
-      },
-      {
         "$type": "inject",
         "delay": 5,
         "reservoir_id": 3,
-        "volume": 95
-      },
-      {
-        "$type": "inject",
-        "delay": 5,
-        "extractionfactor": 0,
-        "reservoir_id": 3,
-        "volume": 1
+        "volume": 855
       },
       {
         "$type": "signal",
@@ -177,22 +117,16 @@
         "value": "done imaging round img-3"
       },
       {
-        "$type": "pump_out",
-        "extractionfactor": 1,
-        "volume": 1
+        "$type": "inject",
+        "delay": 5,
+        "reservoir_id": 3,
+        "volume": 95
       },
       {
         "$type": "inject",
         "delay": 5,
         "reservoir_id": 6,
         "volume": 1800
-      },
-      {
-        "$type": "inject",
-        "delay": 5,
-        "extractionfactor": 0,
-        "reservoir_id": 6,
-        "volume": 1
       },
       {
         "$type": "signal",
@@ -204,22 +138,10 @@
         "value": "done imaging round img-dark-3"
       },
       {
-        "$type": "pump_out",
-        "extractionfactor": 1,
-        "volume": 1
-      },
-      {
         "$type": "inject",
         "delay": 5,
         "reservoir_id": 4,
-        "volume": 95
-      },
-      {
-        "$type": "inject",
-        "delay": 5,
-        "extractionfactor": 0,
-        "reservoir_id": 4,
-        "volume": 1
+        "volume": 855
       },
       {
         "$type": "signal",
@@ -231,22 +153,16 @@
         "value": "done imaging round img-4"
       },
       {
-        "$type": "pump_out",
-        "extractionfactor": 1,
-        "volume": 1
+        "$type": "inject",
+        "delay": 5,
+        "reservoir_id": 4,
+        "volume": 95
       },
       {
         "$type": "inject",
         "delay": 5,
         "reservoir_id": 6,
         "volume": 1800
-      },
-      {
-        "$type": "inject",
-        "delay": 5,
-        "extractionfactor": 0,
-        "reservoir_id": 6,
-        "volume": 1
       },
       {
         "$type": "signal",
@@ -258,22 +174,10 @@
         "value": "done imaging round img-dark-4"
       },
       {
-        "$type": "pump_out",
-        "extractionfactor": 1,
-        "volume": 1
-      },
-      {
         "$type": "inject",
         "delay": 5,
         "reservoir_id": 5,
-        "volume": 95
-      },
-      {
-        "$type": "inject",
-        "delay": 5,
-        "extractionfactor": 0,
-        "reservoir_id": 5,
-        "volume": 1
+        "volume": 855
       },
       {
         "$type": "signal",
@@ -283,6 +187,12 @@
         "$type": "wait for signal",
         "target": "img",
         "value": "done imaging round img-5"
+      },
+      {
+        "$type": "inject",
+        "delay": 5,
+        "reservoir_id": 5,
+        "volume": 95
       }
     ],
     "illu": [

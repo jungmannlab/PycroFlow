@@ -19,6 +19,8 @@ import sys
 import types
 import unittest
 
+from PycroFlow import configs
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
@@ -101,6 +103,13 @@ class TestMainWindow(unittest.TestCase):
 
         cls.app = QApplication.instance() or QApplication([])
 
+    def tearDown(self):
+        # Loading a design chdirs to its folder; keep test output out of the
+        # checkout for whatever runs next.
+        from PycroFlow.tests import chdir_to_test_output
+
+        chdir_to_test_output()
+
     def _build(self):
         from PycroFlow.services import ExperimentService, SystemService
         from PycroFlow.gui.main_window import PycroFlowMainWindow
@@ -109,11 +118,131 @@ class TestMainWindow(unittest.TestCase):
 
     def test_builds_tabs(self):
         w = self._build()
-        self.assertEqual(w.tabs.count(), 5)
+        self.assertEqual(w.tabs.count(), 8)
         self.assertEqual(
-            [w.tabs.tabText(i) for i in range(5)],
-            ["Experiment Design", "Run Sequence", "Fluid", "Imaging", "Monet"],
+            [w.tabs.tabText(i) for i in range(8)],
+            [
+                "Experiment Design",
+                "Run Sequence",
+                "Fluid",
+                "Imaging",
+                "Webcams",
+                "Live",
+                "Monet",
+                "Doctor",
+            ],
         )
+
+    def test_live_tab_attaches_to_runs_live_service(self):
+        """WP-LIVE-INT: entering a run state connects the Live tab's shell to
+        the run's LiveAnalysisService; leaving it unsubscribes (the shell
+        keeps showing the last metrics)."""
+        from PycroFlow.live_analysis.service import LiveAnalysisService
+        from PycroFlow.services import ExperimentState
+
+        w = self._build()
+        self.assertIsNone(w._live_connected)
+        service = LiveAnalysisService()
+        w._experiment_service._live._service = service
+        w._on_experiment_state(
+            ExperimentState.LOADED, ExperimentState.ORCHESTRATING
+        )
+        self.assertIs(w._live_connected, service)
+        # The shell's bridge subscribed to the service's update hub.
+        self.assertIn(
+            w.live_tab.shell._bridge.seam_client, service.hub._clients
+        )
+        # Connecting shows the run on the status line, and the sticky state
+        # reaches the just-attached shell (a real run spends its first
+        # minutes in fluid steps — without this the tab showed 'idle').
+        self.assertIn("watching run", w.live_tab.preview_status.text())
+        w._on_experiment_state(
+            ExperimentState.RUNNING, ExperimentState.FINISHED
+        )
+        self.assertIsNone(w._live_connected)
+        self.assertNotIn(
+            w.live_tab.shell._bridge.seam_client, service.hub._clients
+        )
+        self.assertEqual(w.live_tab.preview_status.text(), "")
+
+    def test_live_tab_says_when_run_live_analysis_is_off(self):
+        from PycroFlow.services import ExperimentState
+
+        w = self._build()
+        # No live service (e.g. camera_info missing) -> the tab says so
+        # instead of looking dead.
+        w._on_experiment_state(
+            ExperimentState.LOADED, ExperimentState.ORCHESTRATING
+        )
+        self.assertIn("live analysis off", w.live_tab.preview_status.text())
+
+    def test_live_tab_preview_toggle(self):
+        """The MM-preview toggle connects the shell to the session's service,
+        bounces back when preview is unavailable, and run-lock stops it."""
+        from PycroFlow.gui.tabs.live_tab import LiveTabHost
+        from PycroFlow.live_analysis.service import LiveAnalysisService
+
+        calls = {"stop": 0}
+        service = LiveAnalysisService()
+
+        def stopped():
+            calls["stop"] += 1
+
+        # Unavailable: the toggle bounces back unchecked, no stop fired.
+        host = LiveTabHost(
+            on_start_preview=lambda: None, on_stop_preview=stopped
+        )
+        host.preview_btn.setChecked(True)
+        self.assertFalse(host.preview_btn.isChecked())
+        self.assertEqual(calls["stop"], 0)
+
+        # Available: shell subscribes; untoggling stops + unsubscribes.
+        host2 = LiveTabHost(
+            on_start_preview=lambda: service, on_stop_preview=stopped
+        )
+        host2.preview_btn.setChecked(True)
+        self.assertIn(host2.shell._bridge.seam_client, service.hub._clients)
+        host2.preview_btn.setChecked(False)
+        self.assertEqual(calls["stop"], 1)
+        self.assertNotIn(host2.shell._bridge.seam_client, service.hub._clients)
+
+        # Run lock while previewing: preview stops, toggle disables.
+        host2.preview_btn.setChecked(True)
+        host2.set_run_lock(True)
+        self.assertEqual(calls["stop"], 2)
+        self.assertFalse(host2.preview_btn.isChecked())
+        self.assertFalse(host2.preview_btn.isEnabled())
+        host2.set_run_lock(False)
+        self.assertTrue(host2.preview_btn.isEnabled())
+
+        # Service-side end (sidebar Early-abort): the toggle unlatches and
+        # the stop callback fires once the abort update reaches the shell.
+        host2.preview_btn.setChecked(True)
+        service.request_abort()
+        self.assertFalse(host2.preview_btn.isChecked())
+        self.assertEqual(calls["stop"], 3)
+
+    def test_sidebar_core_controls_steer_the_preview_overlay(self):
+        """The sidebar's box-size / min-net-gradient spinboxes reach the
+        preview session (seeded at preview start, updated live) — the drawn
+        boxes always match the entered values."""
+        from PycroFlow.gui.tabs.live_tab import LiveTabHost
+        from PycroFlow.live_analysis.service import LiveAnalysisService
+
+        seen = []
+        host = LiveTabHost(
+            on_start_preview=lambda: LiveAnalysisService(),
+            on_overlay_params=seen.append,
+        )
+        host.preview_btn.setChecked(True)
+        # Seeded once at start with the sidebar's current values.
+        self.assertTrue(seen)
+        self.assertEqual(seen[-1]["Min. Net Gradient"], 5000)
+        # Live updates follow the spinboxes.
+        host.shell.sidebar.min_gradient.setValue(1234)
+        self.assertEqual(seen[-1]["Min. Net Gradient"], 1234)
+        host.shell.sidebar.box_size.setValue(9)
+        self.assertEqual(seen[-1]["Box Size"], 9)
 
     def test_window_title_has_version(self):
         from PycroFlow import __version__
@@ -249,8 +378,8 @@ class TestMainWindow(unittest.TestCase):
         # per-subsystem status: centered, current step name in brackets
         from PyQt6.QtCore import Qt
 
-        # fluid cur=1 -> entries[1] is the 'signal' step
-        self.assertIn("fluid 1/3 (signal)", tab.step_status.text())
+        # fluid cur=1 -> entries[1] is the 'signal' step, shown as 'sync'
+        self.assertIn("fluid 1/3 (sync)", tab.step_status.text())
         self.assertTrue(
             bool(tab.step_status.alignment() & Qt.AlignmentFlag.AlignCenter)
         )
@@ -298,6 +427,58 @@ class TestMainWindow(unittest.TestCase):
         tab._poll_progress()
         # img cur=1 -> on the 2nd acquire (round 2 of 2), labelled by name.
         self.assertIn("Round 2/2: A1 RESI round 2", tab.step_status.text())
+
+    def test_dark_frames_fold_into_imager_round(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+
+        svc = MagicMock(name="service")
+        svc.state = ExperimentState.RUNNING
+        # Exchange with dark frames: EGFR + EGFR-dark + 5T4 -> two imager rounds
+        # (the dark acquire is folded into EGFR's round, not counted separately).
+        svc.protocol = {
+            "fluid": {"protocol_entries": []},
+            "img": {
+                "protocol_entries": [
+                    {
+                        "$type": "acquire",
+                        "name": "EGFR",
+                        "message": "round_img-0-EGFR",
+                    },
+                    {
+                        "$type": "acquire",
+                        "name": "EGFR (dark frames)",
+                        "message": "round_img-dark-0-EGFR",
+                    },
+                    {
+                        "$type": "acquire",
+                        "name": "5T4",
+                        "message": "round_img-1-5T4",
+                    },
+                ]
+            },
+            "illu": {"protocol_entries": []},
+        }
+        svc.step_progress.return_value = {}
+        tab = ExperimentTab(svc, MagicMock(name="bridge"))
+        # While imaging EGFR's dark frames (img cur=1) it's still Round 1/2:EGFR.
+        svc.progress.return_value = {
+            "fluid": (0, 0),
+            "img": (1, 3),
+            "illu": (0, 0),
+        }
+        tab._populate_steps()
+        tab._poll_progress()
+        self.assertIn("Round 1/2: EGFR", tab.step_status.text())
+        # On the 5T4 acquire (img cur=2) -> Round 2/2: 5T4.
+        svc.progress.return_value = {
+            "fluid": (0, 0),
+            "img": (2, 3),
+            "illu": (0, 0),
+        }
+        tab._poll_progress()
+        self.assertIn("Round 2/2: 5T4", tab.step_status.text())
 
     def test_current_round_progress_bar(self):
         from unittest.mock import MagicMock
@@ -366,9 +547,15 @@ class TestMainWindow(unittest.TestCase):
                 ]
             },
             "img": {
+                # Zero the calibrated acquire overheads so this stays a test
+                # of the incubate+acquire arithmetic, not the tuned constants.
+                "parameters": {
+                    "est_frame_overhead": 0,
+                    "est_acquire_setup": 0,
+                },
                 "protocol_entries": [
                     {"$type": "acquire", "frames": 1000, "t_exp": 120}
-                ]
+                ],
             },
             "illu": {"protocol_entries": []},
         }
@@ -464,17 +651,20 @@ class TestMainWindow(unittest.TestCase):
             "illu": (0, 0),
         }
         svc.step_progress.return_value = {}
-        svc.is_finished.return_value = True
+        svc.finalize_if_done.return_value = ExperimentState.FINISHED
         tab = ExperimentTab(svc, MagicMock(name="bridge"))
         tab._populate_steps()
-        # Polling notices completion and ends the run (-> FINISHED).
+        # Polling delegates the terminal decision to the service.
         tab._poll_progress()
-        svc.end.assert_called_once()
-        # While still running but not finished, it does not end.
-        svc.end.reset_mock()
-        svc.is_finished.return_value = False
+        svc.finalize_if_done.assert_called()
+        # A clean finish does not paint the error label.
+        self.assertNotIn("aborted", tab.state_label.text().lower())
+        # While still running the service returns None and nothing terminal
+        # happens.
+        svc.finalize_if_done.reset_mock()
+        svc.finalize_if_done.return_value = None
         tab._poll_progress()
-        svc.end.assert_not_called()
+        svc.finalize_if_done.assert_called()
 
     def test_controls_reset_after_run_finishes(self):
         from unittest.mock import MagicMock
@@ -855,6 +1045,18 @@ class TestConnectionFlow(unittest.TestCase):
             w._system_service.get_monet_setup(), w.setup_combo.currentText()
         )
 
+    def test_monitoring_attaches_only_for_camera_setup(self):
+        w = self._win()
+        # The default Emulator setup declares no cameras -> inert.
+        w._on_setup_changed("Emulator")
+        self.assertIsNone(w._monitoring)
+        # EmulatorCam declares a monitoring block -> a controller attaches.
+        w._on_setup_changed("EmulatorCam")
+        self.assertIsNotNone(w._monitoring)
+        # Switching back detaches it (no lingering controller/observer).
+        w._on_setup_changed("Emulator")
+        self.assertIsNone(w._monitoring)
+
     def test_autoconnect_on_design_load(self):
         import PycroFlow
 
@@ -1056,11 +1258,17 @@ class TestConnectionFlow(unittest.TestCase):
 def _example_design():
     import PycroFlow
     from PycroFlow.services import ExperimentService
+    from PycroFlow.tests import chdir_to_test_output
 
     path = os.path.join(
         os.path.dirname(PycroFlow.__file__), "examples", "sph_resi_6plex.yaml"
     )
-    return ExperimentService().load_experiment_design(path), path
+    try:
+        return ExperimentService().load_experiment_design(path), path
+    finally:
+        # The load chdirs to the design's folder; keep test output out of
+        # the checkout.
+        chdir_to_test_output()
 
 
 @unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
@@ -1169,6 +1377,141 @@ class TestSchemaForm(unittest.TestCase):
         # The selected laser round-trips back to an int.
         self.assertEqual(form.to_dict()["laser"], 642)
         self.assertIsInstance(form.to_dict()["laser"], int)
+
+    def test_laser_stays_typeable_without_monet_lasers(self):
+        # A monet config that declares no lasers (or no setup loaded) must
+        # not lock the field: the dropdown is editable, so any wavelength
+        # can still be entered.
+        from PycroFlow.gui.widgets.schema_form import SchemaForm
+        from PycroFlow.schemas.experiment_design import IlluSettings
+
+        form = SchemaForm(
+            IlluSettings,
+            {"laser": 642, "power_acq": 70},
+            context={"lasers": []},
+        )
+        ed = form.field_editor("laser")
+        self.assertTrue(ed._combo.isEditable())
+        ed._combo.setCurrentText("750")
+        self.assertEqual(form.to_dict()["laser"], 750)
+
+    def test_reservoir_ids_become_dropdown_when_setup_arrives(self):
+        # The form is built before a setup is loaded (empty startup form), so
+        # the id column must follow the context rather than snapshot it.
+        from PycroFlow.gui.widgets.schema_form import SchemaForm, FormContext
+        from PycroFlow.schemas.experiment_design import FluidSettings
+        from PyQt6.QtWidgets import QComboBox, QLineEdit
+
+        ctx = FormContext({"reservoir_ids": []})
+        form = SchemaForm(
+            FluidSettings,
+            {
+                "vol_wash": 10,
+                "reservoir_names": {1: "imager1", 2: "imager2"},
+                "experiment": {"type": "Exchange", "wash_buffer": "imager1"},
+            },
+            context=ctx,
+        )
+        ed = form.field_editor("reservoir_names")
+        self.assertIsInstance(ed._rows[0][0], QLineEdit)
+        ctx.set_options("reservoir_ids", [1, 2, 3])
+        id_cell = ed._rows[0][0]
+        self.assertIsInstance(id_cell, QComboBox)
+        self.assertEqual(
+            [id_cell.itemText(i) for i in range(id_cell.count())],
+            ["1", "2", "3"],
+        )
+        # Switching the column to dropdowns must not lose the entered data.
+        self.assertEqual(ed.get_value(), {1: "imager1", 2: "imager2"})
+
+    @staticmethod
+    def _next_tab_stop(w):
+        """The widget Tab would move focus to (Qt skips non-tabbable ones)."""
+        from PyQt6.QtCore import Qt
+
+        cur = w.nextInFocusChain()
+        while cur is not w:
+            if cur.focusPolicy() & Qt.FocusPolicy.TabFocus:
+                return cur
+            cur = cur.nextInFocusChain()
+        return None
+
+    def test_tab_runs_down_the_name_column(self):
+        # Tabbing out of a name field reached the row's ✕ button; it should
+        # go to the next row's name, so names are filled straight down. The
+        # id dropdowns are picked from their list, not tabbed through.
+        from PyQt6.QtCore import Qt
+        from PycroFlow.gui.widgets.schema_form import SchemaForm, FormContext
+        from PycroFlow.schemas.experiment_design import FluidSettings
+
+        form = SchemaForm(
+            FluidSettings,
+            {
+                "vol_wash": 10,
+                "reservoir_names": {1: "a", 2: "b", 3: "c"},
+                "experiment": {"type": "Exchange", "wash_buffer": "a"},
+            },
+            context=FormContext({"reservoir_ids": [1, 2, 3]}),
+        )
+        ed = form.field_editor("reservoir_names")
+        (r0_id, r0_name, r0_rm), (_, r1_name, _), (_, r2_name, _) = ed._rows
+        self.assertEqual(r0_rm.focusPolicy(), Qt.FocusPolicy.NoFocus)
+        self.assertEqual(r0_id.focusPolicy(), Qt.FocusPolicy.ClickFocus)
+        self.assertIs(self._next_tab_stop(r0_name), r1_name)
+        self.assertIs(self._next_tab_stop(r1_name), r2_name)
+
+    def test_free_text_id_column_stays_tabbable(self):
+        # Without a setup the id column is a text field, not a dropdown — it
+        # must stay in the tab chain or it could not be filled in at all.
+        from PyQt6.QtCore import Qt
+        from PycroFlow.gui.widgets.schema_form import SchemaForm
+        from PycroFlow.schemas.experiment_design import FluidSettings
+
+        form = SchemaForm(
+            FluidSettings,
+            {
+                "vol_wash": 10,
+                "reservoir_names": {1: "a", 2: "b"},
+                "experiment": {"type": "Exchange", "wash_buffer": "a"},
+            },
+        )
+        ed = form.field_editor("reservoir_names")
+        (r0_id, r0_name, _), (r1_id, _, _) = ed._rows
+        self.assertNotEqual(r0_id.focusPolicy(), Qt.FocusPolicy.ClickFocus)
+        self.assertIs(self._next_tab_stop(r0_id), r0_name)
+        self.assertIs(self._next_tab_stop(r0_name), r1_id)
+
+    def test_setup_options_refresh_into_live_form(self):
+        # Picking/switching a setup after a design is loaded must refresh the
+        # setup-derived dropdowns in place, not leave them stale.
+        from PycroFlow.services import ExperimentService
+        from PycroFlow.gui.tabs.experiment_design_tab import (
+            ExperimentDesignTab,
+        )
+
+        lasers = []
+        tab = ExperimentDesignTab(
+            ExperimentService(),
+            laser_options_provider=lambda: list(lasers),
+            reservoir_ids_provider=lambda: [1, 2],
+        )
+        tab._set_form(
+            {
+                "base_name": "x",
+                "illu": {"settings": {"laser": 642, "power_acq": 70}},
+            }
+        )
+        illu = tab._form.field_editor("illu")
+        ed = illu._form.field_editor("settings")._form.field_editor("laser")
+        self.assertEqual(
+            [ed._combo.itemText(i) for i in range(ed._combo.count())], ["642"]
+        )
+        lasers[:] = [488, 561, 640]
+        tab.refresh_setup_options()
+        self.assertEqual(
+            [ed._combo.itemText(i) for i in range(ed._combo.count())],
+            ["488", "561", "640", "642"],
+        )
 
     def test_imager_dropdowns_update_live_on_reservoir_edit(self):
         from PycroFlow.gui.widgets.schema_form import SchemaForm
@@ -1375,6 +1718,13 @@ class TestExperimentDesignTab(unittest.TestCase):
 
         cls.app = QApplication.instance() or QApplication([])
 
+    def tearDown(self):
+        # Loading a design chdirs to its folder; keep test output out of the
+        # checkout for whatever runs next.
+        from PycroFlow.tests import chdir_to_test_output
+
+        chdir_to_test_output()
+
     def test_load_and_translate(self):
         from PycroFlow.services import ExperimentService
         from PycroFlow.gui.tabs.experiment_design_tab import (
@@ -1467,7 +1817,14 @@ class TestExperimentDesignTab(unittest.TestCase):
         self.assertFalse(hasattr(tab, "estimate_btn"))
         tab.load_design_path(path)
         tab._recompute_estimate()  # fire the debounced recompute directly
-        self.assertIn("Estimated duration: ~", tab.estimate_label.text())
+        text = tab.estimate_label.text()
+        self.assertIn("Estimated: ~", text)
+        # Total reagent volume now rides alongside the duration.
+        self.assertIn("reagents", text)
+        # The folded preview lists the volumes and the event sequence.
+        preview = tab.preview_text.toPlainText()
+        self.assertIn("Volumes required:", preview)
+        self.assertIn("Sequence of events:", preview)
 
     def test_incomplete_design_estimate_is_graceful(self):
         from PycroFlow.services import ExperimentService
@@ -1602,12 +1959,14 @@ class TestFluidTab(unittest.TestCase):
 
         worker.set_synchronous(False)
 
-    def _tab(self):
+    def _tab(self, reservoir_ids=(1, 3, 8, 20)):
         from unittest.mock import MagicMock
         from PycroFlow.gui.tabs.fluid_tab import FluidTab
 
         svc = MagicMock(name="system_service")
         svc.fluid_system = object()
+        # The manual valve dropdown is filled from the setup's manifold.
+        svc.reservoir_ids.return_value = list(reservoir_ids)
         return FluidTab(svc), svc
 
     def test_fill_calls_service(self):
@@ -1675,22 +2034,84 @@ class TestFluidTab(unittest.TestCase):
             dispense_res=7,
         )
 
+    def test_valve_dropdown_offers_the_setups_manifold(self):
+        # Sparse manifolds (ibidi) are common: the ids offered are exactly
+        # those the setup wires, not a 1..N range nor the design's subset.
+        tab, _ = self._tab(reservoir_ids=(2, 3, 8, 20))
+        self.assertEqual(
+            [tab.valve_res.itemData(i) for i in range(tab.valve_res.count())],
+            [2, 3, 8, 20],
+        )
+
     def test_set_valves_calls_service(self):
         tab, svc = self._tab()
-        tab.valve_res.setText("3")
+        tab.valve_res.setCurrentIndex(tab.valve_res.findData(8))
         tab._on_set_valves()
-        svc.set_valves.assert_called_once_with(3)
+        svc.set_valves.assert_called_once_with(8)
 
-    def test_set_valves_required_empty_warns(self):
+    def test_close_all_valves_calls_service(self):
+        tab, svc = self._tab()
+        tab._on_close_valves()
+        svc.close_all_valves.assert_called_once()
+
+    def test_close_all_valves_button_only_for_multiplexer(self):
+        # The ibidi-only control is shown for multiplexer setups and hidden
+        # for Hamilton-rotary-valve ones.
+        tab, svc = self._tab()
+        svc.has_multiplexer.return_value = True
+        tab._refresh_reservoirs()
+        self.assertFalse(tab.close_valves_btn.isHidden())
+        svc.has_multiplexer.return_value = False
+        tab._refresh_reservoirs()
+        self.assertTrue(tab.close_valves_btn.isHidden())
+
+    def test_set_valves_without_wired_reservoirs_warns(self):
         from unittest.mock import patch
         from PycroFlow.gui.tabs import fluid_tab as ft
 
-        tab, svc = self._tab()
-        tab.valve_res.setText("")
+        tab, svc = self._tab(reservoir_ids=())
+        self.assertFalse(tab.valve_btn.isEnabled())
         with patch.object(ft.QMessageBox, "warning") as warn:
             tab._on_set_valves()
         warn.assert_called_once()
         svc.set_valves.assert_not_called()
+
+    def test_route_hint_follows_the_selected_reservoir(self):
+        tab, svc = self._tab(reservoir_ids=(2, 8))
+        svc.describe_reservoir_route.side_effect = (
+            lambda rid: "route for {}".format(rid)
+        )
+        tab.valve_res.setCurrentIndex(tab.valve_res.findData(8))
+        self.assertEqual(tab.valve_route.text(), "route for 8")
+        tab.valve_res.setCurrentIndex(tab.valve_res.findData(2))
+        self.assertEqual(tab.valve_route.text(), "route for 2")
+
+    def test_route_hint_without_a_setup(self):
+        tab, _ = self._tab(reservoir_ids=())
+        self.assertIn("No reservoirs wired", tab.valve_route.text())
+
+    def test_manual_controls_are_explained(self):
+        # The two pump groups differ in whether they re-route the valves;
+        # that difference must be stated, not left to be discovered.
+        tab, _ = self._tab()
+        from PyQt6.QtWidgets import QLabel
+
+        hints = " ".join(lbl.text() for lbl in tab.findChildren(QLabel))
+        self.assertIn("does NOT change reservoir routing", hints)
+        self.assertIn("Sets the valves itself", hints)
+        self.assertIn("no liquid is moved", hints)
+        self.assertTrue(tab.stroke_pump.toolTip())
+        self.assertTrue(tab.move_pickup_res.toolTip())
+        self.assertTrue(tab.valve_res.toolTip())
+
+    def test_refresh_follows_a_setup_change(self):
+        tab, svc = self._tab(reservoir_ids=(1, 2))
+        svc.reservoir_ids.return_value = [5, 6, 7]
+        tab.refresh()
+        self.assertEqual(
+            [tab.valve_res.itemData(i) for i in range(tab.valve_res.count())],
+            [5, 6, 7],
+        )
 
     def test_stop_calls_service(self):
         tab, svc = self._tab()
@@ -1751,5 +2172,760 @@ class TestWorker(unittest.TestCase):
         self.assertIsInstance(errors[0], RuntimeError)
 
 
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestFluidSchematic(unittest.TestCase):
+    """The live fluid-wiring schematic renders topology + valve state."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_grid_layout_matches_hardware_numbering(self):
+        # Ports numbered left-to-right, bottom-to-top: port 1 lower left,
+        # port 6 lower right, port 7 directly above port 1.
+        from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+
+        cell = FluidSchematic._grid_cell
+        self.assertEqual(cell(1, 6, 4), (0, 3))  # bottom-left
+        self.assertEqual(cell(6, 6, 4), (5, 3))  # bottom-right
+        self.assertEqual(cell(7, 6, 4), (0, 2))  # above port 1, row start
+        self.assertEqual(cell(12, 6, 4), (5, 2))  # end of the second row
+
+    def test_renders_topology_and_live_state_without_error(self):
+        from PyQt6.QtGui import QPixmap
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+
+        svc = SystemService()
+        svc.load_setup("Ibidi")
+        widget = FluidSchematic()
+        widget.resize(900, 500)
+        widget.set_topology(svc.fluid_topology())
+        opened = [c in (1, 6, 12, 8) for c in range(1, 25)]
+        widget.set_state(
+            {
+                "multiplexer": {"channels": 24, "open": opened},
+                "pump_a": {"valve": "in", "volume": 250.0, "capacity": 500.0},
+                "pump_out": {
+                    "valve": "out",
+                    "volume": 0.0,
+                    "capacity": 5000.0,
+                },
+            }
+        )
+        pix = QPixmap(widget.size())
+        widget.render(pix)  # exercises paintEvent; must not raise
+        self.assertFalse(pix.isNull())
+        # Robust to missing / partial data too.
+        widget.set_topology(None)
+        widget.render(pix)
+        widget.set_topology({"multiplexer": None, "pumps": {}})
+        widget.set_state(None)
+        widget.render(pix)
+
+    def test_reservoir_labels_render_names_and_dim_unused(self):
+        from PyQt6.QtGui import QPixmap
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+
+        svc = SystemService()
+        svc.load_setup("Ibidi")
+        widget = FluidSchematic()
+        widget.resize(900, 500)
+        widget.set_topology(svc.fluid_topology())
+        labels = {
+            rid: {"name": None, "used": False, "used_vol": 0, "total_vol": 0}
+            for rid in range(1, 25)
+        }
+        labels[1] = {
+            "name": "Imager 1",
+            "used": True,
+            "used_vol": 0,
+            "total_vol": 0,
+        }
+        labels[8] = {
+            "name": "Buffer",
+            "used": True,
+            "used_vol": 150,
+            "total_vol": 600,
+        }
+        widget.set_reservoir_labels(labels)
+        # Stored and used in the hover tooltip (name + unused note + volume).
+        self.assertEqual(widget._res_labels[8]["name"], "Buffer")
+        widget._update_hover_tooltip(8)
+        self.assertIn("Buffer", widget.toolTip())
+        self.assertIn("150 µl used", widget.toolTip())
+        self.assertIn("600 µl needed", widget.toolTip())
+        widget._update_hover_tooltip(2)
+        self.assertIn("not used", widget.toolTip())
+        # Rendering with labels + volume bars must not raise.
+        widget.render(QPixmap(widget.size()))
+
+    def test_renders_mvp_valve_topology(self):
+        from PyQt6.QtGui import QPixmap
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+
+        svc = SystemService()
+        svc.load_setup("Mercury")
+        widget = FluidSchematic()
+        widget.resize(1000, 560)
+        widget.set_topology(svc.fluid_topology())
+        # Valve 3 at its bridge port (1), valve 5 at port 8 -> reservoir 21.
+        widget.set_state(
+            {
+                "multiplexer": None,
+                "valves": {3: 1, 5: 8, 1: "in"},
+                "pump_a": {"valve": "in", "volume": 100, "capacity": 500},
+                "pump_out": {"valve": "out", "volume": 0, "capacity": 5000},
+            }
+        )
+        widget.set_reservoir_labels(
+            {
+                1: {
+                    "name": "Buffer",
+                    "used": True,
+                    "used_vol": 200,
+                    "total_vol": 800,
+                },
+                21: {
+                    "name": "Imager 8",
+                    "used": True,
+                    "used_vol": 0,
+                    "total_vol": 703,
+                },
+            }
+        )
+        # Reservoir 21 is the fully-routed reservoir (its whole path matches).
+        routes = widget._routes()
+        self.assertEqual(widget._active_reservoir(routes, {3: 1, 5: 8}), 21)
+        # Painting lays out the reservoir boxes (hit-test rects) and must not
+        # raise; the box for reservoir 21 is then present for hover/click.
+        widget.render(QPixmap(widget.size()))
+        self.assertIn(21, widget._res_rects)
+        widget._update_hover_tooltip(21)
+        self.assertIn("valve 3 → port 1", widget.toolTip())
+        self.assertIn("valve 5 → port 8", widget.toolTip())
+
+    def test_highlight_reservoir_marks_its_full_route(self):
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+
+        svc = SystemService()
+        svc.load_setup("Ibidi")
+        widget = FluidSchematic()
+        widget.set_topology(svc.fluid_topology())
+        # No selection -> nothing highlighted.
+        self.assertEqual(widget._active_highlight(), (None, set()))
+        # Selecting a reservoir highlights every channel on its route.
+        widget.highlight_reservoir(8)
+        rid, channels = widget._active_highlight()
+        self.assertEqual(rid, 8)
+        self.assertEqual(channels, {1, 6, 12, 8})
+        # A transient hover overrides the persistent selection.
+        widget._hover_res = 23
+        rid, channels = widget._active_highlight()
+        self.assertEqual(rid, 23)
+        self.assertEqual(channels, {1, 6, 7, 12, 13, 18, 24, 23})
+        # Clearing the selection (hover gone) highlights nothing.
+        widget._hover_res = None
+        widget.highlight_reservoir(None)
+        self.assertEqual(widget._active_highlight(), (None, set()))
+
+    def test_hovering_a_port_highlights_and_emits(self):
+        from PyQt6.QtGui import QPixmap, QMouseEvent
+        from PyQt6.QtCore import QEvent, Qt
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+
+        svc = SystemService()
+        svc.load_setup("Ibidi")
+        widget = FluidSchematic()
+        widget.resize(1000, 560)
+        widget.set_topology(svc.fluid_topology())
+        widget.render(QPixmap(widget.size()))  # populates the port hit-boxes
+
+        hovered = []
+        widget.reservoir_hovered.connect(hovered.append)
+        pos = widget._port_rects[8].center()
+        move = QMouseEvent(
+            QEvent.Type.MouseMove,
+            pos,
+            pos,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        widget.mouseMoveEvent(move)
+        self.assertEqual(widget._hover_res, 8)
+        self.assertEqual(hovered, [8])
+        rid, channels = widget._active_highlight()
+        self.assertEqual((rid, channels), (8, {1, 6, 12, 8}))
+        # Leaving the widget clears the transient highlight.
+        widget.leaveEvent(QEvent(QEvent.Type.Leave))
+        self.assertIsNone(widget._hover_res)
+        self.assertEqual(hovered, [8, None])
+
+    def test_clicking_a_port_or_pump_emits_toggle_signals(self):
+        from PyQt6.QtGui import QPixmap, QMouseEvent
+        from PyQt6.QtCore import QEvent, Qt
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+
+        svc = SystemService()
+        svc.load_setup("Ibidi")
+        widget = FluidSchematic()
+        widget.resize(1000, 560)
+        widget.set_topology(svc.fluid_topology())
+        widget.render(QPixmap(widget.size()))  # populates the hit-boxes
+
+        channels, pumps = [], []
+        widget.channel_clicked.connect(channels.append)
+        widget.pump_clicked.connect(pumps.append)
+
+        def click(pos):
+            widget.mousePressEvent(
+                QMouseEvent(
+                    QEvent.Type.MouseButtonPress,
+                    pos,
+                    pos,
+                    Qt.MouseButton.LeftButton,
+                    Qt.MouseButton.LeftButton,
+                    Qt.KeyboardModifier.NoModifier,
+                )
+            )
+
+        click(widget._port_rects[8].center())
+        click(widget._pump_rects["pump_a"].center())
+        click(widget._pump_rects["pump_out"].center())
+        self.assertEqual(channels, [8])
+        self.assertEqual(pumps, ["pump_a", "pump_out"])
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestFluidTabSchematic(unittest.TestCase):
+    """The Fluid tab embeds the schematic and polls live state."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_tab_reloads_topology_and_pushes_state_on_refresh(self):
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.tabs.fluid_tab import FluidTab
+
+        svc = SystemService()
+        svc.load_setup("IbidiEmulator")
+        tab = FluidTab(svc)
+        # Topology is rebuilt from the setup on refresh.
+        tab.refresh()
+        self.assertIsNotNone(tab.schematic._topo)
+        self.assertEqual(tab.schematic._topo["multiplexer"]["channels"], 24)
+        # A live connection makes the polled snapshot flow to the widget.
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {1: "R1", 2: "R2"},
+                    "special_names": {},
+                },
+            }
+        )
+        svc.set_valves(2)
+        tab._refresh_schematic_state()
+        opened = [
+            i + 1
+            for i, v in enumerate(tab.schematic._state["multiplexer"]["open"])
+            if v
+        ]
+        self.assertEqual(opened, [2])
+
+    def test_reservoir_dropdown_drives_schematic_highlight(self):
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.tabs.fluid_tab import FluidTab
+
+        svc = SystemService()
+        svc.load_setup("Ibidi")
+        tab = FluidTab(svc)
+        tab.refresh()
+        # Pick a reservoir in the manual "Set valves" dropdown; the schematic
+        # highlights that reservoir's route.
+        index = tab.valve_res.findData(8)
+        self.assertGreaterEqual(index, 0)
+        tab.valve_res.setCurrentIndex(index)
+        rid, channels = tab.schematic._active_highlight()
+        self.assertEqual(rid, 8)
+        self.assertEqual(channels, {1, 6, 12, 8})
+
+    def test_schematic_clicks_toggle_hardware_and_respect_run_lock(self):
+        from PycroFlow.gui.widgets import worker
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.tabs.fluid_tab import FluidTab
+
+        worker.set_synchronous(True)
+        svc = SystemService()
+        svc.load_setup("IbidiEmulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {1: "R1", 2: "R2"},
+                    "special_names": {},
+                },
+            }
+        )
+        tab = FluidTab(svc)
+        tab.refresh()
+        mux = svc.fluid_system.multiplexer
+
+        # A port click toggles that raw channel through the service.
+        self.assertFalse(mux.channel_states[6])
+        tab.schematic.channel_clicked.emit(7)
+        self.assertTrue(mux.channel_states[6])
+        # A pump click flips its syringe valve.
+        tab.schematic.pump_clicked.emit("pump_a")
+        self.assertEqual(svc.fluid_system.pump_a.valve_pos, "in")
+
+        # While the orchestrator holds the run lock, clicks are ignored.
+        tab.set_run_lock(True)
+        tab.schematic.channel_clicked.emit(7)
+        self.assertTrue(mux.channel_states[6])  # unchanged
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestWebcamsTab(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _tab(self, setup_name="EmulatorCam"):
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.tabs.webcams_tab import WebcamsTab
+
+        svc = SystemService()
+        svc.load_setup(setup_name)
+        # The shipped setup's camera roster is LAB-TUNED (and has drifted
+        # before); pin a known three-camera list here so the editor tests
+        # stay hermetic w.r.t. config edits.
+        svc.setup["monitoring"]["cameras"] = [
+            {"role": "reservoir", "device": 0, "width": 320, "height": 240},
+            {"role": "pump", "device": 1, "width": 320, "height": 240},
+            {"role": "sample", "device": 2, "width": 320, "height": 240},
+        ]
+        self._changed = 0
+
+        def on_changed():
+            self._changed += 1
+
+        return WebcamsTab(svc, on_config_changed=on_changed), svc
+
+    def test_rows_apply_and_empty_setup(self):
+        tab, svc = self._tab()
+        self.assertEqual(len(tab._rows), 3)  # EmulatorCam has 3 cameras
+        tab._rows[1]["device"].setValue(5)
+        tab._apply()
+        self.assertEqual(svc.setup["monitoring"]["cameras"][1]["device"], 5)
+        self.assertGreaterEqual(self._changed, 1)
+        # A setup with no monitoring block -> editor with zero camera rows.
+        svc.load_setup("Emulator")
+        tab.refresh()
+        self.assertEqual(len(tab._rows), 0)
+
+    def test_rebuild_does_not_orphan_widgets(self):
+        from PyQt6.QtWidgets import QPushButton
+
+        tab, _ = self._tab()
+        before = len(tab.findChildren(QPushButton))
+        for _ in range(4):
+            tab.refresh()
+            self.app.processEvents()  # flush deleteLater of the old content
+        self.assertEqual(len(tab.findChildren(QPushButton)), before)
+
+    def test_add_and_remove_camera(self):
+        tab, svc = self._tab()
+        self.assertEqual(len(tab._rows), 3)
+        tab._add_camera_row()  # -> 4
+        tab._rows[-1]["role"].setCurrentText("sample")
+        tab._rows[-1]["device"].setValue(7)
+        self.assertEqual(len(tab._rows), 4)
+        tab._remove_camera_row(tab._rows[0])  # -> 3
+        self.assertEqual(len(tab._rows), 3)
+        tab._apply()
+        cams = svc.setup["monitoring"]["cameras"]
+        self.assertEqual(len(cams), 3)
+        self.assertEqual(cams[-1]["device"], 7)
+
+    def test_output_path_applies_and_clears(self):
+        tab, svc = self._tab()
+        tab._output_edit.setText("/data/mycam")
+        tab._apply()
+        self.assertEqual(svc.setup["monitoring"]["output_dir"], "/data/mycam")
+        # Blank -> the key is dropped (falls back to the experiment folder).
+        tab._output_edit.setText("")
+        tab._apply()
+        self.assertNotIn("output_dir", svc.setup["monitoring"])
+
+    def test_emulated_preview_yields_a_frame(self):
+        import time
+
+        tab, _ = self._tab()
+        received = []
+        tab.start_preview()
+        tab._worker.frame_ready.connect(lambda img: received.append(img))
+        t0 = time.time()
+        while not received and time.time() - t0 < 5:
+            self.app.processEvents()
+            time.sleep(0.02)
+        tab.stop_preview()
+        self.assertTrue(received, "no preview frame from the emulator source")
+        self.assertGreater(received[0].width(), 0)
+
+    def test_run_lock_disables_and_stops(self):
+        tab, _ = self._tab()
+        tab.start_preview()
+        tab.set_run_lock(True)
+        self.assertIsNone(tab._worker)  # preview stopped
+        self.assertFalse(tab.apply_btn.isEnabled())
+        self.assertFalse(tab._rows[0]["device"].isEnabled())
+
+    def test_live_view_shows_published_frame(self):
+        import tempfile
+
+        import numpy as np
+
+        from PycroFlow.monitoring.capture_service import _write_ppm_atomic
+
+        tab, _ = self._tab()
+        ppm = os.path.join(tempfile.mkdtemp(), "live.ppm")
+        _write_ppm_atomic(ppm, np.full((20, 30, 3), (0, 128, 255), np.uint8))
+        tab.set_run_lock(True, live_path=ppm)
+        self.assertIsNotNone(tab._live_timer)  # live polling started
+        tab._poll_live()  # tick once
+        self.assertIsNotNone(tab.preview_label.pixmap())
+        self.assertFalse(tab.preview_label.pixmap().isNull())
+        tab.set_run_lock(False)
+        self.assertIsNone(tab._live_timer)  # stopped on unlock
+
+    def test_live_view_resolves_path_provider_lazily(self):
+        # Reproduces the spawn-vs-lock race: the provider returns None at lock
+        # time (capture not spawned yet), then the real path a moment later.
+        import tempfile
+
+        import numpy as np
+
+        from PycroFlow.monitoring.capture_service import _write_ppm_atomic
+
+        tab, _ = self._tab()
+        ppm = os.path.join(tempfile.mkdtemp(), "live.ppm")
+        box = {"path": None}  # provider starts empty (not spawned)
+        tab.set_run_lock(True, live_path=lambda: box["path"])
+        self.assertIsNotNone(tab._live_timer)  # polling despite no path yet
+        tab._poll_live()  # no path -> stays on the waiting message, no crash
+        # Capture "spawns": path + file appear; the next poll shows the frame.
+        _write_ppm_atomic(ppm, np.full((10, 16, 3), (10, 200, 30), np.uint8))
+        box["path"] = ppm
+        tab._poll_live()
+        self.assertIsNotNone(tab.preview_label.pixmap())
+        self.assertFalse(tab.preview_label.pixmap().isNull())
+        tab.set_run_lock(False)
+
+    def test_save_writes_block_to_yaml(self):
+        import shutil
+        import tempfile
+        import unittest.mock as mock
+
+        import yaml as _yaml
+        from PyQt6.QtWidgets import QMessageBox
+
+        tab, svc = self._tab()
+        tab._rows[0]["device"].setValue(4)
+        tab._output_edit.setText("/data/mycam")
+        # Copy the shipped setup so we never overwrite the real file.
+        src = configs.setup_path("EmulatorCam")
+        tmp = os.path.join(tempfile.mkdtemp(), "EmulatorCam.yaml")
+        shutil.copy(src, tmp)
+        with (
+            mock.patch.object(configs, "setup_path", return_value=tmp),
+            mock.patch.object(
+                QMessageBox,
+                "question",
+                return_value=QMessageBox.StandardButton.Yes,
+            ),
+        ):
+            tab._save()
+        with open(tmp) as f:
+            written = _yaml.safe_load(f)
+        self.assertEqual(written["monitoring"]["cameras"][0]["device"], 4)
+        self.assertEqual(written["monitoring"]["output_dir"], "/data/mycam")
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestGotoMajorStep(unittest.TestCase):
+    """The Run Sequence tab's Go-to combo centres on round starts."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _tab(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+
+        svc = MagicMock(name="service")
+        svc.state = ExperimentState.LOADED
+        svc.experiment_design = {}
+        # Initial-imager exchange: round 1 (img-0) is pre-loaded (no fluid
+        # injection, washed AFTER imaging); round 2 (img-1) injects its imager
+        # before imaging. Mirrors the real builder's signal tags.
+        svc.protocol = {
+            "fluid": {
+                "protocol_entries": [
+                    {
+                        "$type": "wait for signal",
+                        "target": "img",
+                        "value": "done imaging round img-0",
+                    },
+                    {"$type": "inject", "reservoir_id": 3, "volume": 10},
+                    {"$type": "signal", "value": "done flushing img-0"},
+                    {"$type": "inject", "reservoir_id": 1, "volume": 10},
+                    {"$type": "signal", "value": "done flushing img-1"},
+                ]
+            },
+            "img": {
+                "protocol_entries": [
+                    {
+                        "$type": "acquire",
+                        "frames": 1,
+                        "t_exp": 1,
+                        "message": "round_img-0-A",
+                    },
+                    {"$type": "signal", "value": "done imaging round img-0"},
+                    {
+                        "$type": "acquire",
+                        "frames": 1,
+                        "t_exp": 1,
+                        "message": "round_img-1-B",
+                    },
+                ]
+            },
+            "illu": {"protocol_entries": []},
+        }
+        tab = ExperimentTab(svc, MagicMock(name="bridge"))
+        tab._populate_steps()
+        return tab
+
+    def test_combo_lists_rounds_plus_start(self):
+        tab = self._tab()
+        items = [
+            tab.goto_combo.itemText(i) for i in range(tab.goto_combo.count())
+        ]
+        self.assertEqual(items[0], "Start of run")
+        self.assertEqual(len(items), 3)  # start + 2 rounds
+        self.assertIn("Round 1", items[1])
+        self.assertIn("Round 2", items[2])
+        self.assertTrue(tab.goto_combo.isEnabled())
+
+    def test_selecting_round_centres_on_imager_injection(self):
+        """Round N lands on its imager INJECTION (fluid) / imaging prep (img),
+        NOT the previous round's trailing wash."""
+        tab = self._tab()
+        self.assertEqual(tab.goto_combo.itemData(2), 1)  # "Round 2"
+        tab.goto_combo.setCurrentIndex(2)
+        tab._on_goto_selected(2)
+        # Round 2's imager injection is fluid[3] (the inject before
+        # "done flushing img-1"), NOT fluid[1] (the wash after round 1).
+        self.assertEqual(tab.step_lists["fluid"].currentRow(), 3)
+        self.assertEqual(tab.step_lists["img"].currentRow(), 2)
+
+    def test_round_1_initial_imager_stays_at_run_top(self):
+        """Round 1 with a pre-loaded initial imager has no injection before
+        imaging, so fluid stays at the run start (step 0)."""
+        tab = self._tab()
+        tab.goto_combo.setCurrentIndex(1)  # "Round 1"
+        tab._on_goto_selected(1)
+        self.assertEqual(tab.step_lists["fluid"].currentRow(), 0)
+        self.assertEqual(tab.step_lists["img"].currentRow(), 0)
+
+    def test_goto_updates_the_parameter_box(self):
+        """Jumping via the dropdown refreshes the param box (the list signals
+        are blocked, so it must be refreshed explicitly)."""
+        tab = self._tab()
+        tab.goto_combo.setCurrentIndex(2)  # "Round 2"
+        tab._on_goto_selected(2)
+        # Anchored on the img round-2 acquire (row 2).
+        self.assertEqual(tab._current_sys, "img")
+        self.assertEqual(tab._current_row, 2)
+        self.assertIn("Imaging", tab.step_param_label.text())
+        self.assertGreater(tab.step_table.rowCount(), 0)
+
+    def test_clicking_already_current_row_updates_param_box(self):
+        """Clicking a row that is already current in another list still
+        switches the param box to it (itemClicked, not currentRowChanged)."""
+        tab = self._tab()
+        # Select fluid row 3 -> cross-highlight positions img at its
+        # concurrent row; the param box shows fluid.
+        tab._on_step_selected("fluid", 3)
+        self.assertEqual(tab._current_sys, "fluid")
+        # Now the operator clicks img's currently-selected row: itemClicked
+        # fires even though img's current row did not change, so the box must
+        # switch to img.
+        img = tab.step_lists["img"]
+        row = max(img.currentRow(), 0)
+        tab._on_step_selected("img", row)
+        self.assertEqual(tab._current_sys, "img")
+        self.assertEqual(tab._current_row, row)
+        self.assertIn("Imaging", tab.step_param_label.text())
+
+    def test_combo_disabled_without_rounds(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+
+        svc = MagicMock(name="service")
+        svc.state = ExperimentState.LOADED
+        svc.experiment_design = {}
+        svc.protocol = {
+            "fluid": {"protocol_entries": []},
+            "img": {"protocol_entries": []},
+            "illu": {"protocol_entries": []},
+        }
+        tab = ExperimentTab(svc, MagicMock(name="bridge"))
+        tab._populate_steps()
+        self.assertEqual(tab.goto_combo.count(), 1)  # just "Start of run"
+        self.assertFalse(tab.goto_combo.isEnabled())
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestRunErrorSurfacing(unittest.TestCase):
+    """A run aborted on a step error surfaces loudly + non-blocking."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_errored_finish_aborts_and_shows_error(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+
+        svc = MagicMock(name="service")
+        svc.state = ExperimentState.RUNNING
+        # The service centralizes the terminal decision; a fatal error ->
+        # ABORTED. The tab only adds the loud surfacing.
+        svc.finalize_if_done.return_value = ExperimentState.ABORTED
+        svc.error_message.return_value = "ibidi valve write timeout"
+        tab = ExperimentTab(svc, MagicMock(name="bridge"))
+        tab._check_finished()  # must NOT block (no modal dialog)
+        svc.finalize_if_done.assert_called_once()
+        self.assertIn("aborted", tab.state_label.text().lower())
+        self.assertIn("ibidi valve write timeout", tab.log_view.toPlainText())
+
+    def test_clean_finish_still_ends_normally(self):
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+
+        svc = MagicMock(name="service")
+        svc.state = ExperimentState.RUNNING
+        # A clean completion -> FINISHED; the tab must not paint the error
+        # label or log an abort.
+        svc.finalize_if_done.return_value = ExperimentState.FINISHED
+        tab = ExperimentTab(svc, MagicMock(name="bridge"))
+        tab._check_finished()
+        svc.finalize_if_done.assert_called_once()
+        self.assertNotIn("aborted", tab.state_label.text().lower())
+
+
+class TestDoctorTab(unittest.TestCase):
+    """The Doctor tab renders DiagnosticsService results grouped + coloured."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    class _Dev:
+        def get_status(self):
+            return "ok"
+
+    class _Fluid:
+        multiplexer = None
+        valve_a = {}
+
+        def __init__(self):
+            self.pump_a = TestDoctorTab._Dev()
+            self.pump_out = TestDoctorTab._Dev()
+
+    class _Sys:
+        def __init__(self, fluid):
+            self.fluid_system = fluid
+            self.imaging_system = None
+            self.illumination_system = None
+
+        def connection_states(self):
+            return {
+                "fluid": self.fluid_system is not None,
+                "imaging": False,
+                "illumination": False,
+            }
+
+        def setup_name(self):
+            return "Emulator"
+
+        def is_emulated(self):
+            return True
+
+        def laser_options(self):
+            return []
+
+    def test_run_populates_tree_and_summary(self):
+        import os
+        from unittest.mock import patch
+        from PycroFlow.gui.widgets import worker
+        from PycroFlow.gui.tabs.doctor_tab import DoctorTab
+
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("PAINT_REGISTRY_URL", "PAINT_REGISTRY_TOKEN")
+        }
+        worker.set_synchronous(True)
+        try:
+            with patch.dict(os.environ, env, clear=True):
+                tab = DoctorTab(self._Sys(self._Fluid()), None)
+                tab.run_diagnostics()
+        finally:
+            worker.set_synchronous(False)
+
+        # Category parents with child rows, and a counted summary.
+        self.assertGreater(tab.tree.topLevelItemCount(), 0)
+        total_children = sum(
+            tab.tree.topLevelItem(i).childCount()
+            for i in range(tab.tree.topLevelItemCount())
+        )
+        self.assertGreater(total_children, 0)
+        self.assertIn("ok", tab.summary_label.text())
+        self.assertTrue(tab.run_btn.isEnabled())
+
+    def test_refresh_is_noop(self):
+        from PycroFlow.gui.tabs.doctor_tab import DoctorTab
+
+        tab = DoctorTab(self._Sys(None), None)
+        tab.refresh()  # must not raise or trigger I/O

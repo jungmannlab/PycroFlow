@@ -140,6 +140,35 @@ class LegacyArchitectureTest(unittest.TestCase):
         self.la.execute_protocol_entry(0)
         self.assertGreater(len(self.fake.command_log), before)
 
+    def test_assign_protocol_sums_totals_and_resets_used(self):
+        # entry 0 injects 10 µl from reservoir 0 (see INJECT_PROTOCOL).
+        self.assertEqual(self.la.reservoir_totals.get(0), 10)
+        self.assertEqual(self.la.reservoir_used, {})
+
+    def test_inject_accumulates_used_volume(self):
+        self.la.parameters["mode"] = "tubing_ignore"
+        self.la.execute_protocol_entry(0)
+        # reservoir 0 injected 10 µl -> tracked as used.
+        self.assertEqual(self.la.reservoir_used.get(0), 10)
+        # A second execution accumulates.
+        self.la.execute_protocol_entry(0)
+        self.assertEqual(self.la.reservoir_used.get(0), 20)
+
+    def test_assign_protocol_sums_extraction_waste_total(self):
+        # Two 10 µl injects at extractionfactor 2 -> 40 µl planned to waste;
+        # flush_waste has no protocol basis, so it is not pre-seeded.
+        self.assertEqual(self.la.waste_totals.get("waste"), 40.0)
+        self.assertNotIn("flush_waste", self.la.waste_totals)
+        self.assertEqual(self.la.waste_used, {})
+
+    def test_inject_accumulates_extraction_waste(self):
+        self.la.parameters["mode"] = "tubing_ignore"
+        self.la.execute_protocol_entry(0)
+        # Every inject sends extractionfactor * volume (2 * 10) to the waste.
+        self.assertEqual(self.la.waste_used.get("waste"), 20.0)
+        self.la.execute_protocol_entry(0)
+        self.assertEqual(self.la.waste_used.get("waste"), 40.0)
+
     def test_execute_protocol_entry_tubing_stack_inject(self):
         self.la.parameters["mode"] = "tubing_stack"
         before = len(self.fake.command_log)
@@ -184,6 +213,26 @@ class LegacyArchitectureTest(unittest.TestCase):
         before = len(self.fake.command_log)
         self.la._flush(flushfactor=1)
         self.assertGreater(len(self.fake.command_log), before)
+
+    def test_pump_ignores_dispense_res_when_dispensing_out(self):
+        # Routing to a reservoir drives the pump valve to its input side, so a
+        # dispense_res is meaningful only when dispensing to that same input
+        # side. Dispensing 'out' must ignore dispense_res (else it would
+        # clobber the requested 'out' back to 'in' -- the ibidi bug report).
+        routed = []
+        self.la._set_valves = lambda rid: routed.append(rid)
+        self.la._pump(
+            self.la.pump_a,
+            10,
+            pickup_dir="in",
+            dispense_dir="out",
+            pickup_res=1,
+            dispense_res=0,
+        )
+        # Pickup ('in') routes reservoir 1; dispense ('out') ignores res 0,
+        # so the reservoir routing can't clobber the requested 'out' valve.
+        self.assertIn(1, routed)
+        self.assertNotIn(0, routed)
 
     # --- lifecycle -------------------------------------------------------
 

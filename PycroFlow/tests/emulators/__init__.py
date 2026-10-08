@@ -38,6 +38,11 @@ from PycroFlow.tests.emulators.arduino_serial import (
     FakeArduinoSerial,
     connect_interface,
 )
+from PycroFlow.tests.emulators.ibidi_serial import (
+    FakeIbidiSerial,
+    patch_ibidi_serial,
+    connect_multiplexer,
+)
 from PycroFlow.tests.emulators.subsystems import (
     EmulatedFluidSystem,
     EmulatedImagingSystem,
@@ -54,6 +59,9 @@ __all__ = [
     "make_fake_bus",
     "FakeArduinoSerial",
     "connect_interface",
+    "FakeIbidiSerial",
+    "patch_ibidi_serial",
+    "connect_multiplexer",
     "EmulatedFluidSystem",
     "EmulatedImagingSystem",
     "EmulatedIlluminationSystem",

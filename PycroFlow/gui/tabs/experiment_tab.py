@@ -12,6 +12,7 @@ from.
 """
 
 import ast
+import re
 import time
 
 from PyQt6.QtCore import Qt, QTimer
@@ -24,6 +25,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QLabel,
     QListWidget,
+    QComboBox,
     QPlainTextEdit,
     QFileDialog,
     QGroupBox,
@@ -42,6 +44,7 @@ from PycroFlow.protocols.timing import (
     estimate_remaining,
     format_duration,
 )
+from PycroFlow.protocols.describe import action_label
 
 # The subsystems, in display order.
 _SYSTEMS = ("fluid", "img", "illu")
@@ -136,6 +139,10 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # Human-readable description of each round (one per imaging acquire),
         # used to annotate the "Round k/N" status line.
         self._round_names = []
+        # {reservoir_id: name} from the loaded design, to name injected
+        # reservoirs in the live action readout ({} when a bare Run Sequence
+        # was loaded without a design).
+        self._reservoir_names = {}
         # Per-step logical "time" (longest-path level over the signal/wait
         # happens-before graph), used to correlate concurrent steps across
         # systems. {system: [level per entry]}.
@@ -244,6 +251,15 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.center_btn = QPushButton("Center on current step")
         self.center_btn.clicked.connect(self._center_on_current)
         steps_head.addWidget(self.center_btn)
+        # Jump the three lists to the start of a major step (a round). The
+        # combo is repopulated per protocol with one entry per exchange round
+        # (and "Start of run"); selecting one centres all three lists on that
+        # round's first entry in each subsystem.
+        steps_head.addWidget(QLabel("Go to:"))
+        self.goto_combo = QComboBox()
+        self.goto_combo.setMinimumWidth(220)
+        self.goto_combo.activated.connect(self._on_goto_selected)
+        steps_head.addWidget(self.goto_combo)
         steps_head.addWidget(
             QLabel(
                 "Click a step to highlight the concurrent step in the other "
@@ -314,8 +330,18 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._bridge.state_changed.connect(self._on_state_changed)
         self._bridge.log_message.connect(self._on_log)
         for system, lst in self.step_lists.items():
+            # currentRowChanged covers keyboard navigation; itemClicked also
+            # fires when the user clicks a row that is ALREADY current in that
+            # list (e.g. clicking back and forth between the systems), which
+            # currentRowChanged does not — both route to the same handler so
+            # the parameter box always follows the last interaction.
             lst.currentRowChanged.connect(
                 lambda row, s=system: self._on_step_selected(s, row)
+            )
+            lst.itemClicked.connect(
+                lambda item, s=system, lw=lst: self._on_step_selected(
+                    s, lw.row(item)
+                )
             )
         self.apply_btn.clicked.connect(self._on_apply)
         self._poll_timer.timeout.connect(self._poll_progress)
@@ -385,9 +411,37 @@ class ExperimentTab(YamlDropMixin, QWidget):
 
     # --- bridge-driven UI updates (run on the GUI thread)
 
+    def _img_positions(self):
+        """MM position-list factor for the duration estimates (1 offline).
+
+        The count lives in MM at runtime, so it is only known once the
+        imaging system is connected — estimates computed at protocol-load
+        time are refreshed when the run starts (imaging is connected then).
+        """
+        system = getattr(self._service, "imaging_system", None)
+        try:
+            return getattr(system, "position_count", lambda: 1)()
+        except Exception:
+            return 1
+
+    def _refresh_durations(self, protocol=None):
+        protocol = protocol if protocol is not None else self._service.protocol
+        positions = self._img_positions()
+        self._durations = estimate_durations(protocol, img_positions=positions)
+        self._total_duration = estimate_total_duration(
+            protocol, img_positions=positions
+        )
+
     def _on_state_changed(self, old, new):
         self.state_label.setText(new.value)
+        # Clear any red "aborted — step error" styling from a prior run.
+        self.state_label.setStyleSheet("")
         self._refresh_controls(new)
+        if new is ExperimentState.ORCHESTRATING:
+            # Imaging is connected by now: fold the MM position-list count
+            # into the ETA/remaining estimates (use_positions runs).
+            self._refresh_durations()
+            self._update_total_estimate_label()
         # Repopulate the step lists whenever a protocol becomes loaded,
         # regardless of how it was loaded (toolbar, drag&drop, programmatic),
         # so the view always reflects the active protocol. Clearing it
@@ -441,10 +495,16 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._round_names = [
             self._acquire_label(e)
             for e in self._entries.get("img", [])
-            if isinstance(e, dict) and e.get("$type") == "acquire"
+            if isinstance(e, dict)
+            and e.get("$type") == "acquire"
+            and not self._is_dark(e)
         ]
-        self._durations = estimate_durations(protocol)
-        self._total_duration = estimate_total_duration(protocol)
+        design = self._service.experiment_design or {}
+        self._reservoir_names = (
+            (design.get("fluid") or {}).get("settings") or {}
+        ).get("reservoir_names") or {}
+        self._populate_goto_combo()
+        self._refresh_durations(protocol)
         self._overall_sw.reset()
         self._round_sw.reset()
         self._round_index_seen = -1
@@ -585,17 +645,224 @@ class ExperimentTab(YamlDropMixin, QWidget):
             cur = min(max(cur, 0), lst.count() - 1)
             lst.scrollToItem(lst.item(cur), _CENTER)
 
-    @staticmethod
-    def _is_round_marker(entry):
-        """Whether an entry marks the end of a round for its subsystem.
+    # --- major-step (round) navigation
 
-        Each PycroFlow round is one imaging acquisition; subsystems sync on it.
-        So a round closes at an ``acquire`` (imaging) or at the
-        ``wait for signal`` on the imaging subsystem (fluid/illumination wait
-        for imaging to finish before the next round). Both occur exactly once
-        per round, giving a consistent round count across subsystems.
+    def _populate_goto_combo(self):
+        """Fill the Go-to combo with one entry per round + "Start of run".
+
+        Each item's data is the 0-based round index (``-1`` for the start of
+        the run), which :meth:`_round_start_indices` maps to the first entry
+        of that round in each subsystem.
+        """
+        combo = self.goto_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Start of run", -1)
+        for r, name in enumerate(self._round_names):
+            label = "Round {}{}".format(
+                r + 1, ": {}".format(name) if name else ""
+            )
+            combo.addItem(label, r)
+        combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+        combo.setEnabled(combo.count() > 1)
+
+    @staticmethod
+    def _nondark_round_tag(entry):
+        """The ``img-<N>`` round tag of a non-dark imaging acquire, or None.
+
+        Parsed from the acquire ``message`` (``'round_img-1-EGFR'`` ->
+        ``'img-1'``); the per-round signal values embed the same tag
+        (``'done flushing img-1'`` / ``'done setting power round img-1'``), so
+        it correlates the round across all three subsystems.
         """
         if not isinstance(entry, dict):
+            return None
+        m = re.search(r"(img-\d+)", str(entry.get("message", "")))
+        return m.group(1) if m else None
+
+    @staticmethod
+    def _block_start(entries, idx):
+        """Walk back from ``idx`` over contiguous ``wait for signal`` entries.
+
+        Lands on the top of the step's prep block (its power/flush waits), so
+        centring shows the whole round-start, not just the acquire line.
+        """
+        i = idx
+        while (
+            i > 0
+            and isinstance(entries[i - 1], dict)
+            and entries[i - 1].get("$type") == "wait for signal"
+        ):
+            i -= 1
+        return i
+
+    def _goto_targets(self, round_index):
+        """Per-subsystem index to centre for the selected major step.
+
+        ``round_index < 0`` is the start of the run (0 everywhere). Otherwise
+        each list lands on the START of that round's own work — the imager
+        INJECTION for fluid, the imaging prep/acquire for img, the power-set
+        for illu — rather than the previous round's trailing wash (which the
+        round-block boundary lumps in first). Falls back to the round-block
+        start when a tag can't be correlated, and clamps to the list end.
+        """
+        out = {s: 0 for s in _SYSTEMS}
+        if round_index < 0:
+            return out
+        img_entries = self._entries.get("img", [])
+        nondark = [
+            i
+            for i, e in enumerate(img_entries)
+            if isinstance(e, dict)
+            and e.get("$type") == "acquire"
+            and not self._is_dark(e)
+        ]
+        if round_index >= len(nondark):
+            return {
+                s: max(len(self._entries.get(s, [])) - 1, 0) for s in _SYSTEMS
+            }
+        acq_idx = nondark[round_index]
+        tag = self._nondark_round_tag(img_entries[acq_idx])
+
+        # img: the top of this acquire's prep block.
+        out["img"] = self._block_start(img_entries, acq_idx)
+
+        if tag is None:  # unparseable — fall back to the round-block starts.
+            for system in ("fluid", "illu"):
+                rounds = self._round_of.get(system) or []
+                idx = next(
+                    (i for i, r in enumerate(rounds) if r == round_index),
+                    None,
+                )
+                out[system] = idx if idx is not None else 0
+            return out
+
+        # fluid: the imager injection — the inject just before this round's
+        # "done flushing <tag>" signal, PROVIDED that signal precedes the
+        # round's "done imaging <tag>" wait (i.e. the imager is injected
+        # before imaging). For a pre-loaded initial imager the flushing is the
+        # post-imaging wash, so there is no pre-injection -> stay at 0.
+        out["fluid"] = self._fluid_injection_index(tag)
+        # illu: the power-set that precedes this round's "done setting power"
+        # signal.
+        out["illu"] = self._illu_power_index(tag)
+        return out
+
+    def _fluid_injection_index(self, tag):
+        fluid = self._entries.get("fluid", [])
+        flush_i = self._signal_index(fluid, "done flushing {}".format(tag))
+        wait_i = self._wait_index(fluid, "done imaging round {}".format(tag))
+        if flush_i is None or (wait_i is not None and wait_i < flush_i):
+            return 0  # pre-loaded initial imager (or no match): run start
+        # Back up over the contiguous inject(s) feeding this flush signal.
+        i = flush_i
+        while (
+            i > 0
+            and isinstance(fluid[i - 1], dict)
+            and fluid[i - 1].get("$type") == "inject"
+        ):
+            i -= 1
+        return i
+
+    def _illu_power_index(self, tag):
+        illu = self._entries.get("illu", [])
+        sig_i = self._signal_index(
+            illu, "done setting power round {}".format(tag)
+        )
+        if sig_i is None:
+            return 0
+        i = sig_i
+        while (
+            i > 0
+            and isinstance(illu[i - 1], dict)
+            and illu[i - 1].get("$type") in ("set power", "set shutter")
+        ):
+            i -= 1
+        return i
+
+    @staticmethod
+    def _signal_index(entries, value):
+        for i, e in enumerate(entries):
+            if (
+                isinstance(e, dict)
+                and e.get("$type") == "signal"
+                and e.get("value") == value
+            ):
+                return i
+        return None
+
+    @staticmethod
+    def _wait_index(entries, value):
+        for i, e in enumerate(entries):
+            if (
+                isinstance(e, dict)
+                and e.get("$type") == "wait for signal"
+                and e.get("value") == value
+            ):
+                return i
+        return None
+
+    def _on_goto_selected(self, _index):
+        """Centre all three lists on the start of the selected round.
+
+        Each list is selected + centred on the START of that round's own work
+        (see :meth:`_goto_targets`). The per-list ``currentRowChanged``
+        cross-highlight (which would otherwise re-select a *concurrent* step in
+        the other lists and clobber the targets) is blocked for the duration.
+        """
+        round_index = self.goto_combo.currentData()
+        if round_index is None:
+            return
+        targets = self._goto_targets(round_index)
+        for system in _SYSTEMS:
+            lst = self.step_lists[system]
+            if not lst.count():
+                continue
+            row = min(max(targets.get(system, 0), 0), lst.count() - 1)
+            lst.blockSignals(True)
+            lst.setCurrentRow(row)
+            lst.blockSignals(False)
+            lst.scrollToItem(lst.item(row), _CENTER)
+        # The list signals were blocked above, so refresh the parameter box
+        # explicitly — anchor on the round-defining imaging step (its own
+        # list is already positioned; no re-highlight).
+        for anchor in ("img", "fluid", "illu"):
+            lst = self.step_lists[anchor]
+            if lst.count() and lst.currentRow() >= 0:
+                self._show_step_params(anchor, lst.currentRow())
+                break
+
+    @staticmethod
+    def _is_dark(entry):
+        """Whether an entry belongs to a dark-frame acquisition.
+
+        Dark frames are recorded per imager for background/bleaching and are
+        *not* a separate exchange round: the builder tags them with ``dark`` in
+        the acquire ``name``/``message`` (e.g. ``'EGFR (dark frames)'`` /
+        ``'round_img-dark-0-EGFR'``) and in the fluid/illu ``wait for signal``
+        value (``'done imaging round dark-0'``). Grouping them with their imager
+        gives one round per exchange imager.
+        """
+        if not isinstance(entry, dict):
+            return False
+        text = " ".join(
+            str(entry.get(k, "")) for k in ("name", "message", "value")
+        ).lower()
+        return "dark" in text
+
+    @classmethod
+    def _is_round_marker(cls, entry):
+        """Whether an entry marks the end of a round for its subsystem.
+
+        Each PycroFlow round is one *exchange imager*; subsystems sync on its
+        imaging acquisition. So a round closes at an ``acquire`` (imaging) or at
+        the ``wait for signal`` on the imaging subsystem (fluid/illumination
+        wait for imaging to finish before the next round) -- but a dark-frame
+        acquisition (and its fluid/illu wait) is folded into the imager's round,
+        not counted separately.
+        """
+        if not isinstance(entry, dict) or cls._is_dark(entry):
             return False
         type_ = entry.get("$type")
         if type_ == "acquire":
@@ -672,11 +939,21 @@ class ExperimentTab(YamlDropMixin, QWidget):
         run controls and unlocks the hardware tabs via the usual state-change
         handlers.
         """
-        if (
-            self._service.state is ExperimentState.RUNNING
-            and self._service.is_finished()
-        ):
-            self._service.end()
+        # A run can reach a terminal state two ways: completing all steps, or a
+        # handler aborting it on an unrecoverable step error (e.g. the ibidi
+        # valve failing after its retries). The service centralizes that
+        # decision and drives the transition (through abort()/end(), notifying
+        # observers); here we only add the loud error surfacing. It is
+        # NON-blocking — this runs on the progress-poll timer, so a modal
+        # dialog would freeze the event loop.
+        terminal = self._service.finalize_if_done()
+        if terminal is ExperimentState.ABORTED:
+            msg = self._service.error_message() or "unknown error"
+            self._on_log("RUN ABORTED — step error: {}".format(msg))
+            self.state_label.setText("aborted — step error (see log)")
+            self.state_label.setStyleSheet(
+                "color: #d9534f; font-weight: bold;"
+            )
 
     def _set_substep_visible(self, system, visible):
         for w in self.substep_bars[system]:
@@ -708,10 +985,14 @@ class ExperimentTab(YamlDropMixin, QWidget):
         return "{} {:.0f}/{:.0f} s".format(name, cur, tot)
 
     def _step_name(self, system, cur):
-        """``$type`` of the step a subsystem is currently on (or 'done')."""
+        """Human-readable action a subsystem is currently on (or 'done').
+
+        E.g. ``'inject Imager 1'`` / ``'acquire EGFR'`` / ``'wait'`` instead of
+        the raw ``$type``, so the status line reads as what is happening now.
+        """
         entries = self._entries.get(system, [])
         if 0 <= cur < len(entries) and isinstance(entries[cur], dict):
-            return entries[cur].get("$type", "?")
+            return action_label(entries[cur], self._reservoir_names)
         if entries and cur >= len(entries):
             return "done"
         return "—"
@@ -736,8 +1017,9 @@ class ExperimentTab(YamlDropMixin, QWidget):
     def _round_counts(self, img_prog):
         """(completed_rounds, total_rounds) from the imaging acquisitions.
 
-        Each ``acquire`` step is one round; the number already passed by the
-        imaging handler gives the completed-round count.
+        One round per *exchange imager*: dark-frame acquisitions are folded into
+        their imager's round, not counted separately. ``done_rounds`` is the
+        number of imager rounds fully behind the one currently imaging.
         """
         protocol = self._service.protocol or {}
         img = protocol.get("img", {})
@@ -747,13 +1029,18 @@ class ExperimentTab(YamlDropMixin, QWidget):
         acquire_idx = [
             i
             for i, e in enumerate(entries)
-            if isinstance(e, dict) and e.get("$type") == "acquire"
+            if isinstance(e, dict)
+            and e.get("$type") == "acquire"
+            and not self._is_dark(e)
         ]
         total_rounds = len(acquire_idx)
         if not total_rounds:
             return 0, 0
         cur = img_prog[0] if img_prog else 0
-        done_rounds = sum(1 for i in acquire_idx if i < cur)
+        # The imager group cur is in = number of imager acquires reached
+        # (<= cur); the rounds fully behind it are that minus one.
+        started = sum(1 for i in acquire_idx if i <= cur)
+        done_rounds = max(0, started - 1)
         return done_rounds, total_rounds
 
     def _update_current_round_bar(self, prog, done_rounds, total_rounds):
@@ -819,6 +1106,11 @@ class ExperimentTab(YamlDropMixin, QWidget):
         if row < 0:
             # Deselection — e.g. from clearing another list, or repopulating.
             return
+        self._highlight_concurrent(system, row)
+        self._show_step_params(system, row)
+
+    def _highlight_concurrent(self, system, row):
+        """Select + centre the concurrent step in the OTHER two lists."""
         corr = self._concurrent_indices(system, row)
         for other, lst in self.step_lists.items():
             if other == system:
@@ -832,11 +1124,20 @@ class ExperimentTab(YamlDropMixin, QWidget):
                 lst.setCurrentRow(-1)
             lst.blockSignals(False)
 
+    def _show_step_params(self, system, row):
+        """Populate the editable parameter box from ``system``'s step ``row``.
+
+        Separate from :meth:`_highlight_concurrent` so callers that have
+        already positioned the lists (the Go-to selector, which blocks the
+        list signals) can refresh the box without re-triggering the
+        cross-highlight.
+        """
         self._current_sys = system
         self._current_row = row
         self.step_table.setRowCount(0)
         entries = self._entries.get(system, [])
-        if row >= len(entries):
+        if row < 0 or row >= len(entries):
+            self.step_param_label.setText("Select a step above to view it.")
             self.apply_btn.setEnabled(False)
             return
         entry = entries[row]

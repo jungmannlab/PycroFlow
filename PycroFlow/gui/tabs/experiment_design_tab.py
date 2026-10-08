@@ -9,13 +9,15 @@ target / RESI rounds), and **Translate** it into the Run Sequence tab via
 import os
 
 import yaml
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QToolButton,
+    QTextEdit,
     QScrollArea,
     QFileDialog,
     QMessageBox,
@@ -70,13 +72,34 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             self.translate_btn,
         ):
             controls.addWidget(b)
-        # Estimated run time, recomputed live from the current (unsaved)
-        # design whenever a field changes — see _connect_estimate_signals.
+        # Estimated run time + total reagent volume, recomputed live from the
+        # current (unsaved) design whenever a field changes — see
+        # _connect_estimate_signals.
         self.estimate_label = QLabel("")
         self.estimate_label.setStyleSheet("color: gray;")
         controls.addWidget(self.estimate_label)
         controls.addStretch()
         layout.addLayout(controls)
+
+        # Foldable preview of the compiled sequence of events + per-reservoir
+        # volumes. Collapsed by default so it costs no space until wanted.
+        self.preview_toggle = QToolButton()
+        self.preview_toggle.setText("Sequence & volumes")
+        self.preview_toggle.setCheckable(True)
+        self.preview_toggle.setChecked(False)
+        self.preview_toggle.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.preview_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.preview_toggle.setStyleSheet("QToolButton { border: none; }")
+        self.preview_toggle.toggled.connect(self._on_preview_toggled)
+        layout.addWidget(self.preview_toggle)
+
+        self.preview_text = QTextEdit()
+        self.preview_text.setReadOnly(True)
+        self.preview_text.setVisible(False)
+        self.preview_text.setMaximumHeight(220)
+        layout.addWidget(self.preview_text)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -122,6 +145,25 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             "reservoir_ids": self._call_provider(self._reservoir_ids_provider),
             "lasers": self._call_provider(self._laser_options_provider),
         }
+
+    def refresh_setup_options(self):
+        """Re-publish the setup-derived dropdown options into the live form.
+
+        ``reservoir_ids`` and ``lasers`` come from the loaded microscope
+        setup, which can change *after* a design was loaded (picking or
+        switching a setup in the toolbar). Publishing them into the form
+        context refreshes the subscribed dropdowns in place, so they never
+        show a previous setup's options — or none at all.
+        """
+        if self._form is None:
+            return
+        ctx = self._form.context
+        ctx.set_options(
+            "reservoir_ids", self._call_provider(self._reservoir_ids_provider)
+        )
+        ctx.set_options(
+            "lasers", self._call_provider(self._laser_options_provider)
+        )
 
     @staticmethod
     def _call_provider(provider):
@@ -261,8 +303,14 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             if hooked:
                 w.setProperty("_estimate_hooked", True)
 
+    def _on_preview_toggled(self, checked):
+        self.preview_toggle.setArrowType(
+            Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
+        )
+        self.preview_text.setVisible(checked)
+
     def _recompute_estimate(self):
-        """Compile the current design and show its estimated run time.
+        """Compile the current design and show run time + volumes + preview.
 
         Builds the Run Sequence from the in-editor design without committing
         it (so it reflects unsaved edits). While the design is incomplete or
@@ -272,7 +320,9 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
         from PycroFlow.protocols import ProtocolBuilder
         from PycroFlow.protocols.timing import (
             estimate_total_duration,
+            estimate_volumes,
             format_duration,
+            format_volume,
         )
         from PycroFlow.schemas import validate_experiment_design
 
@@ -284,9 +334,56 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
             ).model_dump(by_alias=True)
             protocol = ProtocolBuilder().build_protocol(design)
             total = estimate_total_duration(protocol)
+            volumes = estimate_volumes(protocol)
+            img_settings = (design.get("img") or {}).get("settings") or {}
+            per_position = bool(img_settings.get("use_positions"))
         except Exception:
-            self.estimate_label.setText("Estimated duration: — (incomplete)")
+            self.estimate_label.setText("Estimated: — (design incomplete)")
+            self.preview_text.setPlainText(
+                "The sequence preview appears once the design compiles."
+            )
             return
+        # With use_positions the acquire time multiplies by MM's position-
+        # list length, which only MM knows at runtime — say so instead of
+        # showing a silently-wrong single-position number.
         self.estimate_label.setText(
-            "Estimated duration: ~{}".format(format_duration(total))
+            "Estimated: ~{}{}  ·  {} reagents".format(
+                format_duration(total),
+                " × MM positions (imaging)" if per_position else "",
+                format_volume(volumes["total_injected"]),
+            )
         )
+        names = ((design.get("fluid") or {}).get("settings") or {}).get(
+            "reservoir_names"
+        ) or {}
+        self.preview_text.setPlainText(
+            self._format_preview(protocol, volumes, names)
+        )
+
+    @staticmethod
+    def _format_preview(protocol, volumes, reservoir_names):
+        """Build the folded preview text: volumes then the event sequence."""
+        from PycroFlow.protocols.timing import format_volume
+        from PycroFlow.protocols.describe import describe_protocol
+
+        lines = ["Volumes required:"]
+        per = volumes["per_reservoir"]
+        for rid in sorted(per, key=lambda r: (r is None, r)):
+            name = (
+                reservoir_names.get(rid)
+                or reservoir_names.get(str(rid))
+                or "reservoir {}".format(rid)
+            )
+            lines.append("  {}: {}".format(name, format_volume(per[rid])))
+        lines.append(
+            "  Total into sample: {}   ·   Waste extracted: {}".format(
+                format_volume(volumes["total_injected"]),
+                format_volume(volumes["total_waste"]),
+            )
+        )
+        lines.append("")
+        lines.append("Sequence of events:")
+        steps = describe_protocol(protocol, reservoir_names)
+        for i, step in enumerate(steps, 1):
+            lines.append("  {:>2}. {}".format(i, step))
+        return "\n".join(lines)
