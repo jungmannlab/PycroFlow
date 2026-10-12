@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Python baseline raised 3.10 → 3.11 (`requires-python`, black `target-version`,
+  classifier, CI matrices); `picassosr` pin moved from the B7 git-pin bridge to
+  `>=0.12.0a3` (picasso 0.12 line, requires 3.11).
+
 ## [0.2.0] - 2026-09-30
 
 First deployable release of the live-analysis slice (C40 "release when useful").
