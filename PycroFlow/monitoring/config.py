@@ -27,6 +27,11 @@ from typing import Optional
 KNOWN_ROLES = ("reservoir", "pump", "sample")
 
 
+def _opt_float(value) -> Optional[float]:
+    """``float(value)`` or ``None`` when the key is absent/null."""
+    return None if value is None else float(value)
+
+
 @dataclass(frozen=True)
 class CameraConfig:
     """One monitoring camera.
@@ -43,12 +48,26 @@ class CameraConfig:
         frames), where it doubles as the panel's colour seed.
     width, height : int
         Capture resolution for this camera's panel, in pixels.
+    exposure : float or None
+        Instrument source only: ``cv2.CAP_PROP_EXPOSURE`` value (driver-specific;
+        e.g. ``-6`` for many DirectShow UVC cams). ``None`` leaves it to the
+        driver. Set this when a webcam opens but delivers black frames.
+    auto_exposure : float or None
+        Instrument source only: ``cv2.CAP_PROP_AUTO_EXPOSURE`` (on many DShow
+        drivers ``0.25`` = manual, ``0.75`` = auto). ``None`` leaves it alone.
+    fourcc : str or None
+        Instrument source only: force a pixel format, e.g. ``MJPG`` (some UVC
+        cams only deliver real frames / full resolution under MJPG). ``None``
+        keeps the driver default.
     """
 
     role: str
     device: object = 0
     width: int = 640
     height: int = 480
+    exposure: Optional[float] = None
+    auto_exposure: Optional[float] = None
+    fourcc: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +144,9 @@ class MonitoringConfig:
                     "device": c.device,
                     "width": c.width,
                     "height": c.height,
+                    "exposure": c.exposure,
+                    "auto_exposure": c.auto_exposure,
+                    "fourcc": c.fourcc,
                 }
                 for c in self.cameras
             ],
@@ -139,6 +161,11 @@ class MonitoringConfig:
                 device=c.get("device", i),
                 width=int(c.get("width", 640)),
                 height=int(c.get("height", 480)),
+                exposure=_opt_float(c.get("exposure")),
+                auto_exposure=_opt_float(c.get("auto_exposure")),
+                fourcc=(
+                    None if c.get("fourcc") is None else str(c.get("fourcc"))
+                ),
             )
             for i, c in enumerate(data.get("cameras", []))
         ]

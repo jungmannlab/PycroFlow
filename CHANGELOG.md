@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed / Changed
 
+- **Fluidics monitoring webcam no longer silently records a black clip.** On
+  the rig the webcam preview/clip came up dark while the OS camera tool worked.
+  The `backend: dshow` config was intact, but the capture committed to the first
+  backend that returned *any* frame -- including a valid-but-black one (wrong
+  device index / unset exposure / privacy shutter all yield all-zero frames that
+  passed the old "is there a frame?" warm-up).
+  - `InstrumentFrameSource` warm-up now requires a **non-black** frame (mean >
+    `_BLACK_MEAN`) before committing to a backend, and falls through to the next
+    candidate otherwise. If no backend yields a bright frame it still commits to
+    a black-but-live one (monitoring must never break a run) but logs a **loud,
+    actionable warning** pointing at `--probe` and the exposure knobs.
+  - New optional per-camera config keys **`exposure` / `auto_exposure` /
+    `fourcc`** (`monitoring.cameras[]`), applied to the capture before warm-up --
+    many UVC webcams (notably via DirectShow) open but stay black until exposure
+    is set manually. No-ops when unset, so existing rigs are unchanged.
+  - `--probe` now reports the **brightest** frame over the warm-up window (not
+    the first, which is often black), so it no longer mislabels a working camera.
+  - `Ibidi.yaml` documents the knobs + the `--probe` recovery step inline.
+  - Hermetic tests (fake `cv2`): black-aware warm-up, backend fall-through,
+    black-last-resort commit, exposure/fourcc application, config round-trip,
+    probe brightness.
 - **ibidi valve failures no longer silently hang a run; they retry, then
   abort loudly.** Root cause of a lost overnight run (diagnosed from the rig
   logs): the ibidi multiplexer's serial write intermittently times out

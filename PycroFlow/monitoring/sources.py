@@ -88,6 +88,42 @@ def _open_capture(cv2, device, flag):
         return None
 
 
+# A frame whose mean intensity is at or below this is treated as "black". A UVC
+# webcam opened on the wrong index, with no exposure, or behind a privacy
+# shutter yields valid-but-empty (all ~0) frames, which pass an "is there a
+# frame?" check yet are useless -- the exact symptom of a black monitoring clip.
+_BLACK_MEAN = 2.0
+
+
+def _is_black(frame, threshold: float = _BLACK_MEAN) -> bool:
+    """True if ``frame`` is missing or ~uniformly black (mean <= threshold)."""
+    return frame is None or float(frame.mean()) <= threshold
+
+
+def _apply_camera_settings(cv2, cap, camera) -> None:
+    """Apply resolution + optional FOURCC / exposure to an open capture.
+
+    ``fourcc`` (e.g. ``MJPG``), ``auto_exposure`` and ``exposure`` are optional
+    per-camera config keys -- some UVC webcams (notably via DirectShow) open but
+    deliver black frames until exposure is set manually. Each is a no-op when
+    the config leaves it ``None``, so behaviour is unchanged for existing rigs.
+    """
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera.width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera.height)
+    fourcc = getattr(camera, "fourcc", None)
+    if fourcc:
+        try:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*str(fourcc)))
+        except Exception:  # pragma: no cover - build/hw specific
+            logger.warning("monitoring: FOURCC {!r} not accepted", fourcc)
+    auto_exposure = getattr(camera, "auto_exposure", None)
+    if auto_exposure is not None:
+        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, float(auto_exposure))
+    exposure = getattr(camera, "exposure", None)
+    if exposure is not None:
+        cap.set(cv2.CAP_PROP_EXPOSURE, float(exposure))
+
+
 class FrameSource(abc.ABC):
     """One camera's frame source."""
 
@@ -203,6 +239,7 @@ class InstrumentFrameSource(FrameSource):
             ) from exc
         _quiet_cv2(cv2)
         tried = []
+        black_only = None  # first backend that opens + delivers only black
         for name, flag in _backend_candidates(cv2, self._backend):
             cap = _open_capture(cv2, self.camera.device, flag)
             if cap is None or not cap.isOpened():  # pragma: no cover - hw
@@ -210,20 +247,47 @@ class InstrumentFrameSource(FrameSource):
                     cap.release()
                 tried.append(name)
                 continue
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            _apply_camera_settings(cv2, cap, self.camera)
             # Warm up: MSMF/DShow often return black/empty for the first few
-            # reads while the pipeline spins up. Pull a few and check we get a
-            # real frame before committing to this backend.
-            got = self._warmup(cap)
-            logger.info(
-                "monitoring: camera {} opened via {} at {}x{} "
-                "(first frame: {})",
+            # reads while the pipeline spins up. Require a real (non-black)
+            # frame before committing -- a backend that opens but only yields
+            # black (wrong index / unset exposure) is NOT good enough, so fall
+            # through to the next backend.
+            got, bright = self._warmup(cap)
+            if bright:
+                logger.info(
+                    "monitoring: camera {} opened via {} at {}x{} "
+                    "(first frame: yes)",
+                    self.camera.role,
+                    name,
+                    int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or self.width,
+                    int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or self.height,
+                )
+                self._cap = cap
+                return
+            cap.release()
+            tried.append(name + ("(black)" if got else ""))
+            if got and black_only is None:
+                black_only = (name, flag)
+        # No backend delivered a bright frame. Monitoring must never break a run,
+        # so if a backend at least delivers (black) frames, commit to it with a
+        # loud, actionable warning rather than failing the run outright.
+        if black_only is not None:  # pragma: no cover - needs hardware
+            name, flag = black_only
+            cap = _open_capture(cv2, self.camera.device, flag)
+            _apply_camera_settings(cv2, cap, self.camera)
+            self._warmup(cap)
+            logger.warning(
+                "monitoring: camera {} (device {!r}) opens via {} but frames "
+                "are BLACK (mean~0). Recording proceeds but clips will be dark. "
+                "Likely a wrong device index, an unset exposure, or a privacy "
+                "shutter -- set monitoring.cameras[].device / exposure / "
+                "auto_exposure, and run  python -m "
+                "PycroFlow.monitoring.capture_service --probe  to find a live "
+                "(index, backend).",
                 self.camera.role,
+                self.camera.device,
                 name,
-                int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or self.width,
-                int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or self.height,
-                "yes" if got else "NONE -- check camera not in use / privacy",
             )
             self._cap = cap
             return
@@ -234,13 +298,22 @@ class InstrumentFrameSource(FrameSource):
         )
 
     @staticmethod
-    def _warmup(cap, attempts: int = 10) -> bool:  # pragma: no cover - hw
+    def _warmup(cap, attempts: int = 15):  # pragma: no cover - hw
+        """Pull up to ``attempts`` frames; return ``(got_frame, saw_bright)``.
+
+        ``saw_bright`` becomes True once a non-black frame arrives -- many UVC
+        cameras deliver a few black frames while the exposure pipeline spins up,
+        so a single black frame is not enough to accept (or reject) a backend.
+        """
+        got = False
         for _ in range(attempts):
             ok, frame = cap.read()
             if ok and frame is not None:
-                return True
+                got = True
+                if not _is_black(frame):
+                    return True, True
             time.sleep(0.05)
-        return False
+        return got, False
 
     def read(
         self,

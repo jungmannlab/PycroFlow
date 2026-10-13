@@ -357,11 +357,17 @@ illumination:
   backend: monet
   config: Mercury_nopf
 monitoring:
-  backend: dshow
+  backend: dshow          # DirectShow is the reliable Windows UVC backend
   fps: 5
   retention_days: 14
   cameras:
   - role: reservoir
-    device: 0
+    device: 0             # if the preview is black, this may be the wrong index
     width: 640
     height: 480
+    # If the camera opens but frames are black, diagnose + fix here:
+    #   python -m PycroFlow.monitoring.capture_service --probe
+    # then set the live (device, backend) and, if still dark, the exposure:
+    # exposure: -6          # cv2.CAP_PROP_EXPOSURE (driver-specific)
+    # auto_exposure: 0.25   # 0.25 = manual, 0.75 = auto (many DShow drivers)
+    # fourcc: MJPG          # some UVC cams only deliver real frames under MJPG

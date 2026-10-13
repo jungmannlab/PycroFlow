@@ -17,8 +17,10 @@ work order calls for:
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import glob
+import io
 import json
 import os
 import subprocess
@@ -26,6 +28,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -45,6 +48,8 @@ from PycroFlow.monitoring.registry_index import RegistryIndexWriter
 from PycroFlow.monitoring.sources import (
     EmulatedFrameSource,
     InstrumentFrameSource,
+    _apply_camera_settings,
+    _is_black,
     make_source,
 )
 from PycroFlow.monitoring.tiling import compose, plan_layout
@@ -739,6 +744,234 @@ class TestIsolationProof(unittest.TestCase):
             ctrl._emit({"cmd": "round_begin", "round_index": i})
         self.assertLess(time.monotonic() - t0, 2.0)
         self.assertLessEqual(ctrl._queue.qsize(), 256)
+
+
+def _black_frame():
+    return np.zeros((48, 64, 3), dtype=np.uint8)
+
+
+def _bright_frame():
+    return np.full((48, 64, 3), 200, dtype=np.uint8)
+
+
+class _FakeCap:
+    """A stand-in for ``cv2.VideoCapture`` driven by a scripted frame list."""
+
+    def __init__(self, frames, opened=True, w=64, h=48):
+        self._frames = list(frames)
+        self._opened = bool(opened)
+        self._i = 0
+        self.sets = []
+        self._w, self._h = w, h
+
+    def isOpened(self):
+        return self._opened
+
+    def read(self):
+        if self._i < len(self._frames):
+            f = self._frames[self._i]
+            self._i += 1
+        else:  # repeat the last frame once exhausted
+            f = self._frames[-1] if self._frames else None
+        return (f is not None, f)
+
+    def set(self, prop, val):
+        self.sets.append((prop, val))
+        return True
+
+    def get(self, prop):
+        if prop == _FakeCv2.CAP_PROP_FRAME_WIDTH:
+            return self._w
+        if prop == _FakeCv2.CAP_PROP_FRAME_HEIGHT:
+            return self._h
+        return 0
+
+    def release(self):
+        self._opened = False
+
+
+class _FakeCv2:
+    """Minimal ``cv2`` surface for the capture paths (no OpenCV needed)."""
+
+    CAP_ANY = 0
+    CAP_DSHOW = 700
+    CAP_MSMF = 1400
+    CAP_V4L2 = 200
+    CAP_AVFOUNDATION = 1200
+    CAP_PROP_FRAME_WIDTH = 3
+    CAP_PROP_FRAME_HEIGHT = 4
+    CAP_PROP_FOURCC = 6
+    CAP_PROP_AUTO_EXPOSURE = 21
+    CAP_PROP_EXPOSURE = 15
+
+    def __init__(self, by_flag):
+        self._by_flag = by_flag  # {flag: callable() -> _FakeCap}
+
+    def VideoCapture(self, device, flag=0):
+        factory = self._by_flag.get(flag)
+        if factory is None:
+            return _FakeCap([], opened=False)
+        return factory()
+
+    def VideoWriter_fourcc(self, *chars):
+        return 1
+
+
+class TestInstrumentCaptureHardening(unittest.TestCase):
+    """Black-frame-aware warm-up + exposure knobs (the dark-webcam fix)."""
+
+    def _use_fake_cv2(self, by_flag):
+        self.addCleanup(sys.modules.pop, "cv2", None)
+        sys.modules["cv2"] = _FakeCv2(by_flag)
+
+    def test_is_black(self):
+        self.assertTrue(_is_black(None))
+        self.assertTrue(_is_black(_black_frame()))
+        self.assertFalse(_is_black(_bright_frame()))
+
+    def test_warmup_accepts_bright_after_black_frames(self):
+        cap = _FakeCap([_black_frame(), _black_frame(), _bright_frame()])
+        with mock.patch("time.sleep", lambda *a, **k: None):
+            got, bright = InstrumentFrameSource._warmup(cap, attempts=5)
+        self.assertTrue(got)
+        self.assertTrue(bright)
+
+    def test_warmup_all_black_is_not_bright(self):
+        cap = _FakeCap([_black_frame()])
+        with mock.patch("time.sleep", lambda *a, **k: None):
+            got, bright = InstrumentFrameSource._warmup(cap, attempts=4)
+        self.assertTrue(got)
+        self.assertFalse(bright)
+
+    def test_apply_camera_settings_sets_exposure_and_fourcc(self):
+        cap = _FakeCap([])
+        cam = CameraConfig(
+            "reservoir",
+            0,
+            64,
+            48,
+            exposure=-6.0,
+            auto_exposure=0.25,
+            fourcc="MJPG",
+        )
+        _apply_camera_settings(_FakeCv2({}), cap, cam)
+        props = dict(cap.sets)
+        self.assertEqual(props[_FakeCv2.CAP_PROP_EXPOSURE], -6.0)
+        self.assertEqual(props[_FakeCv2.CAP_PROP_AUTO_EXPOSURE], 0.25)
+        self.assertIn(_FakeCv2.CAP_PROP_FOURCC, props)
+
+    def test_apply_camera_settings_noop_without_optional_keys(self):
+        cap = _FakeCap([])
+        _apply_camera_settings(_FakeCv2({}), cap, CameraConfig("x", 0, 64, 48))
+        props = [p for p, _ in cap.sets]
+        self.assertNotIn(_FakeCv2.CAP_PROP_EXPOSURE, props)
+        self.assertNotIn(_FakeCv2.CAP_PROP_AUTO_EXPOSURE, props)
+        self.assertNotIn(_FakeCv2.CAP_PROP_FOURCC, props)
+
+    def test_open_falls_through_black_backend_to_bright(self):
+        self._use_fake_cv2(
+            {
+                _FakeCv2.CAP_DSHOW: lambda: _FakeCap([_black_frame()]),
+                _FakeCv2.CAP_MSMF: lambda: _FakeCap(
+                    [_black_frame(), _bright_frame()]
+                ),
+            }
+        )
+        src = InstrumentFrameSource(CameraConfig("reservoir", 0, 64, 48))
+        with (
+            mock.patch.object(sys, "platform", "win32"),
+            mock.patch("time.sleep", lambda *a, **k: None),
+        ):
+            src.open()
+        self.assertIsNotNone(src._cap)
+        frame = src.read()
+        self.assertIsNotNone(frame)
+        self.assertGreater(float(frame.mean()), 100.0)  # the bright (MSMF) cam
+        src.close()
+
+    def test_open_commits_black_as_last_resort_without_raising(self):
+        self._use_fake_cv2(
+            {
+                _FakeCv2.CAP_DSHOW: lambda: _FakeCap([_black_frame()]),
+                _FakeCv2.CAP_MSMF: lambda: _FakeCap([_black_frame()]),
+                _FakeCv2.CAP_ANY: lambda: _FakeCap([_black_frame()]),
+            }
+        )
+        src = InstrumentFrameSource(CameraConfig("reservoir", 0, 64, 48))
+        with (
+            mock.patch.object(sys, "platform", "win32"),
+            mock.patch("time.sleep", lambda *a, **k: None),
+        ):
+            src.open()  # monitoring must never break a run
+        self.assertIsNotNone(src._cap)
+        src.close()
+
+    def test_config_roundtrip_preserves_exposure_fourcc(self):
+        cfg = MonitoringConfig(
+            cameras=[
+                CameraConfig(
+                    "reservoir",
+                    0,
+                    640,
+                    480,
+                    exposure=-6.0,
+                    auto_exposure=0.25,
+                    fourcc="MJPG",
+                )
+            ],
+            backend="dshow",
+        )
+        cam = MonitoringConfig.from_dict(cfg.to_dict()).cameras[0]
+        self.assertEqual(cam.exposure, -6.0)
+        self.assertEqual(cam.auto_exposure, 0.25)
+        self.assertEqual(cam.fourcc, "MJPG")
+
+    def test_load_monitoring_config_parses_camera_knobs(self):
+        setup = {
+            "monitoring": {
+                "backend": "dshow",
+                "cameras": [
+                    {
+                        "role": "reservoir",
+                        "device": 0,
+                        "exposure": -6,
+                        "auto_exposure": 0.25,
+                        "fourcc": "MJPG",
+                    },
+                ],
+            }
+        }
+        cfg = load_monitoring_config(setup)
+        self.assertIsNotNone(cfg)
+        cam = cfg.cameras[0]
+        self.assertEqual(cam.exposure, -6.0)
+        self.assertEqual(cam.auto_exposure, 0.25)
+        self.assertEqual(cam.fourcc, "MJPG")
+
+    def test_run_probe_reports_brightest_over_warmup(self):
+        from PycroFlow.monitoring.capture_service import _run_probe
+
+        self._use_fake_cv2(
+            {
+                _FakeCv2.CAP_ANY: lambda: _FakeCap(
+                    [
+                        _black_frame(),
+                        _black_frame(),
+                        _bright_frame(),
+                        _black_frame(),
+                    ]
+                ),
+            }
+        )
+        buf = io.StringIO()
+        with (
+            mock.patch("time.sleep", lambda *a, **k: None),
+            contextlib.redirect_stdout(buf),
+        ):
+            rc = _run_probe(max_index=0)
+        out = buf.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertIn("200", out)  # brightest frame, not the first (black) one
 
 
 if __name__ == "__main__":

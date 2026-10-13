@@ -538,12 +538,16 @@ def _run_probe(max_index: int = 9) -> int:
             shape = None
             mean = None
             if opened:
-                for _ in range(10):
+                # Report the BRIGHTEST frame over the warm-up window, not the
+                # first: many UVC cams deliver a few black frames before the
+                # exposure pipeline spins up, so a first-frame-only probe would
+                # mislabel a working camera as black.
+                for _ in range(15):
                     ok, frame = cap.read()
                     if ok and frame is not None:
                         shape = "x".join(str(s) for s in frame.shape)
-                        mean = round(float(frame.mean()), 1)
-                        break
+                        m = round(float(frame.mean()), 1)
+                        mean = m if mean is None else max(mean, m)
                     time.sleep(0.05)
             if cap is not None:
                 cap.release()
