@@ -524,6 +524,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     bracketing helper instead of re-implementing the protocol; the
     record-surfacing triad is a single `surface_record` helper used by both
     the per-FOV and experiment-level posts.
+- **Python baseline raised 3.10 → 3.11** (`requires-python`, black `target-version`,
+  classifier, CI matrices); `picassosr` pin moved from the B7 git-pin bridge to
+  `>=0.12.0a3` (picasso 0.12 line, requires 3.11) — C46.
 
 ## [0.2.0] - 2026-09-30
 

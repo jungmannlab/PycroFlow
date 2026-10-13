@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Microscopy and Fluid automation coordination"
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = ["pycromanager", "microscopy", "fluid-automation", "exchange-paint"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -16,7 +16,7 @@ classifiers = [
     "Operating System :: Microsoft :: Windows :: Windows 10",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
 ]
 
 # Runtime deps that are needed even for basic library use.
@@ -33,15 +33,8 @@ dependencies = [
     "loguru",
     "pyyaml>=6.0.3,<7",
     "pydantic>=2,<3",
-    # WP-4: PycroFlow is now a picasso consumer (live localize_frames wrapper).
-    # TEMP bridge: pinned to the picasso commit that carries localize_frames
-    # (PR#705) until picassosr 0.11.3 hits PyPI — then revert to
-    # "picassosr>=0.11.3". Tracked as planning Open-Decisions B7. This is the
-    # one flagged non-wheel git-URL dependency; the base install is otherwise
-    # wheel-only. (Dev/CI use the already-editable-installed picasso, which has
-    # localize_frames; picasso pulls picasso_registry's client transitively is
-    # not the case — the registry client is a separate install.)
-    "picassosr @ git+https://github.com/jungmannlab/picasso.git@e5c91196",
+    # picasso 0.12 line (localize_frames; requires Python >=3.11). Supersedes the B7 git-pin bridge.
+    "picassosr>=0.12.0a3",
     # WP-4: append-only provenance/metrics DB client (per-FOV record sink).
     # picasso-registry is NOT on PyPI (like monet's dep, C39/C40) -- pin the
     # released tag with the [client] extra (requests + python-ulid). A bare
@@ -200,7 +193,7 @@ exclude_also = [
 # Pin target-version so Black doesn't infer an open-ended range from
 # requires-python (which triggers a warning). line-length matches .flake8's
 # historical 79 and the shared stack convention.
-target-version = ["py310"]
+target-version = ["py311"]
 line-length = 79
 # Keep the vendored upstream PyHamiltonPSD package snapshot pristine (it ships
 # its own LICENSE/CHANGELOG); don't reformat it. Regex on the file path.
