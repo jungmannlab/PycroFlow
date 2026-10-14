@@ -28,8 +28,12 @@ KNOWN_ROLES = ("reservoir", "pump", "sample")
 
 
 def _opt_float(value) -> Optional[float]:
-    """``float(value)`` or ``None`` when the key is absent/null."""
-    return None if value is None else float(value)
+    """``float(value)`` or ``None`` when the key is absent/null/blank."""
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return float(value)
 
 
 @dataclass(frozen=True)

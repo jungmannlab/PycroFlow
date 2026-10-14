@@ -96,8 +96,14 @@ _BLACK_MEAN = 2.0
 
 
 def _is_black(frame, threshold: float = _BLACK_MEAN) -> bool:
-    """True if ``frame`` is missing or ~uniformly black (mean <= threshold)."""
-    return frame is None or float(frame.mean()) <= threshold
+    """True if ``frame`` is missing, degenerate, or ~uniformly black.
+
+    A missing or zero-size frame counts as black (a size-0 ``mean()`` is NaN,
+    which would otherwise slip past the ``<= threshold`` test).
+    """
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return True
+    return float(frame.mean()) <= threshold
 
 
 def _apply_camera_settings(cv2, cap, camera) -> None:
@@ -275,22 +281,30 @@ class InstrumentFrameSource(FrameSource):
         if black_only is not None:  # pragma: no cover - needs hardware
             name, flag = black_only
             cap = _open_capture(cv2, self.camera.device, flag)
-            _apply_camera_settings(cv2, cap, self.camera)
-            self._warmup(cap)
-            logger.warning(
-                "monitoring: camera {} (device {!r}) opens via {} but frames "
-                "are BLACK (mean~0). Recording proceeds but clips will be dark. "
-                "Likely a wrong device index, an unset exposure, or a privacy "
-                "shutter -- set monitoring.cameras[].device / exposure / "
-                "auto_exposure, and run  python -m "
-                "PycroFlow.monitoring.capture_service --probe  to find a live "
-                "(index, backend).",
-                self.camera.role,
-                self.camera.device,
-                name,
-            )
-            self._cap = cap
-            return
+            # The re-open can fail (device grabbed meanwhile / flaky backend);
+            # guard it so this "never break a run" branch doesn't itself raise
+            # an AttributeError on a None cap. If it fails, fall through to the
+            # OSError below -> CaptureThread logs a clean gap.
+            if cap is not None and cap.isOpened():
+                _apply_camera_settings(cv2, cap, self.camera)
+                self._warmup(cap)
+                logger.warning(
+                    "monitoring: camera {} (device {!r}) opens via {} but "
+                    "frames are BLACK (mean~0). Recording proceeds but clips "
+                    "will be dark. Likely a wrong device index, an unset "
+                    "exposure, or a privacy shutter -- set "
+                    "monitoring.cameras[].device / exposure / auto_exposure, "
+                    "and run  python -m "
+                    "PycroFlow.monitoring.capture_service --probe  to find a "
+                    "live (index, backend).",
+                    self.camera.role,
+                    self.camera.device,
+                    name,
+                )
+                self._cap = cap
+                return
+            if cap is not None:
+                cap.release()
         raise OSError(  # pragma: no cover - needs hardware
             "could not open camera {} (tried backends: {})".format(
                 self.camera.device, ", ".join(tried) or "none"

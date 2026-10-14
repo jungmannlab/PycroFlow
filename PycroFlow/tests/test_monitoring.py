@@ -828,6 +828,44 @@ class TestInstrumentCaptureHardening(unittest.TestCase):
         self.assertTrue(_is_black(None))
         self.assertTrue(_is_black(_black_frame()))
         self.assertFalse(_is_black(_bright_frame()))
+        # A degenerate zero-size frame is black, not NaN-accepted-as-bright.
+        self.assertTrue(_is_black(np.zeros((0, 64, 3), dtype=np.uint8)))
+
+    def test_open_black_reopen_failure_raises_oserror(self):
+        # Backend opens + delivers black (so it becomes the black fallback),
+        # but the fallback re-open fails (cv2.VideoCapture returns None). The
+        # guard must surface a clean OSError, not an AttributeError on None.
+        calls = {"n": 0}
+
+        def dshow_factory():
+            calls["n"] += 1
+            return _FakeCap([_black_frame()]) if calls["n"] == 1 else None
+
+        self._use_fake_cv2({_FakeCv2.CAP_DSHOW: dshow_factory})
+        src = InstrumentFrameSource(CameraConfig("reservoir", 0, 64, 48))
+        with (
+            mock.patch.object(sys, "platform", "win32"),
+            mock.patch("time.sleep", lambda *a, **k: None),
+        ):
+            with self.assertRaises(OSError):
+                src.open()
+
+    def test_opt_float_blank_string_is_none(self):
+        setup = {
+            "monitoring": {
+                "cameras": [
+                    {
+                        "role": "reservoir",
+                        "device": 0,
+                        "exposure": "",
+                        "auto_exposure": "  ",
+                    }
+                ]
+            }
+        }
+        cam = load_monitoring_config(setup).cameras[0]
+        self.assertIsNone(cam.exposure)
+        self.assertIsNone(cam.auto_exposure)
 
     def test_warmup_accepts_bright_after_black_frames(self):
         cap = _FakeCap([_black_frame(), _black_frame(), _bright_frame()])

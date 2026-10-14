@@ -46,6 +46,7 @@ from PycroFlow.monitoring.avi import RawAviWriter
 from PycroFlow.monitoring.config import CameraConfig, MonitoringConfig
 from PycroFlow.monitoring.registry_index import RegistryIndexWriter
 from PycroFlow.monitoring.sources import (
+    _BLACK_MEAN,
     _backend_candidates,
     _open_capture,
     _quiet_cv2,
@@ -548,6 +549,8 @@ def _run_probe(max_index: int = 9) -> int:
                         shape = "x".join(str(s) for s in frame.shape)
                         m = round(float(frame.mean()), 1)
                         mean = m if mean is None else max(mean, m)
+                        if m > _BLACK_MEAN:
+                            break  # live frame confirmed; no need to keep reading
                     time.sleep(0.05)
             if cap is not None:
                 cap.release()

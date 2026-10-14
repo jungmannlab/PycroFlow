@@ -25,7 +25,7 @@ import os
 from typing import Optional
 
 import yaml
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QLocale, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QDoubleValidator, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -63,6 +63,15 @@ def _parse_float(text) -> Optional[float]:
 def _fmt_opt(value) -> str:
     """Render an optional config value for a text field (``None`` -> '')."""
     return "" if value is None else str(value)
+
+
+def _c_double_validator() -> QDoubleValidator:
+    """A float validator pinned to the C locale ('.' decimals) to match
+    ``float()`` parsing -- avoids a system-locale validator accepting '-6,5'
+    that ``_parse_float`` would then silently drop."""
+    v = QDoubleValidator()
+    v.setLocale(QLocale.c())
+    return v
 
 
 class _PreviewWorker(QThread):
@@ -247,9 +256,12 @@ class WebcamsTab(QWidget):
         # Optional instrument-source capture knobs (ignored by the emulator).
         # Blank = leave to the driver; tune exposure against the live preview
         # when a real webcam opens but looks dark.
+        # C-locale validators so the field accepts '.' decimals to match
+        # float() parsing -- a system-locale validator would accept '-6,5' on a
+        # German/French rig, which _parse_float would then silently drop.
         row.addWidget(QLabel("exp"))
         exposure = QLineEdit(_fmt_opt(cam.get("exposure")))
-        exposure.setValidator(QDoubleValidator())
+        exposure.setValidator(_c_double_validator())
         exposure.setPlaceholderText("auto")
         exposure.setFixedWidth(56)
         exposure.setToolTip(
@@ -261,7 +273,7 @@ class WebcamsTab(QWidget):
 
         row.addWidget(QLabel("auto-exp"))
         auto_exposure = QLineEdit(_fmt_opt(cam.get("auto_exposure")))
-        auto_exposure.setValidator(QDoubleValidator())
+        auto_exposure.setValidator(_c_double_validator())
         auto_exposure.setPlaceholderText("auto")
         auto_exposure.setFixedWidth(56)
         auto_exposure.setToolTip(
@@ -271,7 +283,7 @@ class WebcamsTab(QWidget):
         row.addWidget(auto_exposure)
 
         row.addWidget(QLabel("fourcc"))
-        fourcc = QLineEdit(str(cam.get("fourcc") or ""))
+        fourcc = QLineEdit(str(cam.get("fourcc") or "").upper())
         fourcc.setMaxLength(4)
         fourcc.setPlaceholderText("auto")
         fourcc.setFixedWidth(56)

@@ -2567,6 +2567,10 @@ class TestWebcamsTab(unittest.TestCase):
         tab._output_edit.setText("/data/mycam")
         tab._apply()
         self.assertEqual(svc.setup["monitoring"]["output_dir"], "/data/mycam")
+        # Blank -> the key is dropped (falls back to the experiment folder).
+        tab._output_edit.setText("")
+        tab._apply()
+        self.assertNotIn("output_dir", svc.setup["monitoring"])
 
     def test_exposure_fields_apply_and_omit_when_blank(self):
         tab, svc = self._tab()
@@ -2597,22 +2601,32 @@ class TestWebcamsTab(unittest.TestCase):
                 "height": 240,
                 "exposure": -5,
                 "auto_exposure": 0.75,
-                "fourcc": "MJPG",
+                "fourcc": "mjpg",  # lower-case in YAML -> shown upper-cased
             },
         ]
         tab = WebcamsTab(svc)
         self.assertEqual(tab._rows[0]["exposure"].text(), "-5")
         self.assertEqual(tab._rows[0]["auto_exposure"].text(), "0.75")
-        self.assertEqual(tab._rows[0]["fourcc"].text(), "MJPG")
+        self.assertEqual(tab._rows[0]["fourcc"].text(), "MJPG")  # seeded upper
         # _current_cameras is what the preview opens the camera with.
         cam = tab._current_cameras()[0]
         self.assertEqual(cam.exposure, -5.0)
         self.assertEqual(cam.auto_exposure, 0.75)
         self.assertEqual(cam.fourcc, "MJPG")
-        # Blank -> the key is dropped (falls back to the experiment folder).
-        tab._output_edit.setText("")
-        tab._apply()
-        self.assertNotIn("output_dir", svc.setup["monitoring"])
+
+    def test_exposure_validator_uses_c_locale(self):
+        from PyQt6.QtCore import QLocale
+
+        tab, _ = self._tab()
+        # C locale so the field accepts '.' decimals matching float() parsing
+        # (a system-locale validator would accept '-6,5' which _parse_float
+        # silently drops -- relevant on a German/French-locale rig).
+        self.assertEqual(
+            tab._rows[0]["exposure"].validator().locale(), QLocale.c()
+        )
+        self.assertEqual(
+            tab._rows[0]["auto_exposure"].validator().locale(), QLocale.c()
+        )
 
     def test_emulated_preview_yields_a_frame(self):
         import time
