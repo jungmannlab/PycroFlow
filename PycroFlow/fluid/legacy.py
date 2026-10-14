@@ -240,6 +240,9 @@ class LegacyArchitecture(AbstractSystem):
 
     def __del__(self):
         self._stop_spill_sensor()
+        mux = getattr(self, "multiplexer", None)
+        if mux is not None:
+            mux.close()
 
     def _assign_system_config(self, config):
         """Assign a system configuration.
@@ -252,9 +255,19 @@ class LegacyArchitecture(AbstractSystem):
         assert config["system_type"] == "legacy"
         for vconfig in config["valve_a"]:
             self.valve_a[vconfig["address"]] = Valve(**vconfig)
-        for rconfig in config["reservoir_a"]:
-            self.reservoir_a.add(Reservoir(**rconfig))
-            self.reservoir_paths[rconfig["id"]] = "a"
+        # Optional ibidi MultiFlOW multiplexer: an alternative to the Hamilton
+        # MVP rotary valves for reservoir multiplexing. It registers in the
+        # valve map under its address (default 'ibidi') so _set_valves() drives
+        # it via reservoir valve_pos entries like {ibidi: <channel>, 1: in}.
+        self.multiplexer = None
+        if config.get("ibidi"):
+            from PycroFlow.ibidi_multiplexer import IbidiMultiplexer
+
+            mux_cfg = dict(config["ibidi"])
+            address = mux_cfg.pop("address", "ibidi")
+            self.multiplexer = IbidiMultiplexer(address=address, **mux_cfg)
+            self.valve_a[address] = self.multiplexer
+        self.update_reservoirs(config)
         if config.get("valve_flush"):
             self.valve_flush = Valve(**config["valve_flush"])
         else:
@@ -278,13 +291,130 @@ class LegacyArchitecture(AbstractSystem):
         # self.pump_out = Pump(**pump_out_config)
         self.pump_out = Pump(**config["pump_out"])
 
-        self.special_names = config["special_names"]
         self.flush_pos = config["flush_pos"]
+
+    def update_reservoirs(self, config):
+        """(Re)build the reservoir set from an assembled hamilton config.
+
+        Which reservoirs exist comes from the *experiment design*, which can
+        change after the hardware was connected — editing the reservoir table
+        and re-translating must not leave the system routing by the previous
+        design's list (a reservoir added afterwards would raise ``KeyError``
+        mid-run, in :meth:`_set_valves`).
+
+        Serial connections, valves and pumps are untouched; only the
+        reservoir bookkeeping is replaced. The containers are rebuilt rather
+        than added to, so removed reservoirs really disappear.
+
+        Parameters
+        ----------
+        config : dict
+            An assembled hamilton config (see
+            :func:`PycroFlow.configs.assemble_hamilton_config`): needs
+            ``reservoir_a`` / ``special_names``, optional
+            ``cleaning_reservoirs``.
+        """
+        # Assign fresh per-instance containers: these attributes default to
+        # mutable *class* attributes, so mutating them in place would leak
+        # one architecture's reservoirs into the next.
+        self.reservoir_a = ReservoirDict()
+        self.reservoir_paths = {}
+        for rconfig in config["reservoir_a"]:
+            self.reservoir_a.add(Reservoir(**rconfig))
+            self.reservoir_paths[rconfig["id"]] = "a"
+        self.special_names = config["special_names"]
         self.cleaning_reservoirs = config.get("cleaning_reservoirs", {})
+        if isinstance(getattr(self, "tubing_config", None), TubingConfig):
+            self.tubing_config.set_special_names(self.special_names)
 
     def _assign_protocol(self, protocol):
         self.protocol = protocol["protocol_entries"]
         self.parameters = protocol["parameters"]
+        # Per-reservoir planned volume (sum of the protocol's inject volumes)
+        # and the running total pumped, for the fluid live view. Assigning a
+        # protocol is a fresh plan, so the used counters reset.
+        self.reservoir_totals = self._sum_inject_volumes(self.protocol)
+        self.reservoir_used = {}
+        # Waste sinks: the extraction pump dumps ``extractionfactor * volume``
+        # to the ``waste`` sink on every inject/pump_out, so its planned total
+        # is derivable from the protocol; ``flush_waste`` is only fed by the
+        # prep flush/fill routines (never the run), so it starts at 0.
+        default_ef = self.parameters.get("extractionfactor", 1)
+        self.waste_totals = {
+            "waste": self._sum_waste_volumes(self.protocol, default_ef)
+        }
+        self.waste_used = {}
+
+    @staticmethod
+    def _sum_inject_volumes(entries):
+        """Sum ``inject`` volumes per ``reservoir_id`` over protocol entries."""
+        totals = {}
+        for entry in entries or []:
+            if not isinstance(entry, dict) or entry.get("$type") != "inject":
+                continue
+            rid = entry.get("reservoir_id")
+            try:
+                vol = float(entry.get("volume") or 0)
+            except (TypeError, ValueError):
+                continue
+            totals[rid] = totals.get(rid, 0.0) + vol
+        return totals
+
+    @staticmethod
+    def _sum_waste_volumes(entries, default_ef):
+        """Sum ``extractionfactor * volume`` over injects/pump_outs (waste)."""
+        try:
+            default_ef = float(default_ef)
+        except (TypeError, ValueError):
+            default_ef = 1.0
+        total = 0.0
+        for entry in entries or []:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("$type") not in ("inject", "pump_out"):
+                continue
+            ef = entry.get("extractionfactor")
+            try:
+                ef = float(ef) if ef is not None else default_ef
+            except (TypeError, ValueError):
+                ef = default_ef
+            try:
+                total += ef * float(entry.get("volume") or 0)
+            except (TypeError, ValueError):
+                continue
+        return total
+
+    def _record_used(self, reservoir_id, volume):
+        """Add ``volume`` µl to the running total pumped from a reservoir."""
+        try:
+            vol = float(volume or 0)
+        except (TypeError, ValueError):
+            return
+        used = getattr(self, "reservoir_used", None)
+        if used is None:
+            used = self.reservoir_used = {}
+        used[reservoir_id] = used.get(reservoir_id, 0.0) + vol
+
+    def _record_waste(self, sink, volume):
+        """Add ``volume`` µl to the running total sent to a waste sink."""
+        try:
+            vol = float(volume or 0)
+        except (TypeError, ValueError):
+            return
+        used = getattr(self, "waste_used", None)
+        if used is None:
+            used = self.waste_used = {}
+        used[sink] = used.get(sink, 0.0) + vol
+
+    def _entry_extractionfactor(self, entry):
+        """Effective extraction factor for an entry (its own, else default)."""
+        ef = entry.get("extractionfactor") if isinstance(entry, dict) else None
+        if ef is None:
+            ef = self.parameters.get("extractionfactor", 1)
+        try:
+            return float(ef)
+        except (TypeError, ValueError):
+            return 1.0
 
     def _assign_tubing_config(self, config):
         self.tubing_config = TubingConfig(config)
@@ -920,11 +1050,14 @@ class LegacyArchitecture(AbstractSystem):
             if self.parameters["mode"] == "tubing_stack":
                 if (self.last_protocol_entry != i - 1) or (i == 0):
                     self._assemble_tubing_stack(i)
+                ef = self._entry_extractionfactor(self.protocol[i])
                 for reservoir_id, vol in self.tubing_stack[i]:
                     self._set_valves(reservoir_id)
                     self._inject(
                         vol, delay=delay, extractionfactor=extractionfactor
                     )
+                    self._record_used(reservoir_id, vol)
+                    self._record_waste("waste", ef * vol)
                 self.last_protocol_entry = i
             elif self.parameters["mode"] == "tubing_flush":
                 # # this way, we flush (1+flushfactor)
@@ -1021,6 +1154,13 @@ class LegacyArchitecture(AbstractSystem):
                 delay=delay,
                 extractionfactor=extractionfactor,
             )
+            self._record_used(pentry["reservoir_id"], injection_volume)
+            # The extraction pump simultaneously removes extractionfactor * vol
+            # from the sample to the waste sink.
+            self._record_waste(
+                "waste",
+                self._entry_extractionfactor(pentry) * injection_volume,
+            )
             # afterwards, flush in buffer to get the pentry
             # volume to the sample
             # self._set_valves(self.special_names['flushbuffer_a'])
@@ -1029,6 +1169,10 @@ class LegacyArchitecture(AbstractSystem):
             self._pump_out(
                 pentry["volume"],
                 extractionfactor=pentry.get("extractionfactor"),
+            )
+            self._record_waste(
+                "waste",
+                self._entry_extractionfactor(pentry) * pentry["volume"],
             )
 
         # tubing full of buffer, cannot simply proceed
@@ -1670,10 +1814,38 @@ class LegacyArchitecture(AbstractSystem):
             valve_positions = self.reservoir_a.get_reservoir_valve_positions(
                 reservoir_id
             )
-            for valve, pos in valve_positions.items():
-                self.valve_a[valve].set_valve(pos)
+            self.set_valve_positions(valve_positions)
         else:
             raise NotImplementedError('Legacy system only has fluid path "a".')
+
+    def set_valve_positions(self, valve_positions):
+        """Drive the valves to an explicit ``{valve address: position}`` map.
+
+        The routing step of :meth:`_set_valves`, split out so a caller that
+        already knows the positions can use it — manual hardware control
+        reaches *any* reservoir wired in the setup's manifold, not only the
+        subset the loaded experiment design happens to name.
+
+        Parameters
+        ----------
+        valve_positions : dict
+            Maps a valve address (as used in a reservoir's ``valve_pos``) to
+            the position for it. An ibidi multiplexer position may be a list
+            of channels.
+
+        Raises
+        ------
+        KeyError
+            A valve address is not wired in this system.
+        """
+        for valve, pos in valve_positions.items():
+            if valve not in self.valve_a:
+                raise KeyError(
+                    "valve {!r} is not wired in this system (have {})".format(
+                        valve, sorted(self.valve_a, key=str)
+                    )
+                )
+            self.valve_a[valve].set_valve(pos)
 
     def _flush(self, flushfactor=1):
         """Flush the tubing up to the flush valve with the flush buffer.
@@ -1777,10 +1949,29 @@ class LegacyArchitecture(AbstractSystem):
                 str(pickup_flushvalve), str(dispense_flushvalve)
             )
         )
+        # A reservoir is reached through the pump's *input* side, and routing
+        # to it (via ``_set_valves``) also drives the pump valve to its input
+        # position ("in"). So a ``pickup_res`` / ``dispense_res`` is only
+        # meaningful when the corresponding direction is that input side;
+        # when it points at the output (sample / waste) side, honouring the
+        # reservoir would clobber the requested "out" back to "in". Ignore it.
+        apply_pickup_res = pickup_res is not None and pickup_dir == "in"
+        apply_dispense_res = dispense_res is not None and dispense_dir == "in"
+        if pickup_res is not None and not apply_pickup_res:
+            logger.warning(
+                "ignoring pickup_res {!r}: pickup_dir {!r} is not the input "
+                "(reservoir) side".format(pickup_res, pickup_dir)
+            )
+        if dispense_res is not None and not apply_dispense_res:
+            logger.warning(
+                "ignoring dispense_res {!r}: dispense_dir {!r} is not the "
+                "input (reservoir) side".format(dispense_res, dispense_dir)
+            )
+
         curr_pump_vol = pump.get_current_volume()
         if curr_pump_vol > 0:
             pump.set_valve(dispense_dir)
-            if dispense_res is not None:
+            if apply_dispense_res:
                 self._set_valves(dispense_res)
             if dispense_flushvalve is not None:
                 self._set_flush_valve(dispense_flushvalve)
@@ -1798,14 +1989,14 @@ class LegacyArchitecture(AbstractSystem):
 
         for pump_volume in pump_volumes:
             pump.set_valve(pickup_dir)
-            if pickup_res is not None:
+            if apply_pickup_res:
                 self._set_valves(pickup_res)
             if pickup_flushvalve is not None:
                 self._set_flush_valve(pickup_flushvalve)
             pump.pickup(pump_volume, velocity, waitForPump=True)
             time.sleep(delay)
             pump.set_valve(dispense_dir)
-            if dispense_res is not None:
+            if apply_dispense_res:
                 self._set_valves(dispense_res)
             if dispense_flushvalve is not None:
                 self._set_flush_valve(dispense_flushvalve)
@@ -2073,6 +2264,20 @@ class LegacyArchitecture(AbstractSystem):
                 dispense_flushvalve=dispense_flushvalve,
                 delay=delay,
             )
+            # This leg dispenses to the flush_waste sink (live view gauge).
+            self._record_waste("flush_waste", vol)
+
+        if post_fill_flushbuffer and "flushbuffer_a" not in self.special_names:
+            # No flush buffer defined: skip the final central-tubing flush
+            # rather than dead-ending in the tubing lookup for an unrouted
+            # 'flushbuffer_a'. The per-reservoir fills above already ran.
+            logger.warning(
+                "post_fill_flushbuffer requested but no 'flushbuffer_a' is "
+                "defined in special_names; skipping the final flushbuffer "
+                "fill. Add a flush buffer reservoir to the experiment "
+                "design's special_names to enable it."
+            )
+            post_fill_flushbuffer = False
 
         if post_fill_flushbuffer:
             # now, flush everything with the flushbuffer

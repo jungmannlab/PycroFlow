@@ -22,6 +22,12 @@ from PycroFlow.services.experiment_service import (
     ExperimentState,
 )
 from PycroFlow.services.system_service import SystemService
+from PycroFlow.services.diagnostics import (
+    CheckResult,
+    CheckStatus,
+    DiagnosticsService,
+    summarize,
+)
 
 __all__ = [
     "get_core",
@@ -30,4 +36,8 @@ __all__ = [
     "ExperimentService",
     "ExperimentState",
     "SystemService",
+    "CheckResult",
+    "CheckStatus",
+    "DiagnosticsService",
+    "summarize",
 ]

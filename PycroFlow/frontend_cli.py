@@ -346,11 +346,62 @@ class PycroFlowInteractive(cmd.Cmd):
             )
 
     def do_is_protocol_done(self, line):
-        """Start the protocol"""
+        """Report whether the running protocol has finished — or errored.
+
+        A fatal step error (e.g. the ibidi multiplexer's serial write failing
+        after its retries) aborts the run and also marks it finished, so the
+        error is checked first; otherwise it would read as a normal completion.
+        """
         if not self.orchestrator:
             print("Start orchestration first.")
             return
+        if self.orchestrator.poll_protocol_errored():
+            print(
+                "ERRORED — run aborted on a step error: {}".format(
+                    self.orchestrator.protocol_error_message() or "unknown"
+                )
+            )
+            return
         print(self.orchestrator.poll_protocol_finished())
+
+    def do_doctor(self, line):
+        """Health-check the subsystems and connectors (registry, monet).
+
+        Verifies — as far as is cheaply possible — which systems are actually
+        working, to help disentangle problems when a run misbehaves. Same
+        checks the GUI's Doctor tab runs.
+        """
+        from PycroFlow.services import (
+            CheckStatus,
+            DiagnosticsService,
+            summarize,
+        )
+
+        self._sync_services()
+        results = DiagnosticsService(
+            self._system_service, self._experiment_service
+        ).run_all()
+        glyph = {
+            CheckStatus.OK: "[ ok ]",
+            CheckStatus.WARN: "[warn]",
+            CheckStatus.FAIL: "[FAIL]",
+            CheckStatus.SKIP: "[skip]",
+        }
+        category = None
+        for r in results:
+            if r.category != category:
+                category = r.category
+                print("\n{}:".format(category))
+            print("  {} {:<28} {}".format(glyph[r.status], r.name, r.detail))
+        counts = summarize(results)
+        print(
+            "\n{} ok, {} warn, {} fail, {} skip".format(
+                counts[CheckStatus.OK],
+                counts[CheckStatus.WARN],
+                counts[CheckStatus.FAIL],
+                counts[CheckStatus.SKIP],
+            )
+        )
 
     # ######################### Direct Fluid Manipulation
 
@@ -742,7 +793,17 @@ class PycroFlowInteractive(cmd.Cmd):
 
     def close(self):
         if self.orchestrator:
-            if self.orchestrator.poll_protocol_finished():
+            # A fatal step error marks the run finished too, so check the
+            # error state first — otherwise an aborted run would be ended as
+            # if it had completed normally.
+            if self.orchestrator.poll_protocol_errored():
+                print(
+                    "Run aborted on a step error: {}".format(
+                        self.orchestrator.protocol_error_message() or "unknown"
+                    )
+                )
+                self.orchestrator.abort_orchestration()
+            elif self.orchestrator.poll_protocol_finished():
                 self.orchestrator.end_orchestration()
             else:
                 self.orchestrator.abort_orchestration()
@@ -751,9 +812,13 @@ class PycroFlowInteractive(cmd.Cmd):
 def main():
     """Entry point for the interactive CLI.
 
-    Configures logging, then runs cmdloop.
+    Configures logging, loads the per-machine `.env` (registry URL/token,
+    monet paths — see the tracked `.env.template`), then runs cmdloop.
     """
     PycroFlow.setup_logging(clean_old=True)
+    from PycroFlow.envfile import load_env_file
+
+    load_env_file()
     PycroFlowInteractive().cmdloop()
 
 

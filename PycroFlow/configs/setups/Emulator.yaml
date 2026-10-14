@@ -11,36 +11,40 @@
 setup: Emulator
 emulated: true
 
-hamilton:
-  interface:
-    COM: '0'
-    baud: 9600
+fluid:
   system_type: legacy
-  valve_a:
-    - {address: 3, instrument_type: MVP, valve_type: 8-5}
-    - {address: 5, instrument_type: MVP, valve_type: 8-5}
+  pumps:
+    driver: hamilton-psd
+    interface:
+      COM: '0'
+      baud: 9600
+    pump_a:
+      address: 1
+      instrument_type: '4'
+      valve_type: Y
+      syringe: 500u
+      input_pos: in
+      output_pos: out
+      motorsteps_per_step: 1
+      speed_factor: 2
+    pump_out:
+      address: 0
+      instrument_type: '4'
+      valve_type: Y
+      syringe: 5.0m
+      input_pos: in
+      output_pos: out
+      motorsteps_per_step: 1
+      speed_factor: 2
+  multiplexer:
+    driver: hamilton-mvp
+    valves:
+      - {address: 3, instrument_type: MVP, valve_type: 8-5}
+      - {address: 5, instrument_type: MVP, valve_type: 8-5}
   flush_pos:
     inject: in
     flush: out
-  pump_a:
-    address: 1
-    instrument_type: '4'
-    valve_type: Y
-    syringe: 500u
-    input_pos: in
-    output_pos: out
-    motorsteps_per_step: 1
-    speed_factor: 2
-  pump_out:
-    address: 0
-    instrument_type: '4'
-    valve_type: Y
-    syringe: 5.0m
-    input_pos: in
-    output_pos: out
-    motorsteps_per_step: 1
-    speed_factor: 2
-  reservoir_a_manifold:
+  reservoirs:
     - {id: 1, valve_pos: {3: 2, 1: in}}
     - {id: 2, valve_pos: {3: 3, 1: in}}
     - {id: 3, valve_pos: {3: 4, 1: in}}
@@ -56,28 +60,27 @@ hamilton:
     - {id: 19, valve_pos: {3: 1, 5: 6, 1: in}}
     - {id: 20, valve_pos: {3: 1, 5: 7, 1: in}}
     - {id: 21, valve_pos: {3: 1, 5: 8, 1: in}}
-
-tubing:
-  - {from: R21, to: V5, volume: 325}
-  - {from: R20, to: V5, volume: 325}
-  - {from: R19, to: V5, volume: 325}
-  - {from: R18, to: V5, volume: 325}
-  - {from: R17, to: V5, volume: 325}
-  - {from: R16, to: V5, volume: 325}
-  - {from: R15, to: V5, volume: 325}
-  - {from: R14, to: V5, volume: 325}
-  - {from: V5, to: V3, volume: 195}
-  - {from: R7, to: V3, volume: 325}
-  - {from: R6, to: V3, volume: 325}
-  - {from: R5, to: V3, volume: 325}
-  - {from: R4, to: V3, volume: 325}
-  - {from: R3, to: V3, volume: 325}
-  - {from: R2, to: V3, volume: 325}
-  - {from: R1, to: V3, volume: 325}
-  - {from: R0, to: V3, volume: 325}
-  - {from: V3, to: pump_a, volume: 195}
-  - {from: pump_a, to: sample, volume: 325}
-  - {from: pump_a, to: flush_waste, volume: 650}
+  tubing:
+    - {from: R21, to: V5, volume: 325}
+    - {from: R20, to: V5, volume: 325}
+    - {from: R19, to: V5, volume: 325}
+    - {from: R18, to: V5, volume: 325}
+    - {from: R17, to: V5, volume: 325}
+    - {from: R16, to: V5, volume: 325}
+    - {from: R15, to: V5, volume: 325}
+    - {from: R14, to: V5, volume: 325}
+    - {from: V5, to: V3, volume: 195}
+    - {from: R7, to: V3, volume: 325}
+    - {from: R6, to: V3, volume: 325}
+    - {from: R5, to: V3, volume: 325}
+    - {from: R4, to: V3, volume: 325}
+    - {from: R3, to: V3, volume: 325}
+    - {from: R2, to: V3, volume: 325}
+    - {from: R1, to: V3, volume: 325}
+    - {from: R0, to: V3, volume: 325}
+    - {from: V3, to: pump_a, volume: 195}
+    - {from: pump_a, to: sample, volume: 325}
+    - {from: pump_a, to: flush_waste, volume: 650}
 
 imaging:
   pfs_pars:
@@ -87,3 +90,7 @@ imaging:
     prop_state: State
     prop_status: Status
     deltat: 10
+
+illumination:
+  backend: monet
+  config: Emulator

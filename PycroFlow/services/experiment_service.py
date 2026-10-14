@@ -17,12 +17,14 @@ from __future__ import annotations
 import enum
 import os
 import threading
+from datetime import datetime
 from typing import Callable, Dict, List, Optional
 
 import yaml
 from loguru import logger
 
 from PycroFlow.orchestration import ProtocolOrchestrator
+from PycroFlow.services.live_run import LiveRunCoordinator
 
 
 class ExperimentState(enum.Enum):
@@ -78,6 +80,12 @@ class ExperimentService:
         self._lock = threading.Lock()
         self._state_observers: List[StateObserver] = []
         self._log_observers: List[LogObserver] = []
+        # WP-LIVE-INT: live analysis over the orchestrated run (lazy; a run
+        # without camera_info / with the env kill switch is unchanged).
+        self._live = LiveRunCoordinator()
+        # Optional provenance: the microscope setup name, set by frontends
+        # that know it (the GUI toolbar); rides on the experiment record.
+        self.setup_name: Optional[str] = None
 
     # --- Subsystem wiring ---------------------------------------------
 
@@ -148,7 +156,73 @@ class ExperimentService:
             folder = os.path.dirname(os.path.abspath(source))
             os.chdir(folder)
             logger.info("Working directory changed to {}", folder)
+        self._redirect_logs_to_acquisition_folder()
         return self._experiment_design
+
+    def _redirect_logs_to_acquisition_folder(self):
+        """Move the log files next to this experiment's acquisition output.
+
+        The logs are the record of what the run actually did (including the
+        per-step timings), so they belong with the data rather than in
+        whichever directory the app was started from.
+        """
+        import PycroFlow
+
+        design = self._experiment_design or {}
+        save_dir = os.path.abspath(design.get("save_dir") or ".")
+        try:
+            PycroFlow.redirect_logging(save_dir)
+        except Exception as exc:  # never fail a load over logging
+            logger.warning("could not redirect logs: {!r}", exc)
+
+    def save_run_record(self):
+        """Write the design and Run Sequence about to run into ``save_dir``.
+
+        A run's inputs belong with its output: the experiment design as
+        loaded (including any GUI edits) and the compiled Run Sequence that
+        was actually executed. Filenames carry a timestamp, so re-running
+        into the same acquisition folder records each run rather than
+        overwriting the previous one's evidence.
+
+        Returns
+        -------
+        list of str
+            The files written (empty when there is nothing to write, or on
+            failure — a save-record problem must never stop a run).
+        """
+        design = self._experiment_design
+        if not design:
+            # No design means no acquisition folder — a bare protocol loaded
+            # from a file already exists on disk, and writing the record
+            # relative to the cwd would scatter files wherever the app runs.
+            logger.debug(
+                "no experiment design loaded; not saving a run record"
+            )
+            return []
+        stamp = datetime.now().strftime("%y%m%d-%H%M%S")
+        base = design.get("base_name") or "experiment"
+        save_dir = os.path.abspath(design.get("save_dir") or ".")
+        artifacts = [("design", design), ("run_sequence", self._protocol)]
+        written = []
+        try:
+            os.makedirs(save_dir, exist_ok=True)
+            for kind, data in artifacts:
+                if not data:
+                    continue
+                path = os.path.join(
+                    save_dir, "{}_{}_{}.yaml".format(base, stamp, kind)
+                )
+                with open(path, "w") as f:
+                    yaml.dump(
+                        data, f, default_flow_style=False, sort_keys=False
+                    )
+                written.append(path)
+        except Exception as exc:  # never block a run over bookkeeping
+            logger.warning("could not save the run record: {!r}", exc)
+            return written
+        if written:
+            logger.info("Saved run record: {}", ", ".join(written))
+        return written
 
     @property
     def experiment_design(self) -> Optional[Dict]:
@@ -224,8 +298,49 @@ class ExperimentService:
 
     # --- Lifecycle ----------------------------------------------------
 
+    def check_reservoirs_routable(self) -> list:
+        """Return the protocol's reservoir ids the fluid system cannot reach.
+
+        The fluid system knows only the reservoirs it was connected with. If
+        the design gained a reservoir afterwards, the compiled Run Sequence
+        references an id the system cannot route to, and the run dies on that
+        step — potentially minutes in, with liquid already moved. Checked
+        before starting so the failure is caught while nothing has happened
+        yet.
+
+        Returns
+        -------
+        list
+            Unroutable reservoir ids (empty when fine, or when the fluid
+            system does not expose its reservoirs).
+        """
+        fluid = self._fluid_system
+        routable = getattr(fluid, "reservoir_paths", None)
+        if fluid is None or not isinstance(routable, dict) or not routable:
+            return []
+        entries = ((self._protocol or {}).get("fluid") or {}).get(
+            "protocol_entries"
+        ) or []
+        needed = {
+            e["reservoir_id"]
+            for e in entries
+            if isinstance(e, dict) and e.get("reservoir_id") is not None
+        }
+        return sorted(needed - set(routable))
+
     def start(self, system_steps: Optional[Dict] = None) -> None:
         self._require_orchestrator()
+        missing = self.check_reservoirs_routable()
+        if missing:
+            raise RuntimeError(
+                "The Run Sequence uses reservoir(s) {} that the connected "
+                "fluid system cannot route to (it has {}). The experiment "
+                "design changed after the hardware was connected — "
+                "reconnect the fluid system, then start again.".format(
+                    missing,
+                    sorted(getattr(self._fluid_system, "reservoir_paths", {})),
+                )
+            )
         if self._state in (
             ExperimentState.LOADED,
             ExperimentState.FINISHED,
@@ -249,12 +364,23 @@ class ExperimentService:
                     "will finish immediately. Connect hardware (or the "
                     "Emulator setup) in the System tab first."
                 )
+            # WP-LIVE-INT: attach live analysis before the handlers start, so
+            # the frame tap is in place for the first acquire step. Only when
+            # the protocol has imaging steps — a fluid-only run has no frames.
+            if "img" in (self._protocol or {}):
+                self._live.start_run(
+                    imaging_system=self._imaging_system,
+                    illumination_system=self._illumination_system,
+                    design=self._experiment_design,
+                    setup_name=self.setup_name,
+                )
             self._orchestrator.start_orchestration()
             self._set_state(ExperimentState.ORCHESTRATING)
         if self._state in (
             ExperimentState.ORCHESTRATING,
             ExperimentState.PAUSED,
         ):
+            self.save_run_record()
             self._orchestrator.start_protocol(system_steps or {})
             self._set_state(ExperimentState.RUNNING)
 
@@ -272,6 +398,10 @@ class ExperimentService:
         if self._orchestrator is None:
             return
         self._orchestrator.abort_protocol()
+        # Tear live analysis down too: the orchestrator abort already ends the
+        # in-flight MDA (acq_abort); this aborts the live pipeline's FOV,
+        # joins its worker, and engages the end-of-run laser interlock.
+        self._live.stop_run(abort=True)
         self._set_state(ExperimentState.ABORTED)
 
     def clear_design(self) -> None:
@@ -307,6 +437,9 @@ class ExperimentService:
         if self._orchestrator is None:
             return
         self._orchestrator.end_orchestration()
+        # Live analysis teardown: drain the last FOV's pipeline and engage
+        # the end-of-run laser interlock (C21).
+        self._live.stop_run()
         self._set_state(ExperimentState.FINISHED)
 
     # --- Status / introspection ---------------------------------------
@@ -320,6 +453,27 @@ class ExperimentService:
         """Escape hatch for code that needs the raw orchestrator (tests,
         legacy paths). Avoid in new frontend code."""
         return self._orchestrator
+
+    @property
+    def imaging_system(self):
+        """The attached imaging system (or None) — read-only, for frontends
+        that need runtime facts like the MM position-list count."""
+        return self._imaging_system
+
+    @property
+    def live_service(self):
+        """The run's LiveAnalysisService (for GUI clients), or None.
+
+        Available from run start until teardown; a frontend subscribes its
+        live view (e.g. the Live tab's ``LiveShell.connect_service``) when the
+        experiment enters ORCHESTRATING/RUNNING.
+        """
+        return self._live.service
+
+    @property
+    def live_run_id(self) -> Optional[str]:
+        """The live-analysis ULID run_id of record (None = live analysis off)."""
+        return self._live.run_id
 
     @property
     def protocol(self) -> Optional[Dict]:
@@ -383,10 +537,57 @@ class ExperimentService:
             out[key] = getter() if getter is not None else None
         return out
 
-    def is_finished(self) -> bool:
+    def _orch(self, method: str, default):
+        """Call a no-arg orchestrator poll, or return ``default`` if unloaded.
+
+        Collapses the identical ``if self._orchestrator is None`` guard shared
+        by the finish/error pollers below.
+        """
         if self._orchestrator is None:
-            return False
-        return self._orchestrator.poll_protocol_finished()
+            return default
+        return getattr(self._orchestrator, method)()
+
+    def is_finished(self) -> bool:
+        return self._orch("poll_protocol_finished", False)
+
+    def has_errored(self) -> bool:
+        """True when the run aborted on an unrecoverable step error.
+
+        A hardware fault (e.g. the ibidi multiplexer's serial write failing
+        after its retries) aborts the whole run via the orchestrator rather
+        than hanging; frontends check this to surface it as an error and move
+        to ABORTED instead of reporting a normal finish.
+        """
+        return self._orch("poll_protocol_errored", False)
+
+    def error_message(self) -> Optional[str]:
+        """The message of the fatal error that aborted the run, or None."""
+        return self._orch("protocol_error_message", None)
+
+    def finalize_if_done(self) -> Optional["ExperimentState"]:
+        """Finalize the active run if it has reached a terminal state.
+
+        Centralizes the "run is over" decision so every frontend (the GUI
+        progress poll and the CLI) transitions identically — the state change
+        goes through :meth:`abort` / :meth:`end`, which notify state observers,
+        rather than each frontend re-implementing it.
+
+        Returns
+        -------
+        ExperimentState or None
+            :attr:`ExperimentState.ABORTED` when the run ended on a fatal step
+            error, :attr:`ExperimentState.FINISHED` on a clean completion, or
+            ``None`` if the run is still in progress (nothing was changed).
+        """
+        if self._state is not ExperimentState.RUNNING:
+            return None
+        if not self.is_finished():
+            return None
+        if self.has_errored():
+            self.abort()
+            return ExperimentState.ABORTED
+        self.end()
+        return ExperimentState.FINISHED
 
     # --- Observers ----------------------------------------------------
 
@@ -398,6 +599,18 @@ class ExperimentService:
         thread.
         """
         self._state_observers.append(fn)
+
+    def remove_state_observer(self, fn: StateObserver) -> None:
+        """Deregister a state observer added by :meth:`add_state_observer`.
+
+        No-op if it was never registered. Lets a transient subscriber (e.g. the
+        monitoring controller, re-attached when the setup changes) detach
+        cleanly instead of accumulating.
+        """
+        try:
+            self._state_observers.remove(fn)
+        except ValueError:
+            pass
 
     def add_log_observer(self, fn: LogObserver) -> None:
         """Register a callback fired for log lines the service decides to

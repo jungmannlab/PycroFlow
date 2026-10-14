@@ -225,22 +225,10 @@ def _synthetic_frame(rng, h: int = 128, w: int = 128):
 
 
 def _identify_boxes(frame, box, min_ng):
-    """Flat ``[x0, y0, x1, y1, ...]`` spot centres via picasso ``identify`` — the
-    same detection step picasso Localize draws boxes from — or None if
-    unavailable. Cheap: one frame. Kept launcher-side so the GUI stays picasso-
-    free (it only renders the coords it is handed).
-    """
-    try:
-        from picasso.localize import identify_in_image
+    """Shared identify-for-overlay step (see live_analysis.boxes)."""
+    from PycroFlow.live_analysis.boxes import identify_boxes
 
-        ys, xs, _ng = identify_in_image(frame, float(min_ng), int(box))
-        out = []
-        for xi, yi in zip(xs, ys):
-            out.append(float(xi))
-            out.append(float(yi))
-        return out
-    except Exception:  # noqa: BLE001 - the overlay is best-effort
-        return None
+    return identify_boxes(frame, box, min_ng)
 
 
 def _run_demo(app, QMainWindow, args) -> int:
@@ -304,19 +292,16 @@ def _run_demo(app, QMainWindow, args) -> int:
         if stop.is_set():
             return
         img = _synthetic_frame(rng)
-        try:
-            svc.hub.push_kind(
-                "thumbnail",
-                svc.run_id,
-                data=img.tobytes(),
-                shape=img.shape,
-                dtype=str(img.dtype),
-                pixelsize_nm=130.0,
-                boxes=_identify_boxes(img, 7, args.min_net_gradient),
-                box_size=7,
-            )
-        except Exception:  # noqa: BLE001
-            pass
+        from PycroFlow.live_analysis.client_seam import push_thumbnail
+
+        push_thumbnail(
+            svc.hub,
+            svc.run_id,
+            img,
+            pixelsize_nm=130.0,
+            boxes=_identify_boxes(img, 7, args.min_net_gradient),
+            box_size=7,
+        )
 
     timer = QTimer()
     timer.timeout.connect(_push_thumb)
@@ -456,21 +441,16 @@ def _run_live(app, QMainWindow, args) -> int:
         frame = drv.latest_frame() if drv is not None else None
         if frame is None:
             return
-        try:
-            svc.hub.push_kind(
-                "thumbnail",
-                svc.run_id,
-                data=frame.tobytes(),
-                shape=tuple(frame.shape),
-                dtype=str(frame.dtype),
-                pixelsize_nm=args.pixelsize_nm or 130.0,
-                boxes=_identify_boxes(
-                    frame, args.box_size, args.min_net_gradient
-                ),
-                box_size=args.box_size,
-            )
-        except Exception:  # noqa: BLE001
-            pass
+        from PycroFlow.live_analysis.client_seam import push_thumbnail
+
+        push_thumbnail(
+            svc.hub,
+            svc.run_id,
+            frame,
+            pixelsize_nm=args.pixelsize_nm or 130.0,
+            boxes=_identify_boxes(frame, args.box_size, args.min_net_gradient),
+            box_size=args.box_size,
+        )
 
     timer = QTimer()
     timer.timeout.connect(_push_thumb)

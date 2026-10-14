@@ -54,15 +54,75 @@ class _BaseEmulatedSystem(AbstractSystem):
 
 
 class EmulatedImagingSystem(_BaseEmulatedSystem):
-    """Records 'acquire' entries instead of talking to pycromanager."""
+    """Records 'acquire' entries instead of talking to pycromanager.
+
+    WP-LIVE-INT: when the live-run coordinator attaches a ``frame_tap``, each
+    'acquire' entry also synthesizes a short burst of MockFrameSource frames
+    through it (via ``FrameTap.feed_frames``, the same bracketing protocol
+    ``ImagingSystem.record_movie`` implements), so the Emulator setup
+    exercises the full orchestrated live-analysis path — including the
+    end-this-FOV early-abort — with no instrument. ``self.config`` mirrors
+    the real ImagingSystem's config dict, so the coordinator reads the SAME
+    ``config['camera_info']`` / ``config['live_analysis']`` spelling for both
+    system flavors (thread-pool compute + a low gradient threshold keep the
+    emulated pipeline fast and the synthetic spots localizable).
+    """
+
+    # Cap synthetic frames per acquire so emulated runs stay near-instant
+    # (the emulator's acquisitions are instantaneous anyway).
+    live_max_frames = 60
 
     def __init__(self):
         super().__init__()
         self.acquisitions = []
+        self.frame_tap = None
+        self.last_dataset_path = None
+        self.config = {
+            # Full picasso photon-conversion info (the fit refuses partial
+            # info).
+            "camera_info": {
+                "Baseline": 100.0,
+                "Sensitivity": 0.46,
+                "Gain": 1,
+                "Qe": 0.82,
+                "Pixelsize": 130.0,
+            },
+            "live_analysis": {
+                "use_processes": False,
+                "n_workers": 2,
+                "batch_size": 20,
+                "localize_params": {"Box Size": 7, "Min. Net Gradient": 200},
+                "first_frame_timeout_s": 10.0,
+                # The emulated feed is near-instant; tick thumbnails fast so
+                # the Overview animates (and the hermetic tests see frames).
+                "thumbnail_interval_s": 0.02,
+            },
+        }
 
     def _on_entry(self, entry):
         if entry.get("$type") == "acquire":
             self.acquisitions.append(entry)
+            self._feed_tap(entry)
+
+    def _feed_tap(self, entry):
+        tap = self.frame_tap
+        if tap is None:
+            return
+        from PycroFlow.live_analysis.frame_source import MockFrameSource
+
+        n = int(min(entry.get("frames") or 30, self.live_max_frames))
+        name = "emulated_{}".format(entry.get("message", "acquire"))
+        source = MockFrameSource(n_frames=n, seed=0)
+        frames = (
+            frame for batch in source.batches(8) for frame in batch.frames
+        )
+        tap.feed_frames(
+            name, {"frames": n, "t_exp": entry.get("t_exp")}, frames
+        )
+
+    def position_count(self):
+        """Single-position emulator (matches ImagingSystem.position_count)."""
+        return 1
 
     def close(self):
         """No-op cleanup (matches ImagingSystem.close for SystemService)."""

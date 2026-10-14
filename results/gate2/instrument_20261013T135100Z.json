@@ -1,0 +1,156 @@
+{
+  "checks": [
+    {
+      "criterion": "1: acquisition uncompromised / reader keeps up",
+      "detail": "dropped=0 submitted=20 completed=20 queue_max_depth=1/8",
+      "name": "keep_up",
+      "passed": true,
+      "values": {
+        "backend": "local-subprocess",
+        "completed": 20,
+        "dropped": 0,
+        "queue_max_depth": 1,
+        "queue_size": 8,
+        "submitted": 20,
+        "wall_s": 409.1155
+      }
+    },
+    {
+      "criterion": "2: no silent subsample \u2014 coverage block reconciles",
+      "detail": "frames_read=2000 frames_localized=2000 expected=2000 partial=False run_id=01M4TR1JFFWAA9WMR6HZFQ90QK",
+      "name": "no_silent_subsample",
+      "passed": true,
+      "values": {
+        "errors": 0,
+        "expected_frames": 2000,
+        "frames_localized": 2000,
+        "frames_read": 2000,
+        "partial": false,
+        "run_id": "01M4TR1JFFWAA9WMR6HZFQ90QK"
+      }
+    },
+    {
+      "criterion": "3: live NeNA / locs-per-frame / background are real",
+      "detail": "nena_px=0.250202 nena_nm=32.5263 spots_per_frame=21.958 background=1646.8318 n_locs=43916",
+      "name": "live_metrics_real",
+      "passed": true,
+      "values": {
+        "background": 1646.8318,
+        "n_locs": 43916,
+        "nena_nm": 32.5263,
+        "nena_px": 0.250202,
+        "spots_per_frame": 21.958
+      }
+    },
+    {
+      "criterion": "4: one per-FOV record reaches the registry",
+      "detail": "record present + coverage reconciles",
+      "name": "registry_record",
+      "passed": true,
+      "values": {
+        "acq_status": "live_localized",
+        "analysis_kind": "live_localize",
+        "fov_frame_count": 2000,
+        "raw_retained": true,
+        "registry_ids": {
+          "acquisition_run_id": "01M4TR1JFFWAA9WMR6HZFQ90QK",
+          "analysis_run_id": "01M4TRE1ZHPJ27N6KRDG8DZVNZ",
+          "fov_id": "01M4TRE1ZHPJ27N6KRDG8DZVNY",
+          "metrics_id": "01M4TRE1ZHPJ27N6KRDG8DZVP0"
+        }
+      }
+    },
+    {
+      "criterion": "5: T3 laser interlock \u2014 all three exit paths (safety)",
+      "detail": "paths safe: {'normal_end': True, 'early_abort': True, 'injected_exception': True}",
+      "name": "laser_interlock",
+      "passed": true,
+      "values": {
+        "paths": {
+          "early_abort": true,
+          "injected_exception": true,
+          "normal_end": true
+        }
+      }
+    },
+    {
+      "criterion": "6: pycromanager-1.0 acq-PC items (instrument-only)",
+      "detail": "numpy-2 + pycromanager-1.0 + picasso coexist; peek OK",
+      "name": "pycromanager_1_0",
+      "passed": true,
+      "values": {
+        "import_coexist": true,
+        "ram_peek_frames": 0,
+        "versions": {
+          "git_commit": "ba8b34b04b01bea50ac80a68ddd73c03b7216431",
+          "host": "wsju06",
+          "mm_version": "MMCore version 12.5.0",
+          "mode": "instrument",
+          "ndstorage": "0.1.18",
+          "ndtiff": "not-installed",
+          "numpy": "2.4.6",
+          "numpy_has_trapezoid": true,
+          "os": "Windows-10-10.0.19045-SP0",
+          "picasso": "0.12.0a3",
+          "pycroflow": "0.2.1.dev88+gba8b34b04",
+          "pycromanager": "1.0.2",
+          "python": "3.11.17",
+          "schema_version": "1.0"
+        }
+      }
+    },
+    {
+      "criterion": "7: write-target-gated archive + checksum-before-delete",
+      "detail": "verified=True moved=True local_deleted=True dest_exists=True",
+      "name": "archive",
+      "passed": true,
+      "values": {
+        "checksum": "82d5dd57d8252561b155ced18564fad253badde0cc82426668810221ca516dc4",
+        "dest": "C:\\Users\\miblab\\AppData\\Local\\Temp\\tmpw0h3vryc\\archive\\gate2_movie.tif",
+        "local_deleted": true,
+        "moved": true,
+        "verified": true
+      }
+    }
+  ],
+  "config": {
+    "archive_dir": null,
+    "batch_size": 100,
+    "data_dir": "results\\testpicasso012",
+    "exposure_ms": 100.0,
+    "laser": null,
+    "mm_config": "C:\\Users\\miblab\\Desktop\\MMConfig_NoDiaLamp_ASIXY.cfg",
+    "mode": "instrument",
+    "monet_host": null,
+    "n_frames": 2000,
+    "n_workers": 2,
+    "registry_url": null,
+    "timeout_s": 900.0
+  },
+  "failures": [],
+  "gate": "gate2",
+  "gate2_pass": true,
+  "mode": "instrument",
+  "schema_version": "1.0",
+  "stall_detail": "",
+  "stalled": false,
+  "stalled_phase": null,
+  "utc_end": "2026-10-13T13:50:59.903477+00:00",
+  "utc_start": "2026-10-13T13:43:02.028533+00:00",
+  "version_block": {
+    "git_commit": "ba8b34b04b01bea50ac80a68ddd73c03b7216431",
+    "host": "wsju06",
+    "mm_version": "MMCore version 12.5.0",
+    "mode": "instrument",
+    "ndstorage": "0.1.18",
+    "ndtiff": "not-installed",
+    "numpy": "2.4.6",
+    "numpy_has_trapezoid": true,
+    "os": "Windows-10-10.0.19045-SP0",
+    "picasso": "0.12.0a3",
+    "pycroflow": "0.2.1.dev88+gba8b34b04",
+    "pycromanager": "1.0.2",
+    "python": "3.11.17",
+    "schema_version": "1.0"
+  }
+}

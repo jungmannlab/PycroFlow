@@ -60,12 +60,57 @@ DEFAULT_LOCALIZE_PARAMS = {
 }
 
 
+def surface_record(hub, run_id, registry, payload, poster):
+    """Post one registry record best-effort and surface the outcome on a hub.
+
+    The single implementation of the record-surfacing triad every registry
+    writer uses (the per-FOV records here, the experiment-level record in
+    the live-run coordinator), so all ``kind == "record"`` updates share one
+    shape: ``posted=True`` with ``ids``, or ``posted=False`` with the unposted
+    ``payload`` (no client) / the ``error`` (post failed). Never raises; a
+    registry outage is never fatal.
+
+    Parameters
+    ----------
+    hub : UpdateHub
+        Where the outcome is pushed (``kind="record"``).
+    run_id : str
+        The experiment run_id the update is tagged with.
+    registry : object or None
+        The registry client; None surfaces the payload as not posted.
+    payload : dict
+        The record payload (also surfaced verbatim when not posted).
+    poster : callable
+        ``poster(registry, payload) -> dict`` returning the created ids.
+
+    Returns
+    -------
+    dict or None
+        The created ids, or None when not posted.
+    """
+    if registry is None:
+        hub.push_kind("record", run_id, payload=payload, posted=False)
+        return None
+    try:
+        ids = poster(registry, payload)
+        hub.push_kind("record", run_id, ids=ids, posted=True)
+        return ids
+    except Exception as exc:  # noqa: BLE001 - a registry outage isn't fatal
+        logger.warning("posting record failed: {!r}".format(exc))
+        hub.push_kind("record", run_id, error=repr(exc), posted=False)
+        return None
+
+
 @dataclass
 class FovConfig:
     """Per-FOV inputs (what/where to read + how to localize + where to archive)."""
 
     source_kind: str = "tiff-tail"
     source_kwargs: dict = field(default_factory=dict)
+    # A pre-built frame source the CALLER owns (started/stopped/read by it —
+    # e.g. the MM-preview's RamPeek, whose latest_frame feeds thumbnails).
+    # Takes precedence over source_kind/source_kwargs when set.
+    source_instance: object | None = None
     localize_params: dict = field(
         default_factory=lambda: dict(DEFAULT_LOCALIZE_PARAMS)
     )
@@ -104,6 +149,10 @@ class FovResult:
     # Coverage provenance: frames_read vs frames_localized + partial flags, so
     # partial coverage (abort/error/dropped) is explicit, never silent.
     coverage: dict = field(default_factory=dict)
+    # The abort generation observed when this FOV's fate was sealed; lets an
+    # orchestrated caller re-arm exactly the aborts this FOV consumed (see
+    # clear_abort) without erasing a newer, not-yet-served request.
+    abort_generation: int = 0
 
     @property
     def partial(self) -> bool:
@@ -123,6 +172,15 @@ class LiveAnalysisService:
         The illumination system for the laser interlock (None -> interlock no-op).
     lasers_off_finally : bool
         Master switch for the T3 interlock (default ON, fail-safe).
+    interlock_per_fov : bool
+        When True (default — the standalone WP-4 behaviour, where one FOV is
+        effectively the run), the interlock engages on EVERY FOV end. The
+        orchestrated path (WP-LIVE-INT) passes False: between rounds the
+        ILLUMINATION HANDLER owns the lasers (its protocol entries set the
+        non-acquisition power), so a clean-FOV all-off would race it. Abort
+        and error still engage immediately regardless, and :meth:`shutdown`
+        provides the matching end-of-experiment engage (C21's
+        "end-of-run/on-abort" scope).
     """
 
     def __init__(
@@ -131,14 +189,21 @@ class LiveAnalysisService:
         registry_client=None,
         illumination_system=None,
         lasers_off_finally: bool = True,
+        interlock_per_fov: bool = True,
     ):
         self._registry = registry_client
         self._interlock = LaserInterlock(
             illumination_system, enabled=lasers_off_finally
         )
+        self._interlock_per_fov = interlock_per_fov
         self.hub = UpdateHub()
         self._run_id: str | None = None
         self._abort = threading.Event()
+        # Monotonic count of abort REQUESTS, so a per-FOV caller can clear
+        # exactly the requests a finished FOV consumed (clear_abort) without
+        # losing one that arrived after the FOV's fate was sealed.
+        self._abort_gen = 0
+        self._abort_lock = threading.Lock()
 
     # -- experiment lifecycle ----------------------------------------------
     def start_experiment(self, run_id: str | None = None) -> str:
@@ -165,8 +230,55 @@ class LiveAnalysisService:
         what's in flight, and the ``finally`` engages the laser interlock.
         """
         logger.warning("live-analysis early-abort requested")
-        self._abort.set()
+        with self._abort_lock:
+            self._abort_gen += 1
+            self._abort.set()
         self.hub.push_kind("state", self._run_id, state="abort_requested")
+
+    def abort_requested(self) -> bool:
+        """True while the early-abort flag is armed (see :meth:`clear_abort`)."""
+        return self._abort.is_set()
+
+    def abort_generation(self) -> int:
+        """Monotonic count of abort requests so far (see :meth:`clear_abort`)."""
+        with self._abort_lock:
+            return self._abort_gen
+
+    def clear_abort(self, generation: int | None = None) -> None:
+        """Re-arm after a per-FOV early-abort (orchestrated runs).
+
+        The standalone WP-4 flow treats an early-abort as ending the
+        experiment, so the flag only clears on :meth:`start_experiment`. In an
+        ORCHESTRATED run the abort's scope is ONE FOV (initiative #3): the
+        live-run coordinator clears the flag at the END of an aborted FOV so
+        the protocol continues with a fresh one.
+
+        Parameters
+        ----------
+        generation : int or None
+            When given (``FovResult.abort_generation``), the flag clears ONLY
+            if no newer abort arrived since that FOV's fate was sealed — a
+            request landing in the gap stays armed and aborts the next FOV
+            instead of being silently lost. None clears unconditionally.
+        """
+        with self._abort_lock:
+            if generation is None or generation == self._abort_gen:
+                self._abort.clear()
+
+    def shutdown(self, *, reason: str = "experiment end"):
+        """End-of-experiment safety engage of the laser interlock. Never raises.
+
+        The orchestrated path suppresses the per-clean-FOV engage
+        (``interlock_per_fov=False``); this is the matching end-of-run engage
+        (C21). Idempotent — engaging an already-dark system is a no-op.
+        """
+        result = None
+        try:
+            result = self._interlock.engage(reason=reason)
+        except Exception as exc:  # noqa: BLE001 - interlock must never raise
+            logger.error("shutdown interlock raised: {!r}".format(exc))
+        self.hub.push_kind("state", self._run_id, state="experiment_ended")
+        return result
 
     # -- per-FOV run --------------------------------------------------------
     def run_fov(self, cfg: FovConfig) -> FovResult:
@@ -184,7 +296,11 @@ class LiveAnalysisService:
 
         metrics = RunningMetrics()
         metrics.set_pixelsize_nm(cfg.pixelsize_nm)
-        source = make_frame_source(cfg.source_kind, **cfg.source_kwargs)
+        source = (
+            cfg.source_instance
+            if cfg.source_instance is not None
+            else make_frame_source(cfg.source_kind, **cfg.source_kwargs)
+        )
 
         aborted = False
         error: str | None = None
@@ -246,25 +362,42 @@ class LiveAnalysisService:
                     self._push_metrics(run_id, metrics, backend)
                     last_push = now
 
+            # The source can end (sentinel) before the per-batch abort check
+            # runs again — e.g. an early-abort that already stopped the
+            # producer, with the last frames still in flight. Record the
+            # abort honestly instead of reporting a clean FOV the operator
+            # in fact aborted (coverage still shows what was localized).
+            if self._abort.is_set():
+                aborted = True
+
         except (
             Exception
         ) as exc:  # noqa: BLE001 - captured; interlock still runs
             error = repr(exc)
             logger.exception("live-analysis FOV failed")
         finally:
-            # --- T3 laser fail-safe: ALWAYS runs (normal / abort / crash) ---
-            try:
-                interlock_result = self._interlock.engage(
-                    reason=(
-                        "fov end"
-                        if not (aborted or error)
-                        else ("abort" if aborted else "error")
+            # Seal the abort bookkeeping for this FOV: requests up to here
+            # shaped its fate; anything newer belongs to the next FOV (the
+            # caller passes this to clear_abort so a late request survives).
+            with self._abort_lock:
+                abort_generation = self._abort_gen
+            # --- T3 laser fail-safe (C21): abort and error ALWAYS engage;
+            # a clean FOV end engages only in per-FOV mode (standalone WP-4).
+            # The orchestrated path engages once at experiment end instead
+            # (see ``interlock_per_fov`` / :meth:`shutdown`).
+            if self._interlock_per_fov or aborted or error:
+                try:
+                    interlock_result = self._interlock.engage(
+                        reason=(
+                            "fov end"
+                            if not (aborted or error)
+                            else ("abort" if aborted else "error")
+                        )
                     )
-                )
-            except (
-                Exception
-            ) as exc:  # noqa: BLE001 - interlock must never raise
-                logger.error("interlock itself raised: {!r}".format(exc))
+                except (
+                    Exception
+                ) as exc:  # noqa: BLE001 - interlock must never raise
+                    logger.error("interlock itself raised: {!r}".format(exc))
 
             # Drain in-flight localizations + tear the pool down.
             if backend is not None:
@@ -356,6 +489,7 @@ class LiveAnalysisService:
             aborted=aborted,
             error=error,
             coverage=coverage,
+            abort_generation=abort_generation,
         )
 
     # -- internals ----------------------------------------------------------
@@ -368,19 +502,9 @@ class LiveAnalysisService:
         )
 
     def _post_record(self, run_id, payload: dict) -> dict | None:
-        if self._registry is None:
-            self.hub.push_kind("record", run_id, payload=payload, posted=False)
-            return None
-        try:
-            ids = post_fov_record(self._registry, payload)
-            self.hub.push_kind("record", run_id, ids=ids, posted=True)
-            return ids
-        except (
-            Exception
-        ) as exc:  # noqa: BLE001 - a registry outage isn't fatal
-            logger.warning("posting FOV record failed: {!r}".format(exc))
-            self.hub.push_kind("record", run_id, error=repr(exc), posted=False)
-            return None
+        return surface_record(
+            self.hub, run_id, self._registry, payload, post_fov_record
+        )
 
 
 # Re-exported so callers don't reach into archive.py for the constants.
@@ -391,4 +515,5 @@ __all__ = [
     "WRITE_TARGET_LOCAL",
     "WRITE_TARGET_POOL",
     "DEFAULT_LOCALIZE_PARAMS",
+    "surface_record",
 ]
