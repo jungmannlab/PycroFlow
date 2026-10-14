@@ -2567,6 +2567,48 @@ class TestWebcamsTab(unittest.TestCase):
         tab._output_edit.setText("/data/mycam")
         tab._apply()
         self.assertEqual(svc.setup["monitoring"]["output_dir"], "/data/mycam")
+
+    def test_exposure_fields_apply_and_omit_when_blank(self):
+        tab, svc = self._tab()
+        tab._rows[0]["exposure"].setText("-6")
+        tab._rows[0]["auto_exposure"].setText("0.25")
+        tab._rows[0]["fourcc"].setText("mjpg")
+        tab._apply()
+        cams = svc.setup["monitoring"]["cameras"]
+        self.assertEqual(cams[0]["exposure"], -6.0)
+        self.assertEqual(cams[0]["auto_exposure"], 0.25)
+        self.assertEqual(cams[0]["fourcc"], "MJPG")  # upper-cased
+        # A row left blank emits no capture knobs (keeps the YAML minimal).
+        self.assertNotIn("exposure", cams[1])
+        self.assertNotIn("auto_exposure", cams[1])
+        self.assertNotIn("fourcc", cams[1])
+
+    def test_exposure_seeds_from_block_and_feeds_preview(self):
+        from PycroFlow.services import SystemService
+        from PycroFlow.gui.tabs.webcams_tab import WebcamsTab
+
+        svc = SystemService()
+        svc.load_setup("EmulatorCam")
+        svc.setup["monitoring"]["cameras"] = [
+            {
+                "role": "reservoir",
+                "device": 0,
+                "width": 320,
+                "height": 240,
+                "exposure": -5,
+                "auto_exposure": 0.75,
+                "fourcc": "MJPG",
+            },
+        ]
+        tab = WebcamsTab(svc)
+        self.assertEqual(tab._rows[0]["exposure"].text(), "-5")
+        self.assertEqual(tab._rows[0]["auto_exposure"].text(), "0.75")
+        self.assertEqual(tab._rows[0]["fourcc"].text(), "MJPG")
+        # _current_cameras is what the preview opens the camera with.
+        cam = tab._current_cameras()[0]
+        self.assertEqual(cam.exposure, -5.0)
+        self.assertEqual(cam.auto_exposure, 0.75)
+        self.assertEqual(cam.fourcc, "MJPG")
         # Blank -> the key is dropped (falls back to the experiment folder).
         tab._output_edit.setText("")
         tab._apply()

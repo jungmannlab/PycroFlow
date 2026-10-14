@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed / Changed
 
+- **Webcams tab exposes the capture knobs.** Each camera row now has optional
+  **`exp` / `auto-exp` / `fourcc`** fields (blank = leave to the driver), so
+  exposure can be tuned against the live preview and saved to the setup from the
+  GUI instead of hand-editing YAML. They flow into the preview's `CameraConfig`
+  (so the effect is visible on restart) and are written to the `monitoring:`
+  block only when set, keeping the YAML minimal.
 - **Fluidics monitoring webcam no longer silently records a black clip.** On
   the rig the webcam preview/clip came up dark while the OS camera tool worked.
   The `backend: dshow` config was intact, but the capture committed to the first

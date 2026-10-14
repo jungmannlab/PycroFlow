@@ -26,7 +26,7 @@ from typing import Optional
 
 import yaml
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QDoubleValidator, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -47,6 +47,22 @@ from PycroFlow.monitoring.config import KNOWN_ROLES, CameraConfig
 from PycroFlow.monitoring.tiling import compose, plan_layout
 
 _PREVIEW_FPS = 8
+
+
+def _parse_float(text) -> Optional[float]:
+    """Parse an optional-float text field -- blank/invalid -> ``None``."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _fmt_opt(value) -> str:
+    """Render an optional config value for a text field (``None`` -> '')."""
+    return "" if value is None else str(value)
 
 
 class _PreviewWorker(QThread):
@@ -227,6 +243,43 @@ class WebcamsTab(QWidget):
         row.addWidget(w)
         row.addWidget(QLabel("x"))
         row.addWidget(h)
+
+        # Optional instrument-source capture knobs (ignored by the emulator).
+        # Blank = leave to the driver; tune exposure against the live preview
+        # when a real webcam opens but looks dark.
+        row.addWidget(QLabel("exp"))
+        exposure = QLineEdit(_fmt_opt(cam.get("exposure")))
+        exposure.setValidator(QDoubleValidator())
+        exposure.setPlaceholderText("auto")
+        exposure.setFixedWidth(56)
+        exposure.setToolTip(
+            "Manual exposure (OpenCV CAP_PROP_EXPOSURE), driver-specific "
+            "(e.g. -6 on DirectShow). Blank = leave to the driver. "
+            "Restart the preview to apply."
+        )
+        row.addWidget(exposure)
+
+        row.addWidget(QLabel("auto-exp"))
+        auto_exposure = QLineEdit(_fmt_opt(cam.get("auto_exposure")))
+        auto_exposure.setValidator(QDoubleValidator())
+        auto_exposure.setPlaceholderText("auto")
+        auto_exposure.setFixedWidth(56)
+        auto_exposure.setToolTip(
+            "CAP_PROP_AUTO_EXPOSURE: on many DirectShow drivers 0.25 = manual, "
+            "0.75 = auto. Blank = leave alone."
+        )
+        row.addWidget(auto_exposure)
+
+        row.addWidget(QLabel("fourcc"))
+        fourcc = QLineEdit(str(cam.get("fourcc") or ""))
+        fourcc.setMaxLength(4)
+        fourcc.setPlaceholderText("auto")
+        fourcc.setFixedWidth(56)
+        fourcc.setToolTip(
+            "Force a pixel format, e.g. MJPG (some UVC cams only deliver real "
+            "frames under MJPG). Blank = driver default."
+        )
+        row.addWidget(fourcc)
         row.addStretch()
 
         remove = QPushButton("Remove")
@@ -236,6 +289,9 @@ class WebcamsTab(QWidget):
             "device": device,
             "w": w,
             "h": h,
+            "exposure": exposure,
+            "auto_exposure": auto_exposure,
+            "fourcc": fourcc,
             "remove": remove,
         }
         remove.clicked.connect(lambda: self._remove_camera_row(entry))
@@ -267,15 +323,23 @@ class WebcamsTab(QWidget):
         """The edited cameras as plain dicts (setup/YAML shape)."""
         cams = []
         for i, e in enumerate(self._rows):
-            cams.append(
-                {
-                    "role": e["role"].currentText().strip()
-                    or "cam{}".format(i),
-                    "device": e["device"].value(),
-                    "width": e["w"].value(),
-                    "height": e["h"].value(),
-                }
-            )
+            cam = {
+                "role": e["role"].currentText().strip() or "cam{}".format(i),
+                "device": e["device"].value(),
+                "width": e["w"].value(),
+                "height": e["h"].value(),
+            }
+            # Optional knobs: only emit when set, so the YAML stays minimal.
+            exposure = _parse_float(e["exposure"].text())
+            if exposure is not None:
+                cam["exposure"] = exposure
+            auto_exposure = _parse_float(e["auto_exposure"].text())
+            if auto_exposure is not None:
+                cam["auto_exposure"] = auto_exposure
+            fourcc = e["fourcc"].text().strip().upper()
+            if fourcc:
+                cam["fourcc"] = fourcc
+            cams.append(cam)
         return cams
 
     def _output_value(self) -> Optional[str]:
@@ -290,6 +354,9 @@ class WebcamsTab(QWidget):
                 device=c["device"],
                 width=c["width"],
                 height=c["height"],
+                exposure=c.get("exposure"),
+                auto_exposure=c.get("auto_exposure"),
+                fourcc=c.get("fourcc"),
             )
             for c in self._camera_dicts()
         ]
@@ -464,7 +531,16 @@ class WebcamsTab(QWidget):
             )
         ]
         for e in self._rows:
-            widgets += [e["role"], e["device"], e["w"], e["h"], e["remove"]]
+            widgets += [
+                e["role"],
+                e["device"],
+                e["w"],
+                e["h"],
+                e["exposure"],
+                e["auto_exposure"],
+                e["fourcc"],
+                e["remove"],
+            ]
         for w in widgets:
             if w is not None:
                 w.setEnabled(not locked)
