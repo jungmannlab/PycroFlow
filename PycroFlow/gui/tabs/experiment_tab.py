@@ -12,6 +12,7 @@ from.
 """
 
 import ast
+import copy
 import re
 import time
 
@@ -93,6 +94,47 @@ _CAN_CLEAR = {
 # Step-list shading.
 _FINISHED_COLOR = QColor("#e8f5e9")  # light green — completed
 _ACTIVE_COLOR = QColor("#fff59d")  # amber — currently executing
+
+# Entry types offered by the "Add step" control, per subsystem, with a default
+# template. Editing the sequence by hand flags the run as modified (it is no
+# longer a faithful instance of its named experiment type), so these are for
+# tweaks/tests rather than authoring a protocol from scratch.
+_NEW_ENTRY_TEMPLATES = {
+    "inject": {"$type": "inject", "reservoir_id": 0, "volume": 10.0},
+    "incubate": {"$type": "incubate", "duration": 60.0},
+    "flush": {"$type": "flush", "flushfactor": 1.0},
+    "pump_out": {"$type": "pump_out", "volume": 10.0},
+    "acquire": {"$type": "acquire", "frames": 100, "t_exp": 100.0},
+    "await_acquisition": {"$type": "await_acquisition"},
+    "signal": {"$type": "signal", "value": "custom signal"},
+    "wait for signal": {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "custom signal",
+    },
+    "set power": {"$type": "set power", "laser": 560, "power": 30.0},
+    "set shutter": {"$type": "set shutter", "state": True},
+    "laser enable": {"$type": "laser enable", "laser": "all", "state": True},
+}
+_SYSTEM_ENTRY_TYPES = {
+    "fluid": [
+        "inject",
+        "incubate",
+        "flush",
+        "pump_out",
+        "signal",
+        "wait for signal",
+        "await_acquisition",
+    ],
+    "img": ["acquire", "signal", "wait for signal", "await_acquisition"],
+    "illu": [
+        "set power",
+        "set shutter",
+        "laser enable",
+        "signal",
+        "wait for signal",
+    ],
+}
 
 
 class _Stopwatch:
@@ -176,6 +218,14 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.state_label = QLabel(self._service.state.value)
         self.state_label.setObjectName("state_label")
         status_row.addWidget(self.state_label)
+        # Shown only once the loaded sequence has been hand-edited: the run is
+        # then recorded as "<type>-modified", not a faithful named experiment.
+        self.modified_label = QLabel("⚠ modified sequence")
+        self.modified_label.setStyleSheet(
+            "color: #b8860b; font-weight: bold;"
+        )
+        self.modified_label.setVisible(False)
+        status_row.addWidget(self.modified_label)
         status_row.addStretch()
         layout.addLayout(status_row)
 
@@ -280,6 +330,32 @@ class ExperimentTab(YamlDropMixin, QWidget):
             lists_row.addLayout(col, 1)
         steps_layout.addLayout(lists_row, 1)
 
+        # --- sequence edit toolbar (operates on the selected step/list)
+        edit_row = QHBoxLayout()
+        edit_row.addWidget(QLabel("Edit selected list:"))
+        self.add_type_combo = QComboBox()
+        self.add_type_combo.setMinimumWidth(150)
+        edit_row.addWidget(self.add_type_combo)
+        self.add_step_btn = QPushButton("Add")
+        self.dup_step_btn = QPushButton("Duplicate")
+        self.del_step_btn = QPushButton("Delete")
+        self.move_up_btn = QPushButton("Move ↑")
+        self.move_down_btn = QPushButton("Move ↓")
+        for b in (
+            self.add_step_btn,
+            self.dup_step_btn,
+            self.del_step_btn,
+            self.move_up_btn,
+            self.move_down_btn,
+        ):
+            edit_row.addWidget(b)
+        edit_row.addStretch()
+        steps_layout.addLayout(edit_row)
+        # Inline (non-blocking) consistency feedback after an edit.
+        self.consistency_label = QLabel("")
+        self.consistency_label.setWordWrap(True)
+        steps_layout.addWidget(self.consistency_label)
+
         params_box = QGroupBox("Step parameters (editable)")
         params_layout = QVBoxLayout(params_box)
         self.step_param_label = QLabel("Select a step above to view it.")
@@ -344,6 +420,11 @@ class ExperimentTab(YamlDropMixin, QWidget):
                 )
             )
         self.apply_btn.clicked.connect(self._on_apply)
+        self.add_step_btn.clicked.connect(self._on_add_step)
+        self.dup_step_btn.clicked.connect(self._on_duplicate_step)
+        self.del_step_btn.clicked.connect(self._on_delete_step)
+        self.move_up_btn.clicked.connect(lambda: self._on_move_step(-1))
+        self.move_down_btn.clicked.connect(lambda: self._on_move_step(1))
         self._poll_timer.timeout.connect(self._poll_progress)
         self.load_btn.clicked.connect(self._on_load)
         self.clear_btn.clicked.connect(self._on_clear)
@@ -371,7 +452,28 @@ class ExperimentTab(YamlDropMixin, QWidget):
             self._service.clear_protocol()
 
     def _on_start(self):
-        self._service.start()
+        # Refuse to launch a hand-edited sequence that would hang (orphan /
+        # circular wait). Scoped to edited sequences so un-edited runs behave
+        # exactly as before (the service applies the same scoping as a
+        # backstop).
+        issues = (
+            self._service.check_runnable()
+            if getattr(self._service, "protocol_modified", False) is True
+            else []
+        )
+        if issues:
+            QMessageBox.critical(
+                self,
+                "Run Sequence would hang",
+                "This sequence cannot run as-is:\n\n• "
+                + "\n• ".join(issues)
+                + "\n\nFix the steps (or reload/translate) before starting.",
+            )
+            return
+        try:
+            self._service.start()
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not start run", "{}".format(exc))
 
     def _on_pause_resume(self):
         if self._service.state is ExperimentState.RUNNING:
@@ -399,6 +501,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.abort_btn.setEnabled(state in _CAN_ABORT)
         # Centring on the current step only makes sense while one is running.
         self.center_btn.setEnabled(state in _ACTIVE_STATES)
+        self._refresh_edit_controls(state)
         if state is ExperimentState.RUNNING:
             self.pause_resume_btn.setText("Pause")
             self.pause_resume_btn.setEnabled(True)
@@ -514,6 +617,8 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.step_table.setRowCount(0)
         self.step_param_label.setText("Select a step above to view it.")
         self.apply_btn.setEnabled(False)
+        self._update_modified_badge()
+        self._refresh_edit_controls(self._service.state)
 
     def _reset_progress_display(self):
         """Zero the progress bars / counters / status (used when cleared)."""
@@ -1108,6 +1213,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
             return
         self._highlight_concurrent(system, row)
         self._show_step_params(system, row)
+        self._refresh_edit_controls(self._service.state)
 
     def _highlight_concurrent(self, system, row):
         """Select + centre the concurrent step in the OTHER two lists."""
@@ -1199,6 +1305,138 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # Re-render from the stored entry so displayed text and the cached
         # value types reflect what was actually written.
         self._on_step_selected(self._current_sys, row)
+
+    # --- structural sequence editing (add / duplicate / delete / move)
+
+    def _refresh_edit_controls(self, state):
+        """Enable the edit toolbar only when a sequence can be edited.
+
+        Editing is allowed when nothing is running (``state in _CAN_LOAD``) and
+        a protocol is loaded. Add needs a target system; the per-row actions
+        need a selected row. The add-type combo is repopulated for the selected
+        system so only that subsystem's valid step types are offered.
+        """
+        can_edit = state in _CAN_LOAD and bool(self._service.protocol)
+        system = self._current_sys
+        row = self._current_row
+        has_system = can_edit and system in _SYSTEM_ENTRY_TYPES
+        has_row = has_system and 0 <= row < len(self._entries.get(system, []))
+        # Populate the add-type combo for the selected system.
+        wanted = _SYSTEM_ENTRY_TYPES.get(system, []) if has_system else []
+        current = [
+            self.add_type_combo.itemText(i)
+            for i in range(self.add_type_combo.count())
+        ]
+        if current != wanted:
+            self.add_type_combo.blockSignals(True)
+            self.add_type_combo.clear()
+            self.add_type_combo.addItems(wanted)
+            self.add_type_combo.blockSignals(False)
+        self.add_type_combo.setEnabled(has_system)
+        self.add_step_btn.setEnabled(has_system)
+        self.dup_step_btn.setEnabled(has_row)
+        self.del_step_btn.setEnabled(has_row)
+        self.move_up_btn.setEnabled(has_row and row > 0)
+        self.move_down_btn.setEnabled(
+            has_row and row < len(self._entries.get(system, [])) - 1
+        )
+
+    def _protocol_entries(self, system):
+        """The underlying (mutable) protocol entry list for ``system``.
+
+        Edits must mutate the list the orchestrator runs — ``self._entries`` is
+        a shallow copy rebuilt on every repopulate, so inserting/removing there
+        would be lost. Returns None when the system is absent.
+        """
+        proto = self._service.protocol or {}
+        sub = proto.get(system)
+        if isinstance(sub, dict) and isinstance(
+            sub.get("protocol_entries"), list
+        ):
+            return sub["protocol_entries"]
+        return None
+
+    def _after_structural_edit(self, system, select_row):
+        """Common tail for every structural edit.
+
+        Flags the run modified, re-renders the lists, restores the selection,
+        refreshes the duration estimates + modified badge, and runs the
+        (non-blocking) consistency check.
+        """
+        self._service.mark_protocol_modified()
+        self._populate_steps()
+        self._update_modified_badge()
+        # Restore a sensible selection so the user can keep editing.
+        entries = self._entries.get(system, [])
+        if entries:
+            row = min(max(select_row, 0), len(entries) - 1)
+            lst = self.step_lists[system]
+            lst.setCurrentRow(row)  # fires _on_step_selected -> params + edit
+        else:
+            self._current_sys = system
+            self._current_row = -1
+            self._refresh_edit_controls(self._service.state)
+        self._check_consistency_inline()
+
+    def _on_add_step(self):
+        system = self._current_sys
+        entries = self._protocol_entries(system)
+        if entries is None:
+            return
+        type_ = self.add_type_combo.currentText()
+        template = _NEW_ENTRY_TEMPLATES.get(type_)
+        if template is None:
+            return
+        at = self._current_row + 1 if self._current_row >= 0 else len(entries)
+        entries.insert(at, copy.deepcopy(template))
+        self._after_structural_edit(system, at)
+
+    def _on_duplicate_step(self):
+        system = self._current_sys
+        entries = self._protocol_entries(system)
+        row = self._current_row
+        if entries is None or not (0 <= row < len(entries)):
+            return
+        entries.insert(row + 1, copy.deepcopy(entries[row]))
+        self._after_structural_edit(system, row + 1)
+
+    def _on_delete_step(self):
+        system = self._current_sys
+        entries = self._protocol_entries(system)
+        row = self._current_row
+        if entries is None or not (0 <= row < len(entries)):
+            return
+        del entries[row]
+        self._after_structural_edit(system, row)
+
+    def _on_move_step(self, delta):
+        system = self._current_sys
+        entries = self._protocol_entries(system)
+        row = self._current_row
+        if entries is None or not (0 <= row < len(entries)):
+            return
+        j = row + delta
+        if not (0 <= j < len(entries)):
+            return
+        entries[row], entries[j] = entries[j], entries[row]
+        self._after_structural_edit(system, j)
+
+    def _update_modified_badge(self):
+        self.modified_label.setVisible(
+            bool(getattr(self._service, "protocol_modified", False))
+        )
+
+    def _check_consistency_inline(self):
+        """Show a non-blocking consistency hint for the edited sequence."""
+        issues = self._service.check_runnable()
+        if issues:
+            self.consistency_label.setStyleSheet("color: #d9534f;")
+            self.consistency_label.setText(
+                "⚠ Sequence problem:  " + "   ".join(issues)
+            )
+        else:
+            self.consistency_label.setStyleSheet("color: #2e7d32;")
+            self.consistency_label.setText("✓ Sequence consistent")
 
     # --- editing helpers
 

@@ -166,6 +166,7 @@ def build_experiment_payload(
     run_id: str,
     design: dict | None = None,
     setup_name: str | None = None,
+    sequence_modified: bool = False,
 ) -> dict:
     """Assemble the experiment-level registry record (WP-LIVE-INT).
 
@@ -185,14 +186,23 @@ def build_experiment_payload(
         The validated Experiment Design dict (aliased keys).
     setup_name : str or None
         The microscope setup name, when the frontend knows it.
+    sequence_modified : bool
+        Whether the Run Sequence was hand-edited after translation. When true
+        the run is no longer a faithful instance of its named experiment type,
+        so ``experiment_type`` is suffixed ``-modified`` and a
+        ``sequence_modified`` flag is recorded.
     """
     design = design if isinstance(design, dict) else {}
     exp = design.get("experiment") or {}
+    exp_type = exp.get("type")
+    if exp_type and sequence_modified:
+        exp_type = "{}-modified".format(exp_type)
     extra = {
         "run_id": run_id,
-        "experiment_type": exp.get("type"),
+        "experiment_type": exp_type,
         "base_name": design.get("base_name"),
         "setup": setup_name,
+        "sequence_modified": True if sequence_modified else None,
     }
     return {
         "id": experiment_id,

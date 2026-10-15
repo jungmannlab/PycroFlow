@@ -190,6 +190,21 @@ class TestPostRecordsBufferedClient(unittest.TestCase):
         row = post_experiment_record(client, payload)
         self.assertEqual(row["id"], "EXPID")
 
+    def test_experiment_payload_flags_modified_sequence(self):
+        # A hand-edited Run Sequence is no longer a faithful named experiment:
+        # the type is suffixed and a sequence_modified flag is recorded.
+        payload = build_experiment_payload(
+            experiment_id="EXPID",
+            run_id="RUNID",
+            design={"base_name": "exp1", "experiment": {"type": "Exchange"}},
+            setup_name="Emulator",
+            sequence_modified=True,
+        )
+        self.assertEqual(
+            payload["extra"]["experiment_type"], "Exchange-modified"
+        )
+        self.assertIs(payload["extra"]["sequence_modified"], True)
+
 
 class TestAbortGenerations(unittest.TestCase):
     """clear_abort(generation=...) must never erase a newer abort request."""

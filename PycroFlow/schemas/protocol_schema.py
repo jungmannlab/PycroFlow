@@ -230,12 +230,23 @@ def check_runnable(protocol) -> list:
         else:
             entries[system] = []
 
-    # value -> set of subsystems that emit a signal with that value.
-    emitters = {}
+    # (system, value) pairs actually emitted by a ``signal`` step.
+    emitted = set()
     for system, es in entries.items():
         for e in es:
             if e.get("$type") == "signal" and e.get("value") is not None:
-                emitters.setdefault(e.get("value"), set()).add(system)
+                emitted.add((system, e.get("value")))
+
+    def _satisfies(target, value):
+        """Whether ``target`` emits ``value`` under the orchestrator's rules.
+
+        Mirrors AbstractSystemHandler: a wait for ``value`` from ``target`` is
+        satisfied by ``target`` emitting exactly ``value`` OR the legacy
+        prefixed form ``"<target> <value>"`` (core.py send_message/wait).
+        """
+        if (target, value) in emitted:
+            return True
+        return (target, "{} {}".format(target, value)) in emitted
 
     issues = []
 
@@ -246,24 +257,11 @@ def check_runnable(protocol) -> list:
                 continue
             value = e.get("value")
             target = e.get("target")
-            systems_emitting = emitters.get(value, set())
-            if not systems_emitting:
+            if target is None or not _satisfies(target, value):
                 issues.append(
-                    "{} step {}: waits for signal {!r} that is never "
-                    "emitted — the run would hang here.".format(
-                        system, i, value
-                    )
-                )
-            elif target is not None and target not in systems_emitting:
-                issues.append(
-                    "{} step {}: waits for signal {!r} from {!r}, but that "
-                    "value is only emitted by {} — the run would hang "
-                    "here.".format(
-                        system,
-                        i,
-                        value,
-                        target,
-                        ", ".join(sorted(systems_emitting)),
+                    "{} step {}: waits for signal {!r} from {!r} that is "
+                    "never emitted — the run would hang here.".format(
+                        system, i, value, target
                     )
                 )
 
@@ -282,16 +280,25 @@ def check_runnable(protocol) -> list:
         for i in range(1, len(entries[system])):
             _add_edge((system, i - 1), (system, i))
     # signal -> wait edges (only where the awaited value is actually emitted).
+    # Key by (emitting_system, value) so a wait links to the signals its
+    # ``target`` emits (plus the legacy "<target> <value>" prefixed form).
     sig_nodes = {}
     for system in _SYSTEMS:
         for i, e in enumerate(entries[system]):
             if e.get("$type") == "signal" and e.get("value") is not None:
-                sig_nodes.setdefault(e.get("value"), []).append((system, i))
+                sig_nodes.setdefault((system, e.get("value")), []).append(
+                    (system, i)
+                )
     for system in _SYSTEMS:
         for i, e in enumerate(entries[system]):
             if e.get("$type") != "wait for signal":
                 continue
-            for src in sig_nodes.get(e.get("value"), []):
+            target = e.get("target")
+            value = e.get("value")
+            srcs = sig_nodes.get((target, value), []) + sig_nodes.get(
+                (target, "{} {}".format(target, value)), []
+            )
+            for src in srcs:
                 _add_edge(src, (system, i))
 
     ready = [n for n in nodes if indeg[n] == 0]

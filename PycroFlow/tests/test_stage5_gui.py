@@ -326,6 +326,58 @@ class TestMainWindow(unittest.TestCase):
         # The parameter box labels which list the step came from.
         self.assertIn("Fluid", tab.step_param_label.text())
 
+    def test_sequence_edit_add_delete_move_and_modified_flag(self):
+        import copy
+        from PycroFlow.examples.demo_protocols import protocol
+
+        w = self._build()
+        tab = w.run_sequence_tab
+        # Deep-copy: editing mutates the loaded protocol, and the demo object
+        # is shared across tests.
+        tab._service.load_protocol(copy.deepcopy(protocol))
+        entries = tab._service.protocol["fluid"]["protocol_entries"]
+        n0 = len(entries)
+        self.assertFalse(tab._service.protocol_modified)
+
+        # Add an incubate step after fluid row 0.
+        tab.step_lists["fluid"].setCurrentRow(0)
+        tab.add_type_combo.setCurrentText("incubate")
+        tab._on_add_step()
+        self.assertEqual(len(entries), n0 + 1)
+        self.assertEqual(entries[1]["$type"], "incubate")
+        self.assertTrue(tab._service.protocol_modified)
+        # isVisible() is False without a shown window; isHidden() reflects the
+        # setVisible intent headlessly.
+        self.assertFalse(tab.modified_label.isHidden())
+
+        # Duplicate the current row, then delete it back.
+        row = tab._current_row
+        tab._on_duplicate_step()
+        self.assertEqual(len(entries), n0 + 2)
+        tab._on_delete_step()
+        self.assertEqual(len(entries), n0 + 1)
+
+        # Move a step down then up — order changes but length holds.
+        tab.step_lists["fluid"].setCurrentRow(0)
+        first_type = entries[0]["$type"]
+        tab._on_move_step(1)
+        self.assertEqual(entries[1]["$type"], first_type)
+        self.assertEqual(len(entries), n0 + 1)
+
+    def test_edit_into_deadlock_is_caught_inline(self):
+        import copy
+        from PycroFlow.examples.demo_protocols import protocol
+
+        w = self._build()
+        tab = w.run_sequence_tab
+        tab._service.load_protocol(copy.deepcopy(protocol))
+        # Add an img wait for a signal nobody emits -> inline check flags it.
+        tab.step_lists["img"].setCurrentRow(0)
+        tab.add_type_combo.setCurrentText("wait for signal")
+        tab._on_add_step()
+        # The freshly added wait defaults to value 'custom signal' (unemitted).
+        self.assertIn("⚠", tab.consistency_label.text())
+
     def test_close_event_is_safe(self):
         from PyQt6.QtGui import QCloseEvent
 

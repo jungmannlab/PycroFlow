@@ -129,6 +129,7 @@ class LiveRunCoordinator:
         illumination_system=None,
         design=None,
         setup_name=None,
+        sequence_modified=False,
     ) -> str | None:
         """Attach live analysis to a starting run. Returns the run_id or None.
 
@@ -141,6 +142,7 @@ class LiveRunCoordinator:
                 illumination_system=illumination_system,
                 design=design,
                 setup_name=setup_name,
+                sequence_modified=sequence_modified,
             )
         except Exception as exc:  # noqa: BLE001 - never block a run
             logger.warning("live analysis could not start: {!r}".format(exc))
@@ -148,7 +150,13 @@ class LiveRunCoordinator:
             return None
 
     def _start_run(
-        self, *, imaging_system, illumination_system, design, setup_name
+        self,
+        *,
+        imaging_system,
+        illumination_system,
+        design,
+        setup_name,
+        sequence_modified=False,
     ) -> str | None:
         self.stop_run()  # a previous run's leftovers, defensively
         if imaging_system is None:
@@ -193,7 +201,9 @@ class LiveRunCoordinator:
         )
         self._run_id = self._service.start_experiment()
         self._acq_consumed_gen = self._service.abort_generation()
-        self._experiment_id = self._log_experiment(design, setup_name)
+        self._experiment_id = self._log_experiment(
+            design, setup_name, sequence_modified
+        )
         # One consumer for the whole run: FOVs never overlap, and the
         # acquisition thread never joins anything.
         self._fov_tasks = queue.Queue()
@@ -452,7 +462,9 @@ class LiveRunCoordinator:
 
     # -- registry: the experiment-level record --------------------------------
 
-    def _log_experiment(self, design, setup_name) -> str | None:
+    def _log_experiment(
+        self, design, setup_name, sequence_modified=False
+    ) -> str | None:
         """Write the experiment row linking this run's records. Never raises.
 
         Returns the experiment id when posted, else None (per-FOV records
@@ -471,6 +483,7 @@ class LiveRunCoordinator:
             run_id=self._run_id,
             design=design,
             setup_name=setup_name,
+            sequence_modified=sequence_modified,
         )
 
         def _poster(client, p):
