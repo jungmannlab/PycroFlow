@@ -251,6 +251,16 @@ class PycroFlowMainWindow(QMainWindow):
 
         # A fresh run supersedes any previous run's replay.
         self.run_sequence_tab.set_replay_controller(None, 0)
+        # Defensively finalize any still-open recording so a prior run (or a
+        # failed start) can never leak a hub client or a stale recorder.
+        self._replay_poll_timer.stop()
+        if self._replay_hub_client is not None:
+            hub, client = self._replay_hub_client
+            hub.remove(client)
+            self._replay_hub_client = None
+        if self._replay_recorder is not None:
+            self._replay_recorder.stop()
+            self._replay_recorder = None
         try:
             rec = ReplayRecorder(self._replay_path())
             rec.start(self._experiment_service.live_run_id)
