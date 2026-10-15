@@ -176,6 +176,25 @@ class ExchangeExperiment(BaseModel):
         tooltip="The imager reservoirs to cycle through — one wash + inject + "
         "acquisition round each, in this order.",
     )
+    monitor_fluid: bool = _field(
+        False,
+        tooltip="Acquire a short movie CONCURRENTLY with each imager/wash "
+        "injection, to watch washing/flushing efficiency live. These "
+        "monitoring movies are flagged separately and do not count as "
+        "exchange rounds.",
+    )
+    monitor_t_exp: Optional[float] = _unit(
+        None,
+        unit="ms",
+        tooltip="Exposure time for the wash-monitoring movies. Defaults to "
+        "the imaging exposure when left empty.",
+    )
+    monitor_margin_s: float = _unit(
+        2.0,
+        unit="s",
+        tooltip="Extra seconds of monitoring beyond the estimated fluid-step "
+        "duration, so the movie safely covers the whole injection.",
+    )
 
     def design_warnings(self):
         """Soft, non-blocking design warnings for this Exchange experiment.

@@ -375,6 +375,12 @@ class LiveRunCoordinator:
         t_exp = acquisition_config.get("t_exp")
         if t_exp is not None:
             fov_fields["exposure_ms"] = t_exp
+        # Flag wash/flush-monitoring movies so they are not mistaken for
+        # scientific FOVs (the registry folds unknown fov keys into extra).
+        if acquisition_config.get("monitoring") or (
+            "wash monitor" in str(acq_name).lower()
+        ):
+            fov_fields["monitoring"] = True
         acquisition_fields = {}
         if self._experiment_id is not None:
             acquisition_fields["experiment_id"] = self._experiment_id

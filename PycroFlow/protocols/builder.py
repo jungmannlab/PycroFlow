@@ -74,6 +74,7 @@ protocol_illumination = [
 
 """
 
+import math
 import os
 from datetime import datetime
 
@@ -354,6 +355,105 @@ class ProtocolBuilder:
             if illusttg.get("shutter_off_nonacq"):
                 self.create_step_setshutter(state=False)
 
+    def create_stepset_monitor(
+        self,
+        unique_name,
+        readable_name,
+        flush_volume,
+        velocity,
+        illusttg,
+        monitor_t_exp,
+        margin_s,
+        fluid_parameters=None,
+    ):
+        """Emit a monitoring acquisition that runs CONCURRENTLY with a flush.
+
+        Call this immediately BEFORE a :meth:`create_stepset_flush` to watch
+        that injection/wash happen live (wash/flush efficiency). The imaging
+        subsystem acquires while the fluid subsystem injects, instead of
+        waiting for the flush to finish: a ``monitor-start`` signal is emitted
+        on the fluid side *before* the injection, the illumination (if present)
+        raises the laser to acquisition power and signals ``monitor-power``, and
+        imaging acquires a movie sized to cover the estimated flush duration
+        plus a margin. No extra fluid barrier is needed — the following
+        acquisition's ``fluid_wait`` already resynchronises the subsystems,
+        since the monitor movie precedes the real acquire on the imaging list.
+
+        The monitoring acquisition is flagged (``monitoring: True``) so it is
+        excluded from the exchange-round count and tagged in the registry.
+
+        Parameters
+        ----------
+        unique_name, readable_name : str
+            The partnered flush's names (so the monitor signals are unique and
+            the movie is labelled, e.g. ``'R1 (wash monitor)'``).
+        flush_volume : float
+            Volume (µl) the partnered flush injects, used to size the movie.
+        velocity : float
+            Injection velocity (µl/min) used for the duration estimate.
+        illusttg : dict or None
+            Illumination settings (``laser``/``power_acq``/``warmup_delay`` and
+            optional ``shutter_off_nonacq``). None keeps the current laser
+            state (no illumination subsystem in the run).
+        monitor_t_exp : float
+            Exposure time (ms) for the monitoring movie.
+        margin_s : float
+            Seconds of monitoring beyond the estimated flush duration.
+        fluid_parameters : dict, optional
+            The fluid ``parameters`` block, for a more accurate duration
+            estimate (inject overheads/delays).
+        """
+        from PycroFlow.protocols.timing import estimate_entry_duration
+
+        dur = estimate_entry_duration(
+            {"$type": "inject", "volume": flush_volume, "velocity": velocity},
+            fluid_parameters or {"max_velocity": velocity},
+        )
+        exp_s = max(float(monitor_t_exp) / 1000.0, 1e-3)
+        frames = max(1, int(math.ceil((dur + float(margin_s)) / exp_s)))
+
+        # fluid: announce the start just before the injection is emitted.
+        self.create_step_signal(
+            system="fluid", message=f"monitor-start {unique_name}"
+        )
+        if illusttg:
+            # illu: raise to acquisition power (and open the shutter if it is
+            # closed between rounds) so the monitor movie is illuminated.
+            self.create_step_waitfor_signal(
+                system="illu",
+                target="fluid",
+                message=f"monitor-start {unique_name}",
+            )
+            self.create_step_setpower(
+                illusttg["laser"],
+                illusttg["power_acq"],
+                illusttg.get("warmup_delay", 0),
+                message=f"for wash monitor {unique_name}",
+            )
+            if illusttg.get("shutter_off_nonacq"):
+                self.create_step_setshutter(state=True)
+            self.create_step_signal(
+                system="illu", message=f"monitor-power {unique_name}"
+            )
+            wait_target, wait_value = "illu", f"monitor-power {unique_name}"
+        else:
+            wait_target, wait_value = "fluid", f"monitor-start {unique_name}"
+
+        # img: acquire the monitoring movie concurrently with the flush.
+        self.create_step_waitfor_signal(
+            system="img", target=wait_target, message=wait_value
+        )
+        self.create_step_acquire(
+            frames,
+            monitor_t_exp,
+            message=f"round_monitor-{unique_name}-{readable_name}",
+            name=f"{readable_name} (wash monitor)",
+            monitoring=True,
+        )
+        self.create_step_signal(
+            system="img", message=f"monitor-done {unique_name}"
+        )
+
     def create_stepset_flush(
         self,
         volumes,
@@ -621,6 +721,30 @@ class ProtocolBuilder:
         # res_idcs = {name: nr - 1 for nr, name in reservoirs.items()}
         res_idcs = {name: nr for nr, name in reservoirs.items()}
 
+        # Optional concurrent wash/flush monitoring (watch each injection live).
+        monitor_fluid = bool(experiment.get("monitor_fluid"))
+        fluid_params = config["fluid"].get("parameters") or {}
+        monitor_velocity = fluid_params.get("max_velocity")
+        monitor_t_exp = (
+            experiment.get("monitor_t_exp")
+            or config["img"]["settings"]["t_exp"]
+        )
+        monitor_margin_s = experiment.get("monitor_margin_s", 2.0)
+
+        def _maybe_monitor(unique_name, readable_name, flush_volume):
+            if not monitor_fluid:
+                return
+            self.create_stepset_monitor(
+                unique_name=unique_name,
+                readable_name=readable_name,
+                flush_volume=flush_volume,
+                velocity=monitor_velocity,
+                illusttg=illusttg,
+                monitor_t_exp=monitor_t_exp,
+                margin_s=monitor_margin_s,
+                fluid_parameters=fluid_params,
+            )
+
         # if the sample already has the first imager, direcly start imaging
         if isinstance(initial_imager, str):
             round = 0
@@ -695,6 +819,7 @@ class ProtocolBuilder:
                     "t_exp": config["img"]["settings"]["t_exp"],
                 }
 
+            _maybe_monitor(f"img-{round}", imager, volumes["vol_reagent"])
             self.create_stepset_flush(
                 volumes,
                 res_idcs,
@@ -718,6 +843,9 @@ class ProtocolBuilder:
             )
 
             if not last_round:
+                _maybe_monitor(
+                    f"img-dark-{round}", imager, volumes["vol_wash"]
+                )
                 self.create_stepset_flush(
                     volumes,
                     res_idcs,
@@ -1551,7 +1679,9 @@ class ProtocolBuilder:
             {"$type": "wait for signal", "target": target, "value": message}
         )
 
-    def create_step_acquire(self, nframes, t_exp, message, name=""):
+    def create_step_acquire(
+        self, nframes, t_exp, message, name="", monitoring=False
+    ):
         step = {
             "$type": "acquire",
             "frames": nframes,
@@ -1560,6 +1690,11 @@ class ProtocolBuilder:
         }
         if name:
             step["name"] = name
+        if monitoring:
+            # Tag wash/flush-monitoring acquisitions so the GUI excludes them
+            # from the exchange-round count and the registry flags the FOV as
+            # monitoring (not a scientific dataset).
+            step["monitoring"] = True
         self.steps["img"].append(step)
 
     def create_step_setpower(self, laser, power, warmup_delay=0, message=""):

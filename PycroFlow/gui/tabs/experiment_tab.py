@@ -601,6 +601,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
             if isinstance(e, dict)
             and e.get("$type") == "acquire"
             and not self._is_dark(e)
+            and not self._is_monitoring(e)
         ]
         design = self._service.experiment_design or {}
         self._reservoir_names = (
@@ -822,6 +823,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
             if isinstance(e, dict)
             and e.get("$type") == "acquire"
             and not self._is_dark(e)
+            and not self._is_monitoring(e)
         ]
         if round_index >= len(nondark):
             return {
@@ -956,6 +958,24 @@ class ExperimentTab(YamlDropMixin, QWidget):
         ).lower()
         return "dark" in text
 
+    @staticmethod
+    def _is_monitoring(entry):
+        """Whether an acquire is a wash/flush-monitoring movie, not a round.
+
+        Monitoring acquisitions run concurrently with a fluid injection to
+        watch washing efficiency; they carry ``monitoring: True`` (and a
+        ``'(wash monitor)'`` name / ``round_monitor-`` message). Like dark
+        frames, they are folded out of the exchange-round count.
+        """
+        if not isinstance(entry, dict):
+            return False
+        if entry.get("monitoring"):
+            return True
+        text = " ".join(
+            str(entry.get(k, "")) for k in ("name", "message")
+        ).lower()
+        return "monitor" in text
+
     @classmethod
     def _is_round_marker(cls, entry):
         """Whether an entry marks the end of a round for its subsystem.
@@ -967,7 +987,11 @@ class ExperimentTab(YamlDropMixin, QWidget):
         acquisition (and its fluid/illu wait) is folded into the imager's round,
         not counted separately.
         """
-        if not isinstance(entry, dict) or cls._is_dark(entry):
+        if (
+            not isinstance(entry, dict)
+            or cls._is_dark(entry)
+            or cls._is_monitoring(entry)
+        ):
             return False
         type_ = entry.get("$type")
         if type_ == "acquire":
@@ -1137,6 +1161,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
             if isinstance(e, dict)
             and e.get("$type") == "acquire"
             and not self._is_dark(e)
+            and not self._is_monitoring(e)
         ]
         total_rounds = len(acquire_idx)
         if not total_rounds:

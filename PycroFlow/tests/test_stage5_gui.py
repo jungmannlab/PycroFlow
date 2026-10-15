@@ -378,6 +378,46 @@ class TestMainWindow(unittest.TestCase):
         # The freshly added wait defaults to value 'custom signal' (unemitted).
         self.assertIn("⚠", tab.consistency_label.text())
 
+    def test_monitoring_acquires_excluded_from_round_count(self):
+        import PycroFlow.protocols as pprot
+        from PycroFlow.schemas import validate_experiment_design
+
+        design = {
+            "base_name": "x",
+            "fluid": {
+                "parameters": {"max_velocity": 200.0},
+                "settings": {
+                    "vol_wash": 200.0,
+                    "vol_reagent": 100.0,
+                    "reservoir_names": {2: "Buffer", 3: "I1", 4: "I2"},
+                    "experiment": {
+                        "type": "Exchange",
+                        "wash_buffer": "Buffer",
+                        "imagers": ["I1", "I2"],
+                        "monitor_fluid": True,
+                    },
+                },
+            },
+            "img": {"settings": {"t_exp": 100.0, "frames": 10}},
+            "illu": {"settings": {"laser": 560, "power_acq": 35.0}},
+        }
+        design = validate_experiment_design(design).model_dump(by_alias=True)
+        proto = pprot.ProtocolBuilder().build_protocol(design)
+
+        w = self._build()
+        tab = w.run_sequence_tab
+        tab._service.load_protocol(proto)
+        # Two imagers -> two scientific rounds, despite the 3 monitor movies.
+        self.assertEqual(len(tab._round_names), 2)
+        # Go-to combo: "Start of run" + one per round.
+        self.assertEqual(tab.goto_combo.count(), 3)
+        # Sanity: the protocol really contains monitoring acquires.
+        monitors = [
+            e for e in proto["img"]["protocol_entries"]
+            if e.get("monitoring")
+        ]
+        self.assertEqual(len(monitors), 3)
+
     def test_close_event_is_safe(self):
         from PyQt6.QtGui import QCloseEvent
 
@@ -1636,7 +1676,15 @@ class TestSchemaForm(unittest.TestCase):
         from PycroFlow.schemas.experiment_design import ExchangeExperiment
 
         fields = [f for f in ExchangeExperiment.model_fields if f != "type"]
-        self.assertEqual(fields, ["wash_buffer", "initial_imager", "imagers"])
+        # The core fields keep their order (initial_imager before the rounds);
+        # the optional wash-monitoring fields follow.
+        self.assertEqual(
+            fields[:3], ["wash_buffer", "initial_imager", "imagers"]
+        )
+        self.assertEqual(
+            fields[3:],
+            ["monitor_fluid", "monitor_t_exp", "monitor_margin_s"],
+        )
 
     def test_exchange_imager_rows_update_live_on_reservoir_edit(self):
         from PycroFlow.gui.widgets.schema_form import SchemaForm
