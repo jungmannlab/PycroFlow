@@ -172,6 +172,18 @@ class TestReplayController(unittest.TestCase):
         ctrl.seek(1234)
         self.assertEqual(seen, [1234])
 
+    def test_first_time_reaching_maps_step_to_time(self):
+        ctrl = self._controller()
+        # fluid reaches step 2 at 1000 ms; step 4 at 2000 ms.
+        self.assertEqual(ctrl.first_time_reaching("fluid", 2), 1000)
+        self.assertEqual(ctrl.first_time_reaching("fluid", 4), 2000)
+        # img reaches step 2 only at 2000 ms (cur=1 at 1000).
+        self.assertEqual(ctrl.first_time_reaching("img", 2), 2000)
+        # Any step the run passed is reached from the first snapshot.
+        self.assertEqual(ctrl.first_time_reaching("fluid", 0), 1000)
+        # A step the run never reached -> None (hold position).
+        self.assertIsNone(ctrl.first_time_reaching("fluid", 5))
+
 
 class TestWebcamReplaySource(unittest.TestCase):
 

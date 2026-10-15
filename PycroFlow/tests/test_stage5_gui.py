@@ -486,6 +486,37 @@ class TestMainWindow(unittest.TestCase):
         self.assertFalse(tab.replay_btn.isChecked())
         self.assertTrue(tab.replay_row.isHidden())
 
+    def test_replay_click_step_jumps_timeline(self):
+        from PycroFlow.live_analysis.replay_player import ReplayController
+        from PycroFlow.examples.demo_protocols import protocol
+        import copy
+
+        w = self._build()
+        tab = w.run_sequence_tab
+        tab._service.load_protocol(copy.deepcopy(protocol))
+        events = [
+            {
+                "t_ms": 1000,
+                "kind": "progress",
+                "payload": {"fluid": [1, 6], "img": [0, 2], "illu": [0, 3]},
+            },
+            {
+                "t_ms": 3000,
+                "kind": "progress",
+                "payload": {"fluid": [4, 6], "img": [1, 2], "illu": [1, 3]},
+            },
+        ]
+        ctrl = ReplayController(events, set_progress=tab.replay_set_progress)
+        tab.set_replay_controller(ctrl, ctrl.duration_ms)
+        tab.replay_btn.setChecked(True)
+
+        # Clicking fluid step 4 jumps the timeline to when fluid reached it.
+        tab.step_lists["fluid"].setCurrentRow(4)
+        self.assertEqual(tab.replay_slider.value(), 3000)
+        # Clicking an earlier step jumps back.
+        tab.step_lists["fluid"].setCurrentRow(1)
+        self.assertEqual(tab.replay_slider.value(), 1000)
+
     def test_close_event_is_safe(self):
         from PyQt6.QtGui import QCloseEvent
 

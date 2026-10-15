@@ -1095,6 +1095,9 @@ class ExperimentTab(YamlDropMixin, QWidget):
             if lst.count() and lst.currentRow() >= 0:
                 self._show_step_params(anchor, lst.currentRow())
                 break
+        # In replay, jump the timeline to that round's start (its imaging step).
+        if self._replay_mode:
+            self._replay_seek_to_step("img", targets.get("img", 0))
 
     @staticmethod
     def _is_dark(entry):
@@ -1392,9 +1395,28 @@ class ExperimentTab(YamlDropMixin, QWidget):
         if row < 0:
             # Deselection — e.g. from clearing another list, or repopulating.
             return
+        if self._replay_mode:
+            # In replay, clicking a step jumps the timeline to when that step
+            # became active; the recorded progress then shades the lists.
+            self._show_step_params(system, row)
+            self._refresh_edit_controls(self._service.state)
+            self._replay_seek_to_step(system, row)
+            return
         self._highlight_concurrent(system, row)
         self._show_step_params(system, row)
         self._refresh_edit_controls(self._service.state)
+
+    def _replay_seek_to_step(self, system, row):
+        """Seek the replay to the moment ``system`` reached step ``row``.
+
+        No-op when that step was never reached (e.g. an aborted run, or a step
+        past where the run got), so the current position holds.
+        """
+        if self._replay_controller is None:
+            return
+        t = self._replay_controller.first_time_reaching(system, row)
+        if t is not None:
+            self.replay_slider.setValue(int(t))  # -> _on_replay_slider -> seek
 
     def _highlight_concurrent(self, system, row):
         """Select + centre the concurrent step in the OTHER two lists."""

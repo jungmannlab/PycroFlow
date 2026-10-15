@@ -22,7 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fluidics webcam**: the per-round `.avi` clips are aligned to the timeline via
   a wall-clock anchor recorded in the timeline header, and the composite frame
   for the scrubbed moment is decoded (pure-Python AVI reader, no OpenCV) and
-  shown in the Webcams tab (`monitoring/webcam_replay.py`).
+  shown in the Webcams tab (`monitoring/webcam_replay.py`). The slider is a free
+  seek (drag to any moment; 1×/2×/4×/8× only sets autoplay speed), and in replay
+  mode **clicking a step or picking a round jumps the timeline to when that
+  protocol position became active** (mapped from the recorded progress).
 - **Concurrent wash/flush monitoring (opt-in).** Exchange designs gain
   `monitor_fluid` (+ `monitor_t_exp` / `monitor_margin_s`). When on, the builder
   acquires a short movie **concurrently** with each per-round imager injection

@@ -113,6 +113,20 @@ class ReplayController:
         i = bisect.bisect_right(times, t_ms) - 1
         return evs[i] if i >= 0 else None
 
+    def first_time_reaching(self, system: str, index: int):
+        """Timeline ms when ``system`` first reached step ``index`` (or None).
+
+        Scans the recorded progress snapshots in order for the first where the
+        subsystem's current-step index is at or past ``index`` — i.e. the
+        moment that step became active. Lets the GUI seek to a *protocol
+        position* (click a step / pick a round) rather than a raw time.
+        """
+        for ev in self._by_kind.get("progress", []):
+            pair = (ev.get("payload") or {}).get(system)
+            if isinstance(pair, (list, tuple)) and pair and pair[0] >= index:
+                return ev.get("t_ms", 0)
+        return None
+
     def state_at(self, t_ms: int) -> dict:
         """Map each kind to its last event at/<= ``t_ms`` (for inspection/tests)."""
         out = {}
