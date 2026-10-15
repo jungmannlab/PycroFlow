@@ -734,9 +734,7 @@ class TestInitialImagerValidation(unittest.TestCase):
         from PycroFlow.schemas import design_warnings
 
         model = validate_experiment_design(self._design("R1", ["R1", "R2"]))
-        self.assertEqual(
-            model.fluid.settings.experiment.initial_imager, "R1"
-        )
+        self.assertEqual(model.fluid.settings.experiment.initial_imager, "R1")
         warnings = design_warnings(model)
         self.assertTrue(any("R1" in w for w in warnings))
 

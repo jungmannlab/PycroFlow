@@ -244,8 +244,11 @@ class TestExperimentService(unittest.TestCase):
         proto = {
             "img": {
                 "protocol_entries": [
-                    {"$type": "wait for signal", "target": "fluid",
-                     "value": "nobody-emits-this"}
+                    {
+                        "$type": "wait for signal",
+                        "target": "fluid",
+                        "value": "nobody-emits-this",
+                    }
                 ]
             }
         }
@@ -262,8 +265,11 @@ class TestExperimentService(unittest.TestCase):
         proto = {
             "img": {
                 "protocol_entries": [
-                    {"$type": "wait for signal", "target": "fluid",
-                     "value": "nobody-emits-this"}
+                    {
+                        "$type": "wait for signal",
+                        "target": "fluid",
+                        "value": "nobody-emits-this",
+                    }
                 ]
             }
         }

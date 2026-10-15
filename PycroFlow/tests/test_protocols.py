@@ -443,8 +443,7 @@ class TestOptionalDarkframes(unittest.TestCase):
         img_waits = {
             e["value"]
             for e in img
-            if e["$type"] == "wait for signal"
-            and "monitor" in str(e["value"])
+            if e["$type"] == "wait for signal" and "monitor" in str(e["value"])
         }
         # Every monitor-start fluid signal is awaited (via illu's monitor-power
         # relay, which the img side waits on). At minimum there are 3 starts.
@@ -457,21 +456,17 @@ class TestOptionalDarkframes(unittest.TestCase):
         coarse = self._monitor_protocol(monitor_t_exp=100.0)
         fine = self._monitor_protocol(monitor_t_exp=50.0)
         c = next(
-            e for e in coarse["img"]["protocol_entries"]
-            if e.get("monitoring")
+            e for e in coarse["img"]["protocol_entries"] if e.get("monitoring")
         )
         f = next(
-            e for e in fine["img"]["protocol_entries"]
-            if e.get("monitoring")
+            e for e in fine["img"]["protocol_entries"] if e.get("monitoring")
         )
         self.assertEqual(f["t_exp"], 50.0)
         self.assertGreater(f["frames"], c["frames"])
 
     def test_monitor_off_by_default(self):
         proto = self._protocol()
-        monitors = [
-            e for e in self._entries(proto) if e.get("monitoring")
-        ]
+        monitors = [e for e in self._entries(proto) if e.get("monitoring")]
         self.assertEqual(monitors, [])
 
     def test_darkframes_set_keeps_the_acquisitions(self):

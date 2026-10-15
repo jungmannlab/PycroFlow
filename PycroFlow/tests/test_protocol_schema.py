@@ -22,13 +22,14 @@ class TestCheckRunnable(unittest.TestCase):
 
     def test_matched_signal_is_runnable(self):
         proto = {
-            "fluid": {
-                "protocol_entries": [{"$type": "signal", "value": "a"}]
-            },
+            "fluid": {"protocol_entries": [{"$type": "signal", "value": "a"}]},
             "img": {
                 "protocol_entries": [
-                    {"$type": "wait for signal", "target": "fluid",
-                     "value": "a"}
+                    {
+                        "$type": "wait for signal",
+                        "target": "fluid",
+                        "value": "a",
+                    }
                 ]
             },
         }
@@ -46,8 +47,11 @@ class TestCheckRunnable(unittest.TestCase):
             },
             "img": {
                 "protocol_entries": [
-                    {"$type": "wait for signal", "target": "fluid",
-                     "value": "round 1 done"}
+                    {
+                        "$type": "wait for signal",
+                        "target": "fluid",
+                        "value": "round 1 done",
+                    }
                 ]
             },
         }
@@ -57,8 +61,11 @@ class TestCheckRunnable(unittest.TestCase):
         proto = {
             "img": {
                 "protocol_entries": [
-                    {"$type": "wait for signal", "target": "fluid",
-                     "value": "never"}
+                    {
+                        "$type": "wait for signal",
+                        "target": "fluid",
+                        "value": "never",
+                    }
                 ]
             }
         }
@@ -70,13 +77,14 @@ class TestCheckRunnable(unittest.TestCase):
     def test_wrong_target_flagged(self):
         # The value is emitted, but by the wrong subsystem.
         proto = {
-            "illu": {
-                "protocol_entries": [{"$type": "signal", "value": "go"}]
-            },
+            "illu": {"protocol_entries": [{"$type": "signal", "value": "go"}]},
             "img": {
                 "protocol_entries": [
-                    {"$type": "wait for signal", "target": "fluid",
-                     "value": "go"}
+                    {
+                        "$type": "wait for signal",
+                        "target": "fluid",
+                        "value": "go",
+                    }
                 ]
             },
         }
@@ -90,15 +98,21 @@ class TestCheckRunnable(unittest.TestCase):
         proto = {
             "fluid": {
                 "protocol_entries": [
-                    {"$type": "wait for signal", "target": "img",
-                     "value": "i"},
+                    {
+                        "$type": "wait for signal",
+                        "target": "img",
+                        "value": "i",
+                    },
                     {"$type": "signal", "value": "f"},
                 ]
             },
             "img": {
                 "protocol_entries": [
-                    {"$type": "wait for signal", "target": "fluid",
-                     "value": "f"},
+                    {
+                        "$type": "wait for signal",
+                        "target": "fluid",
+                        "value": "f",
+                    },
                     {"$type": "signal", "value": "i"},
                 ]
             },
