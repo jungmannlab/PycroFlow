@@ -418,6 +418,59 @@ class TestMainWindow(unittest.TestCase):
         ]
         self.assertEqual(len(monitors), 3)
 
+    def test_replay_scrubber_drives_step_highlight(self):
+        from PycroFlow.live_analysis.replay_player import ReplayController
+        from PycroFlow.gui.tabs.experiment_tab import (
+            _ACTIVE_COLOR,
+            _FINISHED_COLOR,
+        )
+        from PycroFlow.examples.demo_protocols import protocol
+        import copy
+
+        w = self._build()
+        tab = w.run_sequence_tab
+        tab._service.load_protocol(copy.deepcopy(protocol))
+
+        # Replay button is disabled until a controller is attached.
+        self.assertFalse(tab.replay_btn.isEnabled())
+
+        emitted = []
+        events = [
+            {"t_ms": 0, "kind": "state",
+             "payload": {"state": "experiment_started"}},
+            {"t_ms": 1000, "kind": "progress",
+             "payload": {"fluid": [2, 6], "img": [0, 2], "illu": [0, 3]}},
+        ]
+        ctrl = ReplayController(
+            events,
+            emit_update=emitted.append,
+            set_progress=tab.replay_set_progress,
+            set_fluid_state=lambda s: None,
+        )
+        tab.set_replay_controller(ctrl, ctrl.duration_ms)
+        self.assertTrue(tab.replay_btn.isEnabled())
+
+        # Entering replay reveals the scrubber; seeking highlights the step
+        # the fluid subsystem was on at that time (index 2 -> active).
+        tab.replay_btn.setChecked(True)
+        self.assertFalse(tab.replay_row.isHidden())
+        tab.replay_slider.setValue(1000)
+        fluid_list = tab.step_lists["fluid"]
+        self.assertEqual(
+            fluid_list.item(2).background().color().name(),
+            _ACTIVE_COLOR.name(),
+        )
+        self.assertEqual(
+            fluid_list.item(0).background().color().name(),
+            _FINISHED_COLOR.name(),
+        )
+        # The live-view 'state' update was re-emitted for the panels.
+        self.assertTrue(any(u.kind == "state" for u in emitted))
+
+        # Leaving replay hides the scrubber again.
+        tab.replay_btn.setChecked(False)
+        self.assertTrue(tab.replay_row.isHidden())
+
     def test_close_event_is_safe(self):
         from PyQt6.QtGui import QCloseEvent
 

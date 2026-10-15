@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QAbstractItemView,
+    QSlider,
 )
 
 from PycroFlow.services.experiment_service import ExperimentState
@@ -205,6 +206,20 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._current_row = -1
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(500)
+        # --- post-run replay state (feature: scrub a finished run). The
+        # controller + its sinks (live view / fluid schematic) are supplied by
+        # the main window via set_replay_controller; this tab owns the scrubber
+        # and drives the run-sequence step highlight.
+        self._replay_controller = None
+        self._replay_duration = 0
+        self._replay_pos = 0
+        self._replay_speed = 1.0
+        self._replay_mode = False
+        # Optional callback(on: bool) the main window sets to coordinate the
+        # other tabs (pause the fluid poll, flag the live tab) in replay mode.
+        self.on_replay_mode = None
+        self._replay_timer = QTimer(self)
+        self._replay_timer.setInterval(200)
         self._build_ui()
         self._connect_signals()
         self._refresh_controls(self._service.state)
@@ -245,6 +260,12 @@ class ExperimentTab(YamlDropMixin, QWidget):
             self.abort_btn,
         ):
             controls.addWidget(b)
+        # Enabled once a finished run has a recorded replay timeline; toggles
+        # the Progress group into a scrubber that drives the whole GUI replay.
+        self.replay_btn = QPushButton("▶ Replay run")
+        self.replay_btn.setCheckable(True)
+        self.replay_btn.setEnabled(False)
+        controls.addWidget(self.replay_btn)
         controls.addStretch()
         layout.addLayout(controls)
 
@@ -291,6 +312,28 @@ class ExperimentTab(YamlDropMixin, QWidget):
             )
             self.substep_bars[system] = (name, bar, count)
             self._set_substep_visible(system, False)
+        # Replay scrubber (hidden until Replay is toggled on a finished run):
+        # a timeline slider + transport controls that drive the whole-GUI
+        # replay. The run's progress bars stay above it for reference.
+        self.replay_row = QWidget()
+        replay_layout = QHBoxLayout(self.replay_row)
+        replay_layout.setContentsMargins(0, 0, 0, 0)
+        self.replay_play_btn = QPushButton("▶")
+        self.replay_play_btn.setFixedWidth(32)
+        replay_layout.addWidget(self.replay_play_btn)
+        self.replay_slider = QSlider(Qt.Orientation.Horizontal)
+        self.replay_slider.setRange(0, 0)
+        replay_layout.addWidget(self.replay_slider, 1)
+        self.replay_time_label = QLabel("0:00 / 0:00")
+        replay_layout.addWidget(self.replay_time_label)
+        replay_layout.addWidget(QLabel("speed"))
+        self.replay_speed_combo = QComboBox()
+        for s in ("0.5×", "1×", "2×", "4×", "8×"):
+            self.replay_speed_combo.addItem(s)
+        self.replay_speed_combo.setCurrentIndex(1)
+        replay_layout.addWidget(self.replay_speed_combo)
+        prog_grid.addWidget(self.replay_row, 7, 0, 1, 3)
+        self.replay_row.setVisible(False)
         layout.addWidget(prog_box)
 
         # --- per-subsystem step lists (side by side) + parameters below
@@ -425,6 +468,13 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.del_step_btn.clicked.connect(self._on_delete_step)
         self.move_up_btn.clicked.connect(lambda: self._on_move_step(-1))
         self.move_down_btn.clicked.connect(lambda: self._on_move_step(1))
+        self.replay_btn.toggled.connect(self._on_replay_toggled)
+        self.replay_play_btn.clicked.connect(self._on_replay_play)
+        self.replay_slider.valueChanged.connect(self._on_replay_slider)
+        self.replay_speed_combo.currentIndexChanged.connect(
+            self._on_replay_speed
+        )
+        self._replay_timer.timeout.connect(self._replay_tick)
         self._poll_timer.timeout.connect(self._poll_progress)
         self.load_btn.clicked.connect(self._on_load)
         self.clear_btn.clicked.connect(self._on_clear)
@@ -750,6 +800,116 @@ class ExperimentTab(YamlDropMixin, QWidget):
             cur = prog.get(system, (0, 0))[0]
             cur = min(max(cur, 0), lst.count() - 1)
             lst.scrollToItem(lst.item(cur), _CENTER)
+
+    # --- post-run replay (scrub a finished run) ------------------------
+
+    _REPLAY_SPEEDS = (0.5, 1.0, 2.0, 4.0, 8.0)
+
+    def set_replay_controller(self, controller, duration_ms):
+        """Make a finished run scrubbable (or clear it with ``None``, 0).
+
+        Called by the main window once a run ends and its replay timeline has
+        been recorded. The ``controller``'s sinks (live view / fluid schematic
+        / this tab's :meth:`replay_set_progress`) are wired by the main window.
+        """
+        self._replay_controller = controller
+        self._replay_duration = int(duration_ms or 0)
+        available = controller is not None and self._replay_duration > 0
+        self.replay_btn.setEnabled(available)
+        if not available and self.replay_btn.isChecked():
+            self.replay_btn.setChecked(False)  # exits replay mode (toggled)
+
+    def _on_replay_toggled(self, checked):
+        self._replay_mode = checked
+        self.replay_row.setVisible(checked)
+        if callable(self.on_replay_mode):
+            self.on_replay_mode(checked)
+        if checked:
+            self._replay_speed = self._REPLAY_SPEEDS[
+                self.replay_speed_combo.currentIndex()
+            ]
+            self.replay_slider.setRange(0, self._replay_duration)
+            self._replay_pos = 0
+            self.replay_slider.setValue(0)
+            self._replay_seek(0)
+        else:
+            self._replay_timer.stop()
+            self.replay_play_btn.setText("▶")
+
+    def _on_replay_play(self):
+        if not self._replay_mode:
+            return
+        if self._replay_timer.isActive():
+            self._replay_timer.stop()
+            self.replay_play_btn.setText("▶")
+        else:
+            if self._replay_pos >= self._replay_duration:
+                self._replay_pos = 0  # restart if parked at the end
+                self.replay_slider.setValue(0)
+            self._replay_timer.start()
+            self.replay_play_btn.setText("⏸")
+
+    def _replay_tick(self):
+        step = int(self._replay_timer.interval() * self._replay_speed)
+        self._replay_pos = min(self._replay_duration, self._replay_pos + step)
+        self.replay_slider.setValue(self._replay_pos)  # -> _on_replay_slider
+        if self._replay_pos >= self._replay_duration:
+            self._replay_timer.stop()
+            self.replay_play_btn.setText("▶")
+
+    def _on_replay_slider(self, value):
+        self._replay_pos = value
+        self._replay_seek(value)
+
+    def _on_replay_speed(self, index):
+        if 0 <= index < len(self._REPLAY_SPEEDS):
+            self._replay_speed = self._REPLAY_SPEEDS[index]
+
+    def _replay_seek(self, t_ms):
+        if self._replay_controller is not None:
+            self._replay_controller.seek(t_ms)
+        self.replay_time_label.setText(
+            "{} / {}".format(
+                self._fmt_ms(t_ms), self._fmt_ms(self._replay_duration)
+            )
+        )
+
+    @staticmethod
+    def _fmt_ms(ms):
+        s = int(ms // 1000)
+        return "{}:{:02d}".format(s // 60, s % 60)
+
+    def replay_set_progress(self, prog):
+        """Progress sink for replay: highlight the step active at the scrubbed
+        time (and centre it) + refresh the status line. Marks the active step
+        even though the run state is terminal, so the operator sees where the
+        run was at time T."""
+        if not prog:
+            return
+        for system in _SYSTEMS:
+            lst = self.step_lists[system]
+            cur = prog.get(system, (0, 0))[0]
+            for idx in range(lst.count()):
+                item = lst.item(idx)
+                if item is None:
+                    continue
+                if idx < cur:
+                    item.setBackground(_FINISHED_COLOR)
+                elif idx == cur:
+                    item.setBackground(_ACTIVE_COLOR)
+                    lst.scrollToItem(item, _CENTER)
+                else:
+                    item.setBackground(QBrush())
+        parts = []
+        for key in _SYSTEMS:
+            if key in prog:
+                c, t = prog[key]
+                parts.append(
+                    "{} {}/{} ({})".format(
+                        key, c, t, self._step_name(key, c)
+                    )
+                )
+        self.step_status.setText("      ".join(parts))
 
     # --- major-step (round) navigation
 

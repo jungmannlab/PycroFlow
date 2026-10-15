@@ -95,6 +95,16 @@ class LiveTabHost(QWidget):
         """Unsubscribe the shell (it keeps showing the last metrics)."""
         self.shell.close_client()
 
+    def replay_emit(self, update) -> None:
+        """Feed a recorded :class:`LiveUpdate` back through the live panels.
+
+        Used by the post-run replay: emitting into the shell's bridge signal
+        drives the same ``OverviewZoom`` / ``QcAtAGlance`` slots the live run
+        does, so a scrubbed frame renders identically. Harmless when no run is
+        attached (the panels just render the pushed update).
+        """
+        self.shell._bridge.update.emit(update)
+
     # -- service-side preview end (Early-abort) ---------------------------------
 
     def _on_shell_update(self, update) -> None:
