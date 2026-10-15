@@ -177,22 +177,29 @@ class ExchangeExperiment(BaseModel):
         "acquisition round each, in this order.",
     )
 
-    @model_validator(mode="after")
-    def _initial_imager_not_in_imagers(self):
-        """``initial_imager`` is already-in-the-sample, so its injection is
-        skipped; listing it again in ``imagers`` would image it twice (once
-        pre-loaded, once re-injected). Catch that misconfiguration loudly.
+    def design_warnings(self):
+        """Soft, non-blocking design warnings for this Exchange experiment.
+
+        Reusing an imager is *allowed* — redundant imaging rounds are a
+        legitimate thing to want (e.g. for testing), so it is reported as a
+        warning rather than raised as a hard error. Note that repeating an
+        imager within ``imagers`` (``[R4, R2, R4, R2]``) is ordinary
+        Exchange-PAINT and is deliberately NOT warned about; only the
+        ``initial_imager`` — which is already in the sample and whose injection
+        is skipped — is worth flagging if it is ALSO listed in the rounds
+        (it would then be imaged twice, once pre-loaded and once re-injected).
         """
+        warnings = []
         if self.initial_imager and self.initial_imager in (self.imagers or []):
-            raise ValueError(
-                "initial_imager {!r} must not also appear in imagers: it is "
-                "the imager ALREADY in the sample (imaged first, injection "
-                "skipped), so listing it in the exchange rounds would image "
-                "it twice. List only the imagers to inject after it.".format(
+            warnings.append(
+                "Initial imager {!r} is also listed in the exchange rounds. "
+                "It is already in the sample (imaged first, injection "
+                "skipped), so it will be imaged again as a redundant round. "
+                "Allowed — but if unintended, remove it from the rounds.".format(
                     self.initial_imager
                 )
             )
-        return self
+        return warnings
 
 
 class SphResiExperiment(BaseModel):
@@ -536,3 +543,36 @@ def validate_experiment_design(data) -> ExperimentDesign:
         raise ExperimentDesignValidationError(
             "Experiment design validation failed:\n{}".format(exc)
         ) from exc
+
+
+def design_warnings(design) -> List[str]:
+    """Collect soft, non-blocking warnings for an experiment design.
+
+    These are advisory notes (e.g. an imager reused in a way that produces a
+    redundant imaging round) that should be surfaced to the operator WITHOUT
+    blocking save/translate. Hard problems still raise during validation; this
+    is strictly for the "allowed but worth a heads-up" cases.
+
+    Parameters
+    ----------
+    design : ExperimentDesign or dict
+        A validated model, or a design dict (validated here; an invalid dict
+        yields no warnings — the hard validation error surfaces elsewhere).
+
+    Returns
+    -------
+    list of str
+        Human-readable warning messages (empty when nothing to flag).
+    """
+    if not isinstance(design, ExperimentDesign):
+        try:
+            design = validate_experiment_design(design)
+        except ExperimentDesignValidationError:
+            return []
+    experiment = getattr(
+        getattr(getattr(design, "fluid", None), "settings", None),
+        "experiment",
+        None,
+    )
+    getter = getattr(experiment, "design_warnings", None)
+    return list(getter()) if callable(getter) else []

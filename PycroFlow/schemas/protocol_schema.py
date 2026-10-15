@@ -185,6 +185,141 @@ class Protocol(BaseModel):
     illu: Optional[SubsystemProtocol] = None
 
 
+#: Subsystems that may appear in a protocol, in display order.
+_SYSTEMS = ("fluid", "img", "illu")
+
+
+def check_runnable(protocol) -> list:
+    """Check a protocol can run to completion without hanging.
+
+    The three subsystems run as independent entry lists that synchronise only
+    through ``signal`` / ``wait for signal`` rendezvous. A hand-edited (or
+    mis-built) sequence can therefore deadlock two ways, both of which this
+    catches:
+
+    1. **Orphan wait** — a ``wait for signal`` whose ``value`` is never emitted
+       by a ``signal`` in its ``target`` subsystem. That wait blocks forever.
+    2. **Circular wait** — a cycle in the happens-before graph (program order
+       within each subsystem, plus every ``signal`` → the ``wait`` that
+       consumes it). A cycle means no execution order satisfies all the waits,
+       so the run hangs.
+
+    This is a *runnability* check, distinct from :func:`validate_protocol`
+    (which pins the wire format). It is advisory for the GUI's post-edit hint
+    and a hard gate at run start.
+
+    Parameters
+    ----------
+    protocol : dict
+        A compiled protocol (``{system: {'protocol_entries': [...]}}``), or a
+        :class:`Protocol`-shaped mapping.
+
+    Returns
+    -------
+    list of str
+        Human-readable problem descriptions; empty when the sequence is sound.
+    """
+    protocol = protocol or {}
+    # Gather entries per subsystem (tolerant of absent / malformed slices).
+    entries = {}
+    for system in _SYSTEMS:
+        sub = protocol.get(system) if isinstance(protocol, dict) else None
+        if isinstance(sub, dict):
+            raw = sub.get("protocol_entries") or []
+            entries[system] = [e for e in raw if isinstance(e, dict)]
+        else:
+            entries[system] = []
+
+    # value -> set of subsystems that emit a signal with that value.
+    emitters = {}
+    for system, es in entries.items():
+        for e in es:
+            if e.get("$type") == "signal" and e.get("value") is not None:
+                emitters.setdefault(e.get("value"), set()).add(system)
+
+    issues = []
+
+    # 1) Orphan waits: the target subsystem must emit the awaited value.
+    for system, es in entries.items():
+        for i, e in enumerate(es):
+            if e.get("$type") != "wait for signal":
+                continue
+            value = e.get("value")
+            target = e.get("target")
+            systems_emitting = emitters.get(value, set())
+            if not systems_emitting:
+                issues.append(
+                    "{} step {}: waits for signal {!r} that is never "
+                    "emitted — the run would hang here.".format(
+                        system, i, value
+                    )
+                )
+            elif target is not None and target not in systems_emitting:
+                issues.append(
+                    "{} step {}: waits for signal {!r} from {!r}, but that "
+                    "value is only emitted by {} — the run would hang "
+                    "here.".format(
+                        system,
+                        i,
+                        value,
+                        target,
+                        ", ".join(sorted(systems_emitting)),
+                    )
+                )
+
+    # 2) Circular waits: topologically sort the happens-before graph. Nodes are
+    # (system, index); edges are program order + signal -> consuming wait. A
+    # leftover node after Kahn's algorithm sits on a cycle = a deadlock.
+    nodes = [(s, i) for s in _SYSTEMS for i in range(len(entries[s]))]
+    adj = {n: [] for n in nodes}
+    indeg = {n: 0 for n in nodes}
+
+    def _add_edge(src, dst):
+        adj[src].append(dst)
+        indeg[dst] += 1
+
+    for system in _SYSTEMS:
+        for i in range(1, len(entries[system])):
+            _add_edge((system, i - 1), (system, i))
+    # signal -> wait edges (only where the awaited value is actually emitted).
+    sig_nodes = {}
+    for system in _SYSTEMS:
+        for i, e in enumerate(entries[system]):
+            if e.get("$type") == "signal" and e.get("value") is not None:
+                sig_nodes.setdefault(e.get("value"), []).append((system, i))
+    for system in _SYSTEMS:
+        for i, e in enumerate(entries[system]):
+            if e.get("$type") != "wait for signal":
+                continue
+            for src in sig_nodes.get(e.get("value"), []):
+                _add_edge(src, (system, i))
+
+    ready = [n for n in nodes if indeg[n] == 0]
+    seen = 0
+    while ready:
+        n = ready.pop()
+        seen += 1
+        for m in adj[n]:
+            indeg[m] -= 1
+            if indeg[m] == 0:
+                ready.append(m)
+    if seen < len(nodes):
+        stuck = sorted(n for n in nodes if indeg[n] > 0)
+        waits = [
+            "{} step {}".format(s, i)
+            for (s, i) in stuck
+            if entries[s][i].get("$type") == "wait for signal"
+        ]
+        where = ", ".join(waits[:6]) if waits else "the coordination steps"
+        issues.append(
+            "Circular wait detected: {} form a dependency cycle, so no "
+            "execution order satisfies all the waits — the run would "
+            "deadlock.".format(where)
+        )
+
+    return issues
+
+
 def validate_protocol(protocol_dict):
     """Validate a protocol dict, returning the parsed :class:`Protocol`.
 
