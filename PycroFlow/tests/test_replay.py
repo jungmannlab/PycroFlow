@@ -73,8 +73,11 @@ class TestReplayRecorder(unittest.TestCase):
         rec.stop()
 
         ctrl = ReplayController.from_file(self.path)
-        self.assertEqual(ctrl.event_count, 3)
+        # 3 data events + the meta header line.
+        self.assertEqual(ctrl.event_count, 4)
         self.assertEqual(ctrl.duration_ms, 1500)
+        # The meta header carries the wall-clock anchor for webcam alignment.
+        self.assertIsNotNone(ctrl.t0_utc)
         # Thumbnail bytes + boxes survive the JSONL round-trip.
         thumb = ctrl.last_event_at(2000, "thumbnail")
         restored = decode_payload(thumb["payload"])
@@ -94,17 +97,35 @@ class TestReplayController(unittest.TestCase):
 
     def _controller(self, **sinks):
         events = [
-            {"t_ms": 0, "kind": "state",
-             "payload": {"state": "experiment_started"}},
-            {"t_ms": 500, "kind": "thumbnail",
-             "payload": {"data": encode_payload({"d": b"\x09"})["d"],
-                         "shape": [1, 1], "dtype": "uint8"}},
-            {"t_ms": 1000, "kind": "progress",
-             "payload": {"fluid": [2, 5], "img": [1, 3]}},
-            {"t_ms": 1500, "kind": "fluid_state",
-             "payload": {"pump_a": {"valve": "out"}}},
-            {"t_ms": 2000, "kind": "progress",
-             "payload": {"fluid": [4, 5], "img": [2, 3]}},
+            {
+                "t_ms": 0,
+                "kind": "state",
+                "payload": {"state": "experiment_started"},
+            },
+            {
+                "t_ms": 500,
+                "kind": "thumbnail",
+                "payload": {
+                    "data": encode_payload({"d": b"\x09"})["d"],
+                    "shape": [1, 1],
+                    "dtype": "uint8",
+                },
+            },
+            {
+                "t_ms": 1000,
+                "kind": "progress",
+                "payload": {"fluid": [2, 5], "img": [1, 3]},
+            },
+            {
+                "t_ms": 1500,
+                "kind": "fluid_state",
+                "payload": {"pump_a": {"valve": "out"}},
+            },
+            {
+                "t_ms": 2000,
+                "kind": "progress",
+                "payload": {"fluid": [4, 5], "img": [2, 3]},
+            },
         ]
         return ReplayController(events, **sinks)
 
@@ -143,6 +164,72 @@ class TestReplayController(unittest.TestCase):
         ctrl = self._controller(set_progress=progs.append)
         ctrl.seek(5000)
         self.assertEqual(progs[-1]["img"], (2, 3))
+
+    def test_webcam_sink_called_with_time(self):
+        seen = []
+        ctrl = self._controller()
+        ctrl.set_webcam_sink(seen.append)
+        ctrl.seek(1234)
+        self.assertEqual(seen, [1234])
+
+
+class TestWebcamReplaySource(unittest.TestCase):
+
+    _UTC_FMT = "%Y%m%dT%H%M%SZ"
+
+    def _write_clip(self, clip_dir, round_index, utc_dt, frame_values, fps=5):
+        import numpy as np
+        from PycroFlow.monitoring.avi import RawAviWriter
+
+        stamp = utc_dt.strftime(self._UTC_FMT)
+        name = "run_RID_round{:03d}_fluid-step{}_{}.avi".format(
+            round_index, round_index, stamp
+        )
+        path = os.path.join(clip_dir, name)
+        with RawAviWriter(path, width=4, height=4, fps=fps) as w:
+            for v in frame_values:
+                w.write(np.full((4, 4, 3), v, dtype=np.uint8))
+        return path
+
+    def test_discovers_aligns_and_seeks_clips(self):
+        import datetime as _dt
+        from PycroFlow.monitoring.webcam_replay import WebcamReplaySource
+
+        clip_dir = tempfile.mkdtemp()
+        t0 = _dt.datetime(2026, 1, 1, 0, 0, 0, tzinfo=_dt.timezone.utc)
+        t0_utc = t0.timestamp()
+        # Clip 0 starts at t0 (0 ms); clip 1 two seconds later (2000 ms).
+        self._write_clip(clip_dir, 0, t0, [10, 11, 12, 13, 14])
+        self._write_clip(
+            clip_dir, 1, t0 + _dt.timedelta(seconds=2), [100, 101, 102]
+        )
+
+        src = WebcamReplaySource.from_dir(clip_dir, t0_utc, fps=5)
+        self.assertEqual(src.clip_count, 2)
+        # t=0 -> clip 0 frame 0 (value 10).
+        self.assertEqual(int(src.frame_at(0)[0, 0, 0]), 10)
+        # t=400 ms -> clip 0 frame 2 (0.4 s * 5 fps = 2) (value 12).
+        self.assertEqual(int(src.frame_at(400)[0, 0, 0]), 12)
+        # t=2200 ms -> clip 1 frame 1 (0.2 s * 5 = 1) (value 101).
+        self.assertEqual(int(src.frame_at(2200)[0, 0, 0]), 101)
+        # Before the first clip -> no frame.
+        self.assertIsNone(src.frame_at(-50))
+        # Past the end clamps to the last clip's last frame (value 102).
+        self.assertEqual(int(src.frame_at(10_000)[0, 0, 0]), 102)
+        src.close()
+
+    def test_empty_dir_is_harmless(self):
+        from PycroFlow.monitoring.webcam_replay import WebcamReplaySource
+
+        src = WebcamReplaySource.from_dir(tempfile.mkdtemp(), 1.0, fps=5)
+        self.assertEqual(src.clip_count, 0)
+        self.assertIsNone(src.frame_at(1000))
+
+    def test_missing_anchor_yields_no_clips(self):
+        from PycroFlow.monitoring.webcam_replay import WebcamReplaySource
+
+        src = WebcamReplaySource.from_dir(tempfile.mkdtemp(), None, fps=5)
+        self.assertEqual(src.clip_count, 0)
 
 
 if __name__ == "__main__":

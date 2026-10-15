@@ -86,6 +86,7 @@ class PycroFlowMainWindow(QMainWindow):
         # replay_player.
         self._replay_recorder = None
         self._replay_hub_client = None
+        self._webcam_replay = None
         self._replay_poll_timer = QTimer(self)
         self._replay_poll_timer.setInterval(500)
         self._replay_poll_timer.timeout.connect(self._replay_poll)
@@ -261,6 +262,9 @@ class PycroFlowMainWindow(QMainWindow):
         if self._replay_recorder is not None:
             self._replay_recorder.stop()
             self._replay_recorder = None
+        if self._webcam_replay is not None:
+            self._webcam_replay.close()
+            self._webcam_replay = None
         try:
             rec = ReplayRecorder(self._replay_path())
             rec.start(self._experiment_service.live_run_id)
@@ -327,14 +331,46 @@ class PycroFlowMainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001 - replay is best-effort
             logger.warning("could not load replay timeline: {!r}".format(exc))
             return
+        self._attach_webcam_replay(ctrl)
         if ctrl.duration_ms > 0:
             self.run_sequence_tab.set_replay_controller(ctrl, ctrl.duration_ms)
+
+    def _attach_webcam_replay(self, ctrl):
+        """Align this run's webcam clips to the timeline + wire the sink.
+
+        Best-effort: no monitoring controller, no clips, or no wall-clock
+        anchor simply means the replay runs without the webcam pane updating.
+        """
+        self._webcam_replay = None
+        mon = self._monitoring
+        clip_dir = (
+            getattr(mon, "output_dir", None) if mon is not None else None
+        )
+        if not clip_dir or not ctrl.t0_utc:
+            return
+        try:
+            from PycroFlow.monitoring.webcam_replay import WebcamReplaySource
+
+            src = WebcamReplaySource.from_dir(
+                clip_dir, ctrl.t0_utc, fps=getattr(mon, "fps", 5)
+            )
+        except Exception as exc:  # noqa: BLE001 - webcam replay is best-effort
+            logger.warning("could not index webcam clips: {!r}".format(exc))
+            return
+        if src.clip_count == 0:
+            return
+        self._webcam_replay = src
+        ctrl.set_webcam_sink(
+            lambda t: self.webcams_tab.show_replay_frame(src.frame_at(t))
+        )
 
     def _on_replay_mode(self, on):
         """Coordinate the other tabs when replay is toggled in the Run tab."""
         # Freeze the schematic's live poll so replayed snapshots are not
         # overwritten by the (idle) current hardware state.
         self.fluid_tab.set_replay_mode(on)
+        # Stop the webcam live preview so replayed clip frames own the pane.
+        self.webcams_tab.set_replay_mode(on)
         self.live_tab.set_run_status("replaying run" if on else "")
 
     def _sync_live_tab(self, state):

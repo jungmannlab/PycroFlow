@@ -17,9 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   group gains a **▶ Replay run** toggle that reveals a timeline slider +
   play/speed controls; scrubbing re-emits the recorded `LiveUpdate`s through the
   real live panels (image + boxes), drives the fluid schematic (its live poll is
-  suspended), and highlights the run-sequence step active at that moment
-  (`live_analysis/replay_player.py` `ReplayController`). *Webcam replay (the
-  per-round `.avi` clips already on disk) is a planned follow-up.*
+  suspended), highlights the run-sequence step active at that moment
+  (`live_analysis/replay_player.py` `ReplayController`), **and replays the
+  fluidics webcam**: the per-round `.avi` clips are aligned to the timeline via
+  a wall-clock anchor recorded in the timeline header, and the composite frame
+  for the scrubbed moment is decoded (pure-Python AVI reader, no OpenCV) and
+  shown in the Webcams tab (`monitoring/webcam_replay.py`).
 - **Concurrent wash/flush monitoring (opt-in).** Exchange designs gain
   `monitor_fluid` (+ `monitor_t_exp` / `monitor_margin_s`). When on, the builder
   acquires a short movie **concurrently** with each per-round imager injection

@@ -49,15 +49,36 @@ class ReplayController:
         emit_update: Optional[Callable[[LiveUpdate], None]] = None,
         set_progress: Optional[Callable[[dict], None]] = None,
         set_fluid_state: Optional[Callable[[dict], None]] = None,
+        set_webcam: Optional[Callable[[int], None]] = None,
     ):
         self._events = sorted(events, key=lambda e: e.get("t_ms", 0))
         self._emit_update = emit_update
         self._set_progress = set_progress
         self._set_fluid_state = set_fluid_state
+        # Webcam frames live in external .avi clips, not the timeline; this sink
+        # is simply handed the scrub time and resolves/shows the frame itself.
+        self._set_webcam = set_webcam
         # Per-kind (times, events) for last-event-<=-t lookups.
         self._by_kind: dict = {}
+        self._t0_utc = None
         for ev in self._events:
             self._by_kind.setdefault(ev.get("kind"), []).append(ev)
+            if ev.get("kind") == "meta":
+                self._t0_utc = (ev.get("payload") or {}).get("t0_utc")
+
+    @property
+    def t0_utc(self):
+        """Wall-clock epoch the run started (from the timeline's meta header),
+        or None. Used to align webcam clips to the timeline."""
+        return self._t0_utc
+
+    def set_webcam_sink(self, fn: Optional[Callable[[int], None]]) -> None:
+        """Attach (or clear) the webcam sink after construction.
+
+        Webcam alignment needs :attr:`t0_utc`, which is only known once the
+        timeline is parsed, so the main window wires this sink after loading.
+        """
+        self._set_webcam = fn
 
     @classmethod
     def from_file(cls, path: str, **sinks) -> "ReplayController":
@@ -124,6 +145,9 @@ class ReplayController:
         fluid = self.last_event_at(t_ms, "fluid_state")
         if fluid is not None and self._set_fluid_state is not None:
             self._set_fluid_state(fluid.get("payload") or {})
+        # Webcam clips are resolved by the sink from the scrub time directly.
+        if self._set_webcam is not None:
+            self._set_webcam(t_ms)
 
     @staticmethod
     def _as_progress(payload: dict) -> dict:

@@ -80,6 +80,7 @@ class ReplayRecorder:
         self._clock = clock
         self._fh = None
         self._t0: Optional[float] = None
+        self._t0_utc: Optional[float] = None
         self._run_id: Optional[str] = None
 
     @property
@@ -90,6 +91,12 @@ class ReplayRecorder:
     def active(self) -> bool:
         return self._fh is not None
 
+    @property
+    def t0_utc(self) -> Optional[float]:
+        """Wall-clock epoch (seconds) of :meth:`start`, for aligning external
+        artefacts (webcam ``.avi`` clips carry wall-clock timestamps)."""
+        return self._t0_utc
+
     def start(self, run_id: Optional[str] = None) -> None:
         """Open the timeline file and stamp t0. Idempotent-safe."""
         self.stop()
@@ -97,6 +104,18 @@ class ReplayRecorder:
         try:
             self._fh = open(self._path, "w", encoding="utf-8")
             self._t0 = self._clock()
+            # Real wall-clock anchor (NOT the injectable monotonic clock), so
+            # the replay can map a webcam clip's UTC timestamp to a timeline ms.
+            self._t0_utc = time.time()
+            # A header meta line carries the anchor so a controller loaded from
+            # the file alone can align external artefacts.
+            meta = {
+                "t_ms": 0,
+                "kind": "meta",
+                "payload": {"t0_utc": self._t0_utc, "run_id": run_id},
+            }
+            self._fh.write(json.dumps(meta) + "\n")
+            self._fh.flush()
         except Exception:  # noqa: BLE001 - recording must never stop a run
             self._fh = None
 

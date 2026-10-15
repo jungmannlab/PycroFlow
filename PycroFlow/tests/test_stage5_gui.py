@@ -351,7 +351,6 @@ class TestMainWindow(unittest.TestCase):
         self.assertFalse(tab.modified_label.isHidden())
 
         # Duplicate the current row, then delete it back.
-        row = tab._current_row
         tab._on_duplicate_step()
         self.assertEqual(len(entries), n0 + 2)
         tab._on_delete_step()
@@ -413,8 +412,7 @@ class TestMainWindow(unittest.TestCase):
         self.assertEqual(tab.goto_combo.count(), 3)
         # Sanity: the protocol really contains monitoring acquires.
         monitors = [
-            e for e in proto["img"]["protocol_entries"]
-            if e.get("monitoring")
+            e for e in proto["img"]["protocol_entries"] if e.get("monitoring")
         ]
         self.assertEqual(len(monitors), 3)
 
@@ -436,10 +434,16 @@ class TestMainWindow(unittest.TestCase):
 
         emitted = []
         events = [
-            {"t_ms": 0, "kind": "state",
-             "payload": {"state": "experiment_started"}},
-            {"t_ms": 1000, "kind": "progress",
-             "payload": {"fluid": [2, 6], "img": [0, 2], "illu": [0, 3]}},
+            {
+                "t_ms": 0,
+                "kind": "state",
+                "payload": {"state": "experiment_started"},
+            },
+            {
+                "t_ms": 1000,
+                "kind": "progress",
+                "payload": {"fluid": [2, 6], "img": [0, 2], "illu": [0, 3]},
+            },
         ]
         ctrl = ReplayController(
             events,
@@ -2678,6 +2682,21 @@ class TestWebcamsTab(unittest.TestCase):
             self._changed += 1
 
         return WebcamsTab(svc, on_config_changed=on_changed), svc
+
+    def test_replay_frame_display_and_mode(self):
+        import numpy as np
+
+        tab, _ = self._tab()
+        # Entering replay mode stops any preview and labels the pane.
+        tab.set_replay_mode(True)
+        # Pushing a recorded composite frame renders without error and sets a
+        # pixmap on the preview label.
+        frame = np.full((8, 8, 3), 128, dtype=np.uint8)
+        tab.show_replay_frame(frame)
+        self.assertFalse(tab.preview_label.pixmap().isNull())
+        # A missing frame is a no-op (holds the last shown frame).
+        tab.show_replay_frame(None)
+        self.assertFalse(tab.preview_label.pixmap().isNull())
 
     def test_rows_apply_and_empty_setup(self):
         tab, svc = self._tab()
