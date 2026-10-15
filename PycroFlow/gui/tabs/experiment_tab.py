@@ -236,9 +236,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # Shown only once the loaded sequence has been hand-edited: the run is
         # then recorded as "<type>-modified", not a faithful named experiment.
         self.modified_label = QLabel("⚠ modified sequence")
-        self.modified_label.setStyleSheet(
-            "color: #b8860b; font-weight: bold;"
-        )
+        self.modified_label.setStyleSheet("color: #b8860b; font-weight: bold;")
         self.modified_label.setVisible(False)
         status_row.addWidget(self.modified_label)
         status_row.addStretch()
@@ -905,9 +903,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
             if key in prog:
                 c, t = prog[key]
                 parts.append(
-                    "{} {}/{} ({})".format(
-                        key, c, t, self._step_name(key, c)
-                    )
+                    "{} {}/{} ({})".format(key, c, t, self._step_name(key, c))
                 )
         self.step_status.setText("      ".join(parts))
 
@@ -1549,6 +1545,10 @@ class ExperimentTab(YamlDropMixin, QWidget):
         (non-blocking) consistency check.
         """
         self._service.mark_protocol_modified()
+        # A structural edit desyncs the step lists from any recorded run, so a
+        # stale replay would highlight the wrong steps — drop it (exits replay
+        # mode if active).
+        self.set_replay_controller(None, 0)
         self._populate_steps()
         self._update_modified_badge()
         # Restore a sensible selection so the user can keep editing.

@@ -475,6 +475,17 @@ class TestMainWindow(unittest.TestCase):
         tab.replay_btn.setChecked(False)
         self.assertTrue(tab.replay_row.isHidden())
 
+        # A structural edit desyncs the lists from the recording, so the stale
+        # replay is dropped (button disabled, replay mode exited).
+        tab.set_replay_controller(ctrl, ctrl.duration_ms)
+        tab.replay_btn.setChecked(True)
+        tab.step_lists["fluid"].setCurrentRow(0)
+        tab.add_type_combo.setCurrentText("incubate")
+        tab._on_add_step()
+        self.assertFalse(tab.replay_btn.isEnabled())
+        self.assertFalse(tab.replay_btn.isChecked())
+        self.assertTrue(tab.replay_row.isHidden())
+
     def test_close_event_is_safe(self):
         from PyQt6.QtGui import QCloseEvent
 
