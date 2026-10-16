@@ -22,9 +22,12 @@ from typing import List, Optional
 
 from loguru import logger
 
-# run_<id>_round<NNN>_fluid-step<...>_<YYYYmmddTHHMMSSZ>.avi — the trailing
-# stamp is the clip's wall-clock start; the round index is the `roundNNN` group.
-_CLIP_RE = re.compile(r"_round(?P<round>\d+)_.*_(?P<utc>\d{8}T\d{6}Z)\.avi$")
+# run_<id>_round<NNN>_fluid-step<...>_<YYYYmmddTHHMMSSZ>.avi — the leading
+# group is the (sanitized) run id, the trailing stamp is the clip's wall-clock
+# start, and `roundNNN` is the round index.
+_CLIP_RE = re.compile(
+    r"^run_(?P<rid>.+?)_round(?P<round>\d+)_.*_(?P<utc>\d{8}T\d{6}Z)\.avi$"
+)
 _UTC_FMT = "%Y%m%dT%H%M%SZ"
 
 
@@ -34,6 +37,13 @@ def _parse_utc_epoch(stamp: str) -> Optional[float]:
         return dt.timestamp()
     except ValueError:
         return None
+
+
+def _sanitize_run_id(run_id) -> str:
+    """Mirror capture_service's clip-name sanitization (alnum + -_. kept)."""
+    return "".join(
+        c if (c.isalnum() or c in "-_.") else "-" for c in str(run_id or "")
+    )
 
 
 class _Clip:
@@ -71,24 +81,58 @@ class WebcamReplaySource:
 
     @classmethod
     def from_dir(
-        cls, clip_dir: str, t0_utc: float, fps: float = 5.0
+        cls, clip_dir: str, t0_utc: float, fps: float = 5.0, run_id=None
     ) -> "WebcamReplaySource":
-        """Discover a run's clips in ``clip_dir`` and anchor them to ``t0_utc``.
+        """Discover clips in ``clip_dir`` and anchor them to ``t0_utc``.
 
-        Returns a source with no clips (a harmless no-op) when the directory is
-        absent / empty, ``t0_utc`` is unknown, or no filename parses.
+        When ``run_id`` is given, only clips for that run are kept (a save_dir
+        can hold clips from several runs). Returns a source with no clips (a
+        harmless no-op) when the directory is absent / empty, ``t0_utc`` is
+        unknown, or no filename parses.
         """
+        want = _sanitize_run_id(run_id) if run_id is not None else None
         clips: List[_Clip] = []
         if clip_dir and t0_utc and os.path.isdir(clip_dir):
-            for path in glob.glob(os.path.join(clip_dir, "*_round*.avi")):
-                m = _CLIP_RE.search(os.path.basename(path))
+            for path in glob.glob(os.path.join(clip_dir, "run_*round*.avi")):
+                m = _CLIP_RE.match(os.path.basename(path))
                 if not m:
+                    continue
+                if want is not None and m.group("rid") != want:
                     continue
                 epoch = _parse_utc_epoch(m.group("utc"))
                 if epoch is None:
                     continue
                 start_ms = max(0, int(round((epoch - t0_utc) * 1000.0)))
                 clips.append(_Clip(int(m.group("round")), start_ms, path))
+        return cls(clips, fps=fps)
+
+    @classmethod
+    def from_run(
+        cls, base_dir: str, run_id, t0_utc: float, fps: float = 5.0
+    ) -> "WebcamReplaySource":
+        """Find a run's clips under ``base_dir`` (and its ``fluidics_cam*``
+        subfolders) by ``run_id``, for opening a past run from disk.
+
+        The monitoring capture writes clips to ``<save_dir>/fluidics_cam[_N]``,
+        so a run selected by its ``*_replay.jsonl`` (which lives in
+        ``<save_dir>``) is found by searching that folder and one level down,
+        keeping only clips whose embedded run id matches.
+        """
+        clips: List[_Clip] = []
+        if base_dir and t0_utc and os.path.isdir(base_dir):
+            dirs = [base_dir] + [
+                p
+                for p in glob.glob(os.path.join(base_dir, "*"))
+                if os.path.isdir(p)
+            ]
+            seen = set()
+            for d in dirs:
+                # from_dir applies the run_id filter per folder.
+                src = cls.from_dir(d, t0_utc, fps=fps, run_id=run_id)
+                for clip in src._clips:
+                    if clip.path not in seen:
+                        seen.add(clip.path)
+                        clips.append(clip)
         return cls(clips, fps=fps)
 
     @property

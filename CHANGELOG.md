@@ -25,7 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shown in the Webcams tab (`monitoring/webcam_replay.py`). The slider is a free
   seek (drag to any moment; 1×/2×/4×/8× only sets autoplay speed), and in replay
   mode **clicking a step or picking a round jumps the timeline to when that
-  protocol position became active** (mapped from the recorded progress).
+  protocol position became active** (mapped from the recorded progress). The
+  timeline file embeds the run's protocol in its header, so a past run can be
+  reopened from disk — **Open past run…** in the Run Sequence tab loads a saved
+  `*_replay.jsonl` (its run id disambiguates multiple runs in one folder),
+  repopulates the step lists from the embedded protocol, finds the run's webcam
+  clips under the folder by run id (incl. `fluidics_cam[_N]` subfolders), and
+  enters replay — no live run required.
 - **Concurrent wash/flush monitoring (opt-in).** Exchange designs gain
   `monitor_fluid` (+ `monitor_t_exp` / `monitor_margin_s`). When on, the builder
   acquires a short movie **concurrently** with each per-round imager injection

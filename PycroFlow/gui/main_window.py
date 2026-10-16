@@ -91,6 +91,7 @@ class PycroFlowMainWindow(QMainWindow):
         self._replay_poll_timer.setInterval(500)
         self._replay_poll_timer.timeout.connect(self._replay_poll)
         self.run_sequence_tab.on_replay_mode = self._on_replay_mode
+        self.run_sequence_tab.on_open_past_run = self.open_past_run
 
     # --- toolbar ------------------------------------------------------
 
@@ -267,7 +268,10 @@ class PycroFlowMainWindow(QMainWindow):
             self._webcam_replay = None
         try:
             rec = ReplayRecorder(self._replay_path())
-            rec.start(self._experiment_service.live_run_id)
+            rec.start(
+                self._experiment_service.live_run_id,
+                protocol=self._experiment_service.protocol,
+            )
         except Exception as exc:  # noqa: BLE001 - recording never stops a run
             logger.warning("replay recorder could not start: {!r}".format(exc))
             return
@@ -318,11 +322,13 @@ class PycroFlowMainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             return {}
 
-    def _build_replay_controller(self, path):
+    def _load_controller(self, path):
+        """Load a replay timeline file into a controller wired to the live
+        view / step-highlight / fluid-schematic sinks (or None on failure)."""
         from PycroFlow.live_analysis.replay_player import ReplayController
 
         try:
-            ctrl = ReplayController.from_file(
+            return ReplayController.from_file(
                 path,
                 emit_update=self.live_tab.replay_emit,
                 set_progress=self.run_sequence_tab.replay_set_progress,
@@ -330,39 +336,100 @@ class PycroFlowMainWindow(QMainWindow):
             )
         except Exception as exc:  # noqa: BLE001 - replay is best-effort
             logger.warning("could not load replay timeline: {!r}".format(exc))
-            return
-        self._attach_webcam_replay(ctrl)
+            return None
+
+    def _wire_replay(self, ctrl, webcam_src, enter=False):
+        """Attach the webcam sink + hand the controller to the scrubber.
+
+        ``enter`` auto-opens replay mode (used when opening a past run, where
+        the user explicitly asked to review it)."""
+        self._webcam_replay = None
+        if webcam_src is not None and webcam_src.clip_count > 0:
+            self._webcam_replay = webcam_src
+            ctrl.set_webcam_sink(
+                lambda t: self.webcams_tab.show_replay_frame(
+                    webcam_src.frame_at(t)
+                )
+            )
         if ctrl.duration_ms > 0:
             self.run_sequence_tab.set_replay_controller(ctrl, ctrl.duration_ms)
+            if enter:
+                self.run_sequence_tab.replay_btn.setChecked(True)
 
-    def _attach_webcam_replay(self, ctrl):
-        """Align this run's webcam clips to the timeline + wire the sink.
+    def _build_replay_controller(self, path):
+        """Just-finished run: build the controller + this run's webcam source
+        (from the monitoring controller's output dir)."""
+        ctrl = self._load_controller(path)
+        if ctrl is None:
+            return
+        self._wire_replay(ctrl, self._webcam_source_from_monitoring(ctrl))
 
-        Best-effort: no monitoring controller, no clips, or no wall-clock
-        anchor simply means the replay runs without the webcam pane updating.
-        """
-        self._webcam_replay = None
+    def _webcam_source_from_monitoring(self, ctrl):
         mon = self._monitoring
         clip_dir = (
             getattr(mon, "output_dir", None) if mon is not None else None
         )
         if not clip_dir or not ctrl.t0_utc:
-            return
+            return None
         try:
             from PycroFlow.monitoring.webcam_replay import WebcamReplaySource
 
-            src = WebcamReplaySource.from_dir(
+            return WebcamReplaySource.from_dir(
                 clip_dir, ctrl.t0_utc, fps=getattr(mon, "fps", 5)
             )
         except Exception as exc:  # noqa: BLE001 - webcam replay is best-effort
             logger.warning("could not index webcam clips: {!r}".format(exc))
+            return None
+
+    def open_past_run(self, path):
+        """Open a saved ``*_replay.jsonl`` and replay that run from disk.
+
+        Loads the embedded protocol into the view (so the step lists match),
+        finds the run's webcam clips under the file's folder by run id, wires
+        everything up and enters replay mode. Refused while a run is active.
+        """
+        if self._experiment_service.state in _RUN_LOCK_STATES:
+            QMessageBox.warning(
+                self,
+                "Run in progress",
+                "Finish or abort the current run before opening a past run.",
+            )
             return
-        if src.clip_count == 0:
+        ctrl = self._load_controller(path)
+        if ctrl is None or ctrl.duration_ms <= 0:
+            QMessageBox.warning(
+                self,
+                "Could not open run",
+                "No replay timeline was found in that file.",
+            )
             return
-        self._webcam_replay = src
-        ctrl.set_webcam_sink(
-            lambda t: self.webcams_tab.show_replay_frame(src.frame_at(t))
-        )
+        # Repopulate the step lists from the embedded protocol so the
+        # step-highlight is meaningful (best-effort; replay still shows the
+        # live view / webcam / fluid without it).
+        if ctrl.protocol:
+            try:
+                self._experiment_service.load_protocol(ctrl.protocol)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "could not load the past run's protocol: {!r}".format(exc)
+                )
+        webcam_src = None
+        if ctrl.t0_utc:
+            try:
+                from PycroFlow.monitoring.webcam_replay import (
+                    WebcamReplaySource,
+                )
+
+                webcam_src = WebcamReplaySource.from_run(
+                    os.path.dirname(os.path.abspath(path)),
+                    ctrl.run_id,
+                    ctrl.t0_utc,
+                )
+            except Exception as exc:  # noqa: BLE001 - webcam is best-effort
+                logger.warning(
+                    "could not index past-run webcam clips: {!r}".format(exc)
+                )
+        self._wire_replay(ctrl, webcam_src, enter=True)
 
     def _on_replay_mode(self, on):
         """Coordinate the other tabs when replay is toggled in the Run tab."""

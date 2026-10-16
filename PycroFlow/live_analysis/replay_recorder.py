@@ -97,8 +97,13 @@ class ReplayRecorder:
         artefacts (webcam ``.avi`` clips carry wall-clock timestamps)."""
         return self._t0_utc
 
-    def start(self, run_id: Optional[str] = None) -> None:
-        """Open the timeline file and stamp t0. Idempotent-safe."""
+    def start(self, run_id: Optional[str] = None, protocol=None) -> None:
+        """Open the timeline file and stamp t0. Idempotent-safe.
+
+        ``protocol`` (the compiled Run Sequence dict) is embedded in the header
+        so the timeline file is self-contained: opening it later reconstructs
+        the step lists for the step-highlight without a separate YAML.
+        """
         self.stop()
         self._run_id = run_id
         try:
@@ -107,13 +112,13 @@ class ReplayRecorder:
             # Real wall-clock anchor (NOT the injectable monotonic clock), so
             # the replay can map a webcam clip's UTC timestamp to a timeline ms.
             self._t0_utc = time.time()
-            # A header meta line carries the anchor so a controller loaded from
-            # the file alone can align external artefacts.
-            meta = {
-                "t_ms": 0,
-                "kind": "meta",
-                "payload": {"t0_utc": self._t0_utc, "run_id": run_id},
-            }
+            # A header meta line carries the anchor + the run's protocol so a
+            # controller loaded from the file alone can align external artefacts
+            # and populate the step lists.
+            payload = {"t0_utc": self._t0_utc, "run_id": run_id}
+            if protocol:
+                payload["protocol"] = _jsonable(protocol)
+            meta = {"t_ms": 0, "kind": "meta", "payload": payload}
             self._fh.write(json.dumps(meta) + "\n")
             self._fh.flush()
         except Exception:  # noqa: BLE001 - recording must never stop a run

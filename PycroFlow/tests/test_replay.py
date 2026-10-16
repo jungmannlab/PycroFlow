@@ -54,7 +54,8 @@ class TestReplayRecorder(unittest.TestCase):
     def test_records_updates_progress_and_fluid(self):
         clock = _Clock([0.0, 0.5, 1.0, 1.5, 2.0])
         rec = ReplayRecorder(self.path, clock=clock)
-        rec.start("RUN")  # t0 = 0.0
+        proto = {"fluid": {"protocol_entries": [{"$type": "flush"}]}}
+        rec.start("RUN", protocol=proto)  # t0 = 0.0
         rec.on_update(
             LiveUpdate(
                 "thumbnail",
@@ -76,8 +77,11 @@ class TestReplayRecorder(unittest.TestCase):
         # 3 data events + the meta header line.
         self.assertEqual(ctrl.event_count, 4)
         self.assertEqual(ctrl.duration_ms, 1500)
-        # The meta header carries the wall-clock anchor for webcam alignment.
+        # The meta header carries the wall-clock anchor for webcam alignment,
+        # the run id, and the embedded protocol (so a past run is self-contained).
         self.assertIsNotNone(ctrl.t0_utc)
+        self.assertEqual(ctrl.run_id, "RUN")
+        self.assertEqual(ctrl.protocol, proto)
         # Thumbnail bytes + boxes survive the JSONL round-trip.
         thumb = ctrl.last_event_at(2000, "thumbnail")
         restored = decode_payload(thumb["payload"])
@@ -229,6 +233,38 @@ class TestWebcamReplaySource(unittest.TestCase):
         # Past the end clamps to the last clip's last frame (value 102).
         self.assertEqual(int(src.frame_at(10_000)[0, 0, 0]), 102)
         src.close()
+
+    def _write_named_clip(self, clip_dir, run_id, round_index, utc_dt):
+        import numpy as np
+        from PycroFlow.monitoring.avi import RawAviWriter
+
+        stamp = utc_dt.strftime(self._UTC_FMT)
+        name = "run_{}_round{:03d}_fluid-step0_{}.avi".format(
+            run_id, round_index, stamp
+        )
+        path = os.path.join(clip_dir, name)
+        with RawAviWriter(path, width=4, height=4, fps=5) as w:
+            w.write(np.zeros((4, 4, 3), dtype=np.uint8))
+        return path
+
+    def test_from_run_searches_subfolders_and_filters_run_id(self):
+        import datetime as _dt
+        from PycroFlow.monitoring.webcam_replay import WebcamReplaySource
+
+        base = tempfile.mkdtemp()
+        cam = os.path.join(base, "fluidics_cam")
+        os.makedirs(cam)
+        t0 = _dt.datetime(2026, 1, 1, 0, 0, 0, tzinfo=_dt.timezone.utc)
+        # Two runs' clips share the folder; only RUNA's must be picked up.
+        self._write_named_clip(cam, "RUNA", 0, t0)
+        self._write_named_clip(cam, "RUNA", 1, t0 + _dt.timedelta(seconds=2))
+        self._write_named_clip(cam, "RUNB", 0, t0)
+
+        src = WebcamReplaySource.from_run(base, "RUNA", t0.timestamp(), fps=5)
+        self.assertEqual(src.clip_count, 2)
+        # A run with no clips -> empty (no cross-run leakage).
+        other = WebcamReplaySource.from_run(base, "NOPE", t0.timestamp())
+        self.assertEqual(other.clip_count, 0)
 
     def test_empty_dir_is_harmless(self):
         from PycroFlow.monitoring.webcam_replay import WebcamReplaySource

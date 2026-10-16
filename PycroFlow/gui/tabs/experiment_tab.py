@@ -218,6 +218,9 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # Optional callback(on: bool) the main window sets to coordinate the
         # other tabs (pause the fluid poll, flag the live tab) in replay mode.
         self.on_replay_mode = None
+        # Optional callback(path) the main window sets to open + replay a saved
+        # run's timeline file from disk.
+        self.on_open_past_run = None
         self._replay_timer = QTimer(self)
         self._replay_timer.setInterval(200)
         self._build_ui()
@@ -264,6 +267,9 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.replay_btn.setCheckable(True)
         self.replay_btn.setEnabled(False)
         controls.addWidget(self.replay_btn)
+        # Open a saved run's *_replay.jsonl from disk and replay it.
+        self.open_run_btn = QPushButton("Open past run…")
+        controls.addWidget(self.open_run_btn)
         controls.addStretch()
         layout.addLayout(controls)
 
@@ -467,6 +473,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.move_up_btn.clicked.connect(lambda: self._on_move_step(-1))
         self.move_down_btn.clicked.connect(lambda: self._on_move_step(1))
         self.replay_btn.toggled.connect(self._on_replay_toggled)
+        self.open_run_btn.clicked.connect(self._on_open_past_run)
         self.replay_play_btn.clicked.connect(self._on_replay_play)
         self.replay_slider.valueChanged.connect(self._on_replay_slider)
         self.replay_speed_combo.currentIndexChanged.connect(
@@ -802,6 +809,19 @@ class ExperimentTab(YamlDropMixin, QWidget):
     # --- post-run replay (scrub a finished run) ------------------------
 
     _REPLAY_SPEEDS = (0.5, 1.0, 2.0, 4.0, 8.0)
+
+    def _on_open_past_run(self):
+        """Pick a saved run's timeline file and hand it to the main window."""
+        if not callable(self.on_open_past_run):
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open a past run to replay",
+            "",
+            "Replay timelines (*_replay.jsonl);;All files (*)",
+        )
+        if path:
+            self.on_open_past_run(path)
 
     def set_replay_controller(self, controller, duration_ms):
         """Make a finished run scrubbable (or clear it with ``None``, 0).

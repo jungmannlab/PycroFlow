@@ -61,16 +61,33 @@ class ReplayController:
         # Per-kind (times, events) for last-event-<=-t lookups.
         self._by_kind: dict = {}
         self._t0_utc = None
+        self._run_id = None
+        self._protocol = None
         for ev in self._events:
             self._by_kind.setdefault(ev.get("kind"), []).append(ev)
             if ev.get("kind") == "meta":
-                self._t0_utc = (ev.get("payload") or {}).get("t0_utc")
+                meta = ev.get("payload") or {}
+                self._t0_utc = meta.get("t0_utc")
+                self._run_id = meta.get("run_id")
+                self._protocol = meta.get("protocol")
 
     @property
     def t0_utc(self):
         """Wall-clock epoch the run started (from the timeline's meta header),
         or None. Used to align webcam clips to the timeline."""
         return self._t0_utc
+
+    @property
+    def run_id(self):
+        """The run's id (from the meta header), or None — used to find the
+        run's webcam clips when opening a past run from disk."""
+        return self._run_id
+
+    @property
+    def protocol(self):
+        """The run's compiled protocol embedded in the header (or None), so a
+        past run can repopulate the step lists without a separate YAML."""
+        return self._protocol
 
     def set_webcam_sink(self, fn: Optional[Callable[[int], None]]) -> None:
         """Attach (or clear) the webcam sink after construction.

@@ -517,6 +517,78 @@ class TestMainWindow(unittest.TestCase):
         tab.step_lists["fluid"].setCurrentRow(1)
         self.assertEqual(tab.replay_slider.value(), 1000)
 
+    def test_open_past_run_from_disk(self):
+        import os
+        import json
+        import tempfile
+        import datetime as dt
+        import numpy as np
+        from PycroFlow.monitoring.avi import RawAviWriter
+
+        folder = tempfile.mkdtemp()
+        t0 = dt.datetime(2026, 1, 1, 0, 0, 0, tzinfo=dt.timezone.utc)
+        jsonl = os.path.join(folder, "base_RUNID_replay.jsonl")
+        proto = {
+            "fluid": {
+                "protocol_entries": [
+                    {"$type": "inject", "reservoir_id": 1, "volume": 10},
+                    {"$type": "incubate", "duration": 5},
+                ]
+            },
+            "img": {
+                "protocol_entries": [
+                    {"$type": "acquire", "frames": 5, "t_exp": 100}
+                ]
+            },
+        }
+        with open(jsonl, "w") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "t_ms": 0,
+                        "kind": "meta",
+                        "payload": {
+                            "t0_utc": t0.timestamp(),
+                            "run_id": "RUNID",
+                            "protocol": proto,
+                        },
+                    }
+                )
+                + "\n"
+            )
+            f.write(
+                json.dumps(
+                    {
+                        "t_ms": 1000,
+                        "kind": "progress",
+                        "payload": {"fluid": [1, 2], "img": [0, 1]},
+                    }
+                )
+                + "\n"
+            )
+        cam = os.path.join(folder, "fluidics_cam")
+        os.makedirs(cam)
+        clip = os.path.join(
+            cam, "run_RUNID_round000_fluid-step0_20260101T000000Z.avi"
+        )
+        with RawAviWriter(clip, width=4, height=4, fps=5) as cw:
+            for v in (7, 8, 9):
+                cw.write(np.full((4, 4, 3), v, dtype=np.uint8))
+
+        w = self._build()
+        w.open_past_run(jsonl)
+        tab = w.run_sequence_tab
+        # The embedded protocol repopulated the step lists.
+        self.assertEqual(tab.step_lists["fluid"].count(), 2)
+        # Replay is wired, enabled and auto-entered.
+        self.assertTrue(tab.replay_btn.isEnabled())
+        self.assertTrue(tab._replay_mode)
+        # The run's webcam clip was found by run id (under fluidics_cam/).
+        self.assertEqual(w._webcam_replay.clip_count, 1)
+        # Scrubbing shows a webcam frame.
+        tab.replay_slider.setValue(1000)
+        self.assertFalse(w.webcams_tab.preview_label.pixmap().isNull())
+
     def test_close_event_is_safe(self):
         from PyQt6.QtGui import QCloseEvent
 
