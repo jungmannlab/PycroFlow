@@ -468,6 +468,10 @@ class TestMainWindow(unittest.TestCase):
             fluid_list.item(0).background().color().name(),
             _FINISHED_COLOR.name(),
         )
+        # The replay also drives the acquisition progress bars: done 2+0+0=2
+        # of total 6+2+3=11 -> ~18%.
+        self.assertEqual(tab.overall_count.text(), "2/11")
+        self.assertEqual(tab.overall_bar.value(), int(100 * 2 / 11))
         # The live-view 'state' update was re-emitted for the panels.
         self.assertTrue(any(u.kind == "state" for u in emitted))
 

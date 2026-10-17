@@ -898,12 +898,26 @@ class ExperimentTab(YamlDropMixin, QWidget):
         return "{}:{:02d}".format(s // 60, s % 60)
 
     def replay_set_progress(self, prog):
-        """Progress sink for replay: highlight the step active at the scrubbed
-        time (and centre it) + refresh the status line. Marks the active step
-        even though the run state is terminal, so the operator sees where the
-        run was at time T."""
+        """Progress sink for replay: drive the same progress bars the live run
+        does (overall + steps-in-round + status line) and highlight the step
+        active at the scrubbed time. Reuses the live render helpers but without
+        the live-only side effects (round stopwatch, substep bars, finish
+        detection), and marks the active step even though the run state is
+        terminal, so the operator sees exactly where the run was at time T."""
         if not prog:
             return
+        self._set_overall_bar(prog)
+        done_rounds, total_rounds = self._round_counts(prog.get("img"))
+        self._set_step_status(prog, done_rounds, total_rounds)
+        if total_rounds:
+            current = min(done_rounds, total_rounds)
+            done, total, _ = self._current_round_counts(prog, current)
+            pct = int(100 * done / total) if total else 0
+            self.current_round_bar.setValue(pct)
+            self.current_round_count.setText("{}/{}".format(done, total))
+        else:
+            self.current_round_bar.setValue(0)
+            self.current_round_count.setText("—")
         for system in _SYSTEMS:
             lst = self.step_lists[system]
             cur = prog.get(system, (0, 0))[0]
@@ -918,14 +932,6 @@ class ExperimentTab(YamlDropMixin, QWidget):
                     lst.scrollToItem(item, _CENTER)
                 else:
                     item.setBackground(QBrush())
-        parts = []
-        for key in _SYSTEMS:
-            if key in prog:
-                c, t = prog[key]
-                parts.append(
-                    "{} {}/{} ({})".format(key, c, t, self._step_name(key, c))
-                )
-        self.step_status.setText("      ".join(parts))
 
     # --- major-step (round) navigation
 
@@ -1196,13 +1202,29 @@ class ExperimentTab(YamlDropMixin, QWidget):
         prog = self._service.progress()
         if not prog:
             return
+        self._set_overall_bar(prog)
+        done_rounds, total_rounds = self._round_counts(prog.get("img"))
+        self._set_step_status(prog, done_rounds, total_rounds)
+        round_remaining = self._update_current_round_bar(
+            prog, done_rounds, total_rounds
+        )
+        self._update_time_summary(
+            estimate_remaining(self._durations, prog), round_remaining
+        )
+        self._update_substep_bars()
+        self._shade_steps(prog)
+        self._check_finished()
+
+    def _set_overall_bar(self, prog):
+        """Overall bar + count from a ``{sys: (cur, total)}`` progress map."""
         done = sum(c for c, _ in prog.values())
         total = sum(t for _, t in prog.values())
         pct = int(100 * done / total) if total else 0
         self.overall_bar.setValue(pct)
         self.overall_count.setText("{}/{}".format(done, total))
 
-        done_rounds, total_rounds = self._round_counts(prog.get("img"))
+    def _set_step_status(self, prog, done_rounds, total_rounds):
+        """The single Round-k/N + per-subsystem step-status line."""
         parts = []
         if total_rounds:
             # 1-based number of the round currently executing, plus a short
@@ -1228,15 +1250,25 @@ class ExperimentTab(YamlDropMixin, QWidget):
                 )
         self.step_status.setText("      ".join(parts))
 
-        round_remaining = self._update_current_round_bar(
-            prog, done_rounds, total_rounds
-        )
-        self._update_time_summary(
-            estimate_remaining(self._durations, prog), round_remaining
-        )
-        self._update_substep_bars()
-        self._shade_steps(prog)
-        self._check_finished()
+    def _current_round_counts(self, prog, current_round):
+        """(done, total, remaining_s) steps for ``current_round`` across systems.
+
+        Pure — no stopwatch/UI side effects, so both the live bar and the replay
+        bar can use it.
+        """
+        done = total = 0
+        remaining = 0.0
+        for system in _SYSTEMS:
+            cur = prog.get(system, (0, 0))[0]
+            durs = self._durations.get(system, [])
+            for idx, rnd in enumerate(self._round_of.get(system, [])):
+                if rnd == current_round:
+                    total += 1
+                    if idx < cur:
+                        done += 1
+                    elif idx < len(durs):
+                        remaining += durs[idx]
+        return done, total, remaining
 
     def _check_finished(self):
         """Leave the running state once every subsystem has finished.
@@ -1371,18 +1403,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
             self._round_sw.reset()
             if self._service.state is ExperimentState.RUNNING:
                 self._round_sw.start()
-        done = total = 0
-        remaining = 0.0
-        for system in _SYSTEMS:
-            cur = prog.get(system, (0, 0))[0]
-            durs = self._durations.get(system, [])
-            for idx, rnd in enumerate(self._round_of.get(system, [])):
-                if rnd == current:
-                    total += 1
-                    if idx < cur:
-                        done += 1
-                    elif idx < len(durs):
-                        remaining += durs[idx]
+        done, total, remaining = self._current_round_counts(prog, current)
         pct = int(100 * done / total) if total else 0
         self.current_round_bar.setValue(pct)
         self.current_round_count.setText("{}/{}".format(done, total))

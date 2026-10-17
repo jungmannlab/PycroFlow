@@ -17,7 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   group gains a **▶ Replay run** toggle that reveals a timeline slider +
   play/speed controls; scrubbing re-emits the recorded `LiveUpdate`s through the
   real live panels (image + boxes), drives the fluid schematic (its live poll is
-  suspended), highlights the run-sequence step active at that moment
+  suspended), drives the acquisition progress bars (overall + steps-in-round +
+  status line) to the scrubbed position, highlights the run-sequence step active
+  at that moment
   (`live_analysis/replay_player.py` `ReplayController`), **and replays the
   fluidics webcam**: the per-round `.avi` clips are aligned to the timeline via
   a wall-clock anchor recorded in the timeline header, and the composite frame
