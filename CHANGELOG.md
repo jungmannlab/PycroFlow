@@ -7,7 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Post-run replay (master scrubber).** A run's live streams are recorded to a
+  `*_replay.jsonl` timeline (`live_analysis/replay_recorder.py`): the seam's
+  thumbnail/metrics/state/log updates (thumbnails already carry image bytes +
+  detection boxes, so no extra capture) plus 0.5 s polls of run-sequence
+  progress and fluidics state. After the run, the Run Sequence tab's Progress
+  group gains a **▶ Replay run** toggle that reveals a timeline slider +
+  play/speed controls; scrubbing re-emits the recorded `LiveUpdate`s through the
+  real live panels (image + boxes), drives the fluid schematic (its live poll is
+  suspended), drives the acquisition progress bars (overall + steps-in-round +
+  status line) to the scrubbed position, highlights the run-sequence step active
+  at that moment
+  (`live_analysis/replay_player.py` `ReplayController`), **and replays the
+  fluidics webcam**: the per-round `.avi` clips are aligned to the timeline via
+  a wall-clock anchor recorded in the timeline header, and the composite frame
+  for the scrubbed moment is decoded (pure-Python AVI reader, no OpenCV) and
+  shown in the Webcams tab (`monitoring/webcam_replay.py`). The slider is a free
+  seek (drag to any moment; 1×/2×/4×/8× only sets autoplay speed), and in replay
+  mode **clicking a step or picking a round jumps the timeline to when that
+  protocol position became active** (mapped from the recorded progress). The
+  timeline file embeds the run's protocol in its header, so a past run can be
+  reopened from disk — **Open past run…** in the Run Sequence tab loads a saved
+  `*_replay.jsonl` (its run id disambiguates multiple runs in one folder),
+  repopulates the step lists from the embedded protocol, finds the run's webcam
+  clips under the folder by run id (incl. `fluidics_cam[_N]` subfolders), and
+  enters replay — no live run required.
+- **Concurrent wash/flush monitoring (opt-in).** Exchange designs gain
+  `monitor_fluid` (+ `monitor_t_exp` / `monitor_margin_s`). When on, the builder
+  acquires a short movie **concurrently** with each per-round imager injection
+  and inter-round wash so washing/flushing efficiency can be watched live: a
+  fluid `monitor-start` signal precedes the injection, illumination raises to
+  acquisition power, and the movie is sized from the estimated flush duration
+  (`protocols.timing`) + margin. Monitoring acquisitions are flagged
+  (`monitoring: True`, `'(wash monitor)'`), excluded from the exchange-round
+  count in the GUI, and tagged on the registry FOV.
+- **Run-sequence editing.** The Run Sequence tab can add / duplicate / delete /
+  move steps (edit toolbar on the selected list). Any structural edit flags the
+  run as modified — the registry records `sequence_modified` and suffixes
+  `experiment_type` with `-modified` — and runs a consistency check
+  (`schemas.check_runnable`) that detects orphan waits and circular (deadlock)
+  waits, mirroring the orchestrator's signal matching. The check is an inline
+  hint after each edit and a hard **Start** gate for edited sequences.
+
 ### Fixed / Changed
+
+- **Imager-reuse verification softened to a warning.** Reusing an imager
+  (notably `initial_imager` re-listed in the exchange rounds) no longer raises a
+  hard validation error — redundant imaging rounds are a legitimate thing to
+  want (e.g. for testing). It is now a non-blocking advisory
+  (`schemas.experiment_design.design_warnings`), surfaced in the Experiment
+  Design tab on Save/Translate; ordinary repeats within the imagers list are not
+  flagged at all.
 
 - **Webcams tab exposes the capture knobs.** Each camera row now has optional
   **`exp` / `auto-exp` / `fourcc`** fields (blank = leave to the driver), so

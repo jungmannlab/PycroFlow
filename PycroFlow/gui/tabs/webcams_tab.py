@@ -417,6 +417,36 @@ class WebcamsTab(QWidget):
         if hasattr(self, "preview_label"):
             self.preview_label.setText("Preview stopped")
 
+    def set_replay_mode(self, on):
+        """Stop live capture/preview so replayed frames own the preview area.
+
+        During post-run replay the webcam view is driven by recorded clip
+        frames (:meth:`show_replay_frame`); any running preview or live-tile
+        poll would otherwise overwrite them.
+        """
+        if on:
+            self.stop_preview()
+            self._stop_live_view()
+            if hasattr(self, "preview_label"):
+                self.preview_label.setText("Replay — scrub the timeline")
+
+    def show_replay_frame(self, frame):
+        """Render a recorded composite webcam frame (``(H, W, 3)`` RGB ndarray).
+
+        No-op for a missing frame (a timeline position before the first clip),
+        so the preview simply holds its last shown frame.
+        """
+        if frame is None or not hasattr(self, "preview_label"):
+            return
+        try:
+            h, w = frame.shape[:2]
+            img = QImage(
+                frame.tobytes(), w, h, 3 * w, QImage.Format.Format_RGB888
+            ).copy()
+        except Exception:  # noqa: BLE001 - replay display is best-effort
+            return
+        self._show_frame(img)
+
     def _show_frame(self, img: QImage):
         pix = QPixmap.fromImage(img)
         self.preview_label.setPixmap(

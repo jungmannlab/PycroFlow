@@ -383,6 +383,92 @@ class TestOptionalDarkframes(unittest.TestCase):
     def _fluid_entries(self, protocol):
         return [e["$type"] for e in protocol["fluid"]["protocol_entries"]]
 
+    @staticmethod
+    def _monitor_protocol(monitor_t_exp=None, margin=2.0):
+        from PycroFlow.schemas import validate_experiment_design
+
+        experiment = {
+            "type": "Exchange",
+            "wash_buffer": "Buffer",
+            "imagers": ["I1", "I2"],
+            "monitor_fluid": True,
+            "monitor_margin_s": margin,
+        }
+        if monitor_t_exp is not None:
+            experiment["monitor_t_exp"] = monitor_t_exp
+        design = {
+            "base_name": "x",
+            "save_dir": TEST_OUTPUT_DIR,
+            "fluid": {
+                "parameters": {"max_velocity": 200.0},
+                "settings": {
+                    "vol_wash": 200.0,
+                    "vol_reagent": 100.0,
+                    "reservoir_names": {2: "Buffer", 3: "I1", 4: "I2"},
+                    "special_names": {},
+                    "experiment": experiment,
+                },
+            },
+            "img": {"settings": {"t_exp": 100.0, "frames": 10}},
+            "illu": {"settings": {"laser": 560, "power_acq": 35.0}},
+        }
+        design = validate_experiment_design(design).model_dump(by_alias=True)
+        return pprot.ProtocolBuilder().build_protocol(design)
+
+    def test_monitor_fluid_inserts_concurrent_acquisitions(self):
+        from PycroFlow.schemas import check_runnable
+
+        proto = self._monitor_protocol()
+        # The monitor-enabled sequence is still runnable (paired signals).
+        self.assertEqual(check_runnable(proto), [])
+        img = proto["img"]["protocol_entries"]
+        monitors = [e for e in img if e.get("monitoring")]
+        # 2 imager injections + 1 inter-round wash = 3 monitors.
+        self.assertEqual(len(monitors), 3)
+        for m in monitors:
+            self.assertEqual(m["$type"], "acquire")
+            self.assertIn("wash monitor", m["name"])
+            self.assertGreaterEqual(m["frames"], 1)
+
+    def test_monitor_signals_are_paired(self):
+        proto = self._monitor_protocol()
+        fluid = proto["fluid"]["protocol_entries"]
+        img = proto["img"]["protocol_entries"]
+        starts = {
+            e["value"]
+            for e in fluid
+            if e["$type"] == "signal"
+            and str(e["value"]).startswith("monitor-start")
+        }
+        img_waits = {
+            e["value"]
+            for e in img
+            if e["$type"] == "wait for signal" and "monitor" in str(e["value"])
+        }
+        # Every monitor-start fluid signal is awaited (via illu's monitor-power
+        # relay, which the img side waits on). At minimum there are 3 starts.
+        self.assertEqual(len(starts), 3)
+        self.assertTrue(img_waits)
+
+    def test_monitor_frames_scale_with_exposure(self):
+        # Halving the monitor exposure roughly doubles the frame count (same
+        # wall-clock window covered).
+        coarse = self._monitor_protocol(monitor_t_exp=100.0)
+        fine = self._monitor_protocol(monitor_t_exp=50.0)
+        c = next(
+            e for e in coarse["img"]["protocol_entries"] if e.get("monitoring")
+        )
+        f = next(
+            e for e in fine["img"]["protocol_entries"] if e.get("monitoring")
+        )
+        self.assertEqual(f["t_exp"], 50.0)
+        self.assertGreater(f["frames"], c["frames"])
+
+    def test_monitor_off_by_default(self):
+        proto = self._protocol()
+        monitors = [e for e in self._entries(proto) if e.get("monitoring")]
+        self.assertEqual(monitors, [])
+
     def test_darkframes_set_keeps_the_acquisitions(self):
         names = self._acquire_names(self._protocol(darkframes=5))
         self.assertIn("I1 (dark frames)", names)

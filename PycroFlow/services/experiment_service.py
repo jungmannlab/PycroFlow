@@ -72,6 +72,11 @@ class ExperimentService:
         self._illumination_system = illumination_system
         self._experiment_design: Optional[Dict] = None
         self._protocol: Optional[Dict] = None
+        # Set when the loaded Run Sequence is hand-edited in the GUI (steps
+        # added/removed/reordered). A modified run is no longer a faithful
+        # instance of its named experiment type, so it is flagged in the run
+        # metadata. Reset whenever a fresh protocol is (re)loaded/translated.
+        self._protocol_modified: bool = False
         self._orchestrator: Optional[ProtocolOrchestrator] = None
         # Snapshot of the systems the current orchestrator was built with, so
         # start() can tell whether hardware was connected after load/translate.
@@ -258,8 +263,34 @@ class ExperimentService:
                 "(state={!r}); abort first".format(self._state)
             )
         self._protocol = protocol
+        # A freshly loaded/translated protocol is pristine until edited.
+        self._protocol_modified = False
         self._build_orchestrator()
         self._set_state(ExperimentState.LOADED)
+
+    @property
+    def protocol_modified(self) -> bool:
+        """Whether the loaded Run Sequence was hand-edited after loading."""
+        return self._protocol_modified
+
+    def mark_protocol_modified(self) -> None:
+        """Flag that the loaded Run Sequence was structurally hand-edited.
+
+        Called by the GUI when the operator adds / removes / reorders steps.
+        The flag rides on the run metadata so a modified Exchange run is not
+        recorded as a faithful ``Exchange`` instance.
+        """
+        self._protocol_modified = True
+
+    def check_runnable(self) -> list:
+        """Problems that would make the loaded Run Sequence hang (empty = OK).
+
+        Thin wrapper over :func:`PycroFlow.schemas.check_runnable` for the
+        loaded protocol, used by the GUI after an edit and as a start gate.
+        """
+        from PycroFlow.schemas import check_runnable
+
+        return check_runnable(self._protocol or {})
 
     def _build_orchestrator(self) -> None:
         """(Re)build the orchestrator from the current protocol + systems.
@@ -330,6 +361,20 @@ class ExperimentService:
 
     def start(self, system_steps: Optional[Dict] = None) -> None:
         self._require_orchestrator()
+        # A hand-edited sequence can deadlock (an orphan wait, or a circular
+        # wait). Refuse to launch one — it would hang the run with liquid
+        # potentially already moved. Scoped to EDITED sequences: builder-
+        # compiled / loaded protocols keep their existing start behavior (the
+        # orchestrator's per-wait timeout is their safety net), so this does
+        # not change runs that were not hand-edited. The GUI pre-checks and
+        # reports this too; this is the backstop for every entry path.
+        if self._protocol_modified:
+            issues = self.check_runnable()
+            if issues:
+                raise RuntimeError(
+                    "The edited Run Sequence would hang and cannot be "
+                    "started:\n- " + "\n- ".join(issues)
+                )
         missing = self.check_reservoirs_routable()
         if missing:
             raise RuntimeError(
@@ -373,6 +418,7 @@ class ExperimentService:
                     illumination_system=self._illumination_system,
                     design=self._experiment_design,
                     setup_name=self.setup_name,
+                    sequence_modified=self._protocol_modified,
                 )
             self._orchestrator.start_orchestration()
             self._set_state(ExperimentState.ORCHESTRATING)
@@ -427,6 +473,7 @@ class ExperimentService:
                 "(state={!r}); abort first".format(self._state)
             )
         self._protocol = None
+        self._protocol_modified = False
         self._orchestrator = None
         self._orchestrator_systems = None
         self._set_state(ExperimentState.IDLE)

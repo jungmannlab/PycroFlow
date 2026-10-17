@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
 )
 
 from PycroFlow.schemas.experiment_design import ExperimentDesign
+from PycroFlow.schemas import design_warnings
 from PycroFlow.gui.widgets.schema_form import SchemaForm
 from PycroFlow.gui.widgets.dnd import YamlDropMixin
 
@@ -238,6 +239,25 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
     def on_yaml_dropped(self, path):
         self.load_design_path(path)
 
+    def _surface_design_warnings(self, design):
+        """Show non-blocking design warnings (if any); never stops the action.
+
+        Soft advisories like reusing an imager for a redundant round — allowed,
+        but worth a heads-up. Hard errors raise during validation and are
+        reported separately; this only informs.
+        """
+        try:
+            warnings = design_warnings(design)
+        except Exception:
+            return
+        if warnings:
+            QMessageBox.information(
+                self,
+                "Design warnings",
+                "The design is valid, but note:\n\n• "
+                + "\n\n• ".join(warnings),
+            )
+
     def _on_save(self):
         try:
             model = self._form.to_model()
@@ -246,6 +266,7 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
                 self, "Cannot save — invalid design", "{}".format(exc)
             )
             return
+        self._surface_design_warnings(model)
         path, _ = QFileDialog.getSaveFileName(
             self, "Save experiment design", "", "YAML files (*.yaml *.yml)"
         )
@@ -256,11 +277,13 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
 
     def _on_translate(self):
         try:
-            self._svc.load_experiment_design(self._form.to_dict())
+            design = self._form.to_dict()
+            self._svc.load_experiment_design(design)
             self._svc.translate()
         except Exception as exc:
             QMessageBox.critical(self, "Translation failed", "{}".format(exc))
             return
+        self._surface_design_warnings(design)
         self._schedule_estimate()
         if self._on_translated is not None:
             self._on_translated()
