@@ -427,10 +427,11 @@ class TestMainWindow(unittest.TestCase):
 
         w = self._build()
         tab = w.run_sequence_tab
+        bar = w.replay_bar  # the scrubber lives above the tabs now
         tab._service.load_protocol(copy.deepcopy(protocol))
 
         # Replay button is disabled until a controller is attached.
-        self.assertFalse(tab.replay_btn.isEnabled())
+        self.assertFalse(bar.replay_btn.isEnabled())
 
         emitted = []
         events = [
@@ -451,14 +452,14 @@ class TestMainWindow(unittest.TestCase):
             set_progress=tab.replay_set_progress,
             set_fluid_state=lambda s: None,
         )
-        tab.set_replay_controller(ctrl, ctrl.duration_ms)
-        self.assertTrue(tab.replay_btn.isEnabled())
+        bar.set_controller(ctrl, ctrl.duration_ms)
+        self.assertTrue(bar.replay_btn.isEnabled())
 
         # Entering replay reveals the scrubber; seeking highlights the step
         # the fluid subsystem was on at that time (index 2 -> active).
-        tab.replay_btn.setChecked(True)
-        self.assertFalse(tab.replay_row.isHidden())
-        tab.replay_slider.setValue(1000)
+        bar.replay_btn.setChecked(True)
+        self.assertFalse(bar.slider.isHidden())
+        bar.slider.setValue(1000)
         fluid_list = tab.step_lists["fluid"]
         self.assertEqual(
             fluid_list.item(2).background().color().name(),
@@ -476,19 +477,19 @@ class TestMainWindow(unittest.TestCase):
         self.assertTrue(any(u.kind == "state" for u in emitted))
 
         # Leaving replay hides the scrubber again.
-        tab.replay_btn.setChecked(False)
-        self.assertTrue(tab.replay_row.isHidden())
+        bar.replay_btn.setChecked(False)
+        self.assertTrue(bar.slider.isHidden())
 
         # A structural edit desyncs the lists from the recording, so the stale
         # replay is dropped (button disabled, replay mode exited).
-        tab.set_replay_controller(ctrl, ctrl.duration_ms)
-        tab.replay_btn.setChecked(True)
+        bar.set_controller(ctrl, ctrl.duration_ms)
+        bar.replay_btn.setChecked(True)
         tab.step_lists["fluid"].setCurrentRow(0)
         tab.add_type_combo.setCurrentText("incubate")
         tab._on_add_step()
-        self.assertFalse(tab.replay_btn.isEnabled())
-        self.assertFalse(tab.replay_btn.isChecked())
-        self.assertTrue(tab.replay_row.isHidden())
+        self.assertFalse(bar.replay_btn.isEnabled())
+        self.assertFalse(bar.replay_btn.isChecked())
+        self.assertTrue(bar.slider.isHidden())
 
     def test_replay_click_step_jumps_timeline(self):
         from PycroFlow.live_analysis.replay_player import ReplayController
@@ -497,6 +498,7 @@ class TestMainWindow(unittest.TestCase):
 
         w = self._build()
         tab = w.run_sequence_tab
+        bar = w.replay_bar
         tab._service.load_protocol(copy.deepcopy(protocol))
         events = [
             {
@@ -511,15 +513,16 @@ class TestMainWindow(unittest.TestCase):
             },
         ]
         ctrl = ReplayController(events, set_progress=tab.replay_set_progress)
-        tab.set_replay_controller(ctrl, ctrl.duration_ms)
-        tab.replay_btn.setChecked(True)
+        bar.set_controller(ctrl, ctrl.duration_ms)
+        bar.replay_btn.setChecked(True)
 
-        # Clicking fluid step 4 jumps the timeline to when fluid reached it.
+        # Clicking fluid step 4 (in the tab) jumps the global timeline to when
+        # fluid reached it.
         tab.step_lists["fluid"].setCurrentRow(4)
-        self.assertEqual(tab.replay_slider.value(), 3000)
+        self.assertEqual(bar.slider.value(), 3000)
         # Clicking an earlier step jumps back.
         tab.step_lists["fluid"].setCurrentRow(1)
-        self.assertEqual(tab.replay_slider.value(), 1000)
+        self.assertEqual(bar.slider.value(), 1000)
 
     def test_open_past_run_from_disk(self):
         import os
@@ -582,15 +585,17 @@ class TestMainWindow(unittest.TestCase):
         w = self._build()
         w.open_past_run(jsonl)
         tab = w.run_sequence_tab
+        bar = w.replay_bar
         # The embedded protocol repopulated the step lists.
         self.assertEqual(tab.step_lists["fluid"].count(), 2)
-        # Replay is wired, enabled and auto-entered.
-        self.assertTrue(tab.replay_btn.isEnabled())
-        self.assertTrue(tab._replay_mode)
+        # Replay is wired, enabled and auto-entered (in the global bar).
+        self.assertTrue(bar.replay_btn.isEnabled())
+        self.assertTrue(bar.active)
+        self.assertTrue(tab._replay_active)
         # The run's webcam clip was found by run id (under fluidics_cam/).
         self.assertEqual(w._webcam_replay.clip_count, 1)
         # Scrubbing shows a webcam frame.
-        tab.replay_slider.setValue(1000)
+        bar.slider.setValue(1000)
         self.assertFalse(w.webcams_tab.preview_label.pixmap().isNull())
 
     def test_close_event_is_safe(self):

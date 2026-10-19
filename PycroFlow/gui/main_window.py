@@ -24,6 +24,8 @@ from PyQt6.QtWidgets import (
     QLabel,
     QComboBox,
     QMessageBox,
+    QWidget,
+    QVBoxLayout,
 )
 
 # Qt6 moved QAction out of QtWidgets into QtGui.
@@ -44,6 +46,7 @@ from PycroFlow.gui.tabs.monet_tab import MonetTab
 from PycroFlow.gui.tabs.webcams_tab import WebcamsTab
 from PycroFlow.gui.tabs.live_tab import LiveTabHost
 from PycroFlow.gui.tabs.doctor_tab import DoctorTab
+from PycroFlow.gui.widgets.replay_bar import ReplayBar
 from PycroFlow.services.live_preview import LivePreviewSession
 
 # Experiment states during which hardware must not be touched manually (the
@@ -82,16 +85,24 @@ class PycroFlowMainWindow(QMainWindow):
         # --- post-run replay recording (feature: scrub a finished run).
         # A recorder taps the live stream + polls progress/fluid state while a
         # run is active; on finish, a controller built from the timeline is
-        # handed to the Run Sequence tab's scrubber. See replay_recorder /
-        # replay_player.
+        # handed to the global ReplayBar above the tabs (so a run can be
+        # scrubbed from any tab). See replay_recorder / replay_player.
         self._replay_recorder = None
         self._replay_hub_client = None
         self._webcam_replay = None
         self._replay_poll_timer = QTimer(self)
         self._replay_poll_timer.setInterval(500)
         self._replay_poll_timer.timeout.connect(self._replay_poll)
-        self.run_sequence_tab.on_replay_mode = self._on_replay_mode
-        self.run_sequence_tab.on_open_past_run = self.open_past_run
+        self.replay_bar.on_mode = self._on_replay_mode
+        self.replay_bar.on_open_past_run = self.open_past_run
+        # Clicking a step / picking a round in the Run Sequence tab jumps the
+        # global scrubber; a structural edit drops the now-stale replay.
+        self.run_sequence_tab.on_replay_seek_step = (
+            self.replay_bar.seek_to_step
+        )
+        self.run_sequence_tab.on_sequence_edited = lambda: (
+            self.replay_bar.set_controller(None, 0)
+        )
 
     # --- toolbar ------------------------------------------------------
 
@@ -169,7 +180,18 @@ class PycroFlowMainWindow(QMainWindow):
         self.tabs.addTab(self.live_tab, "Live")
         self.tabs.addTab(self.monet_tab, "Monet")
         self.tabs.addTab(self.doctor_tab, "Doctor")
-        self.setCentralWidget(self.tabs)
+
+        # The replay scrubber lives ABOVE the tabs so a finished/opened run can
+        # be scrubbed while viewing ANY tab's data (the controller's sinks drive
+        # the live view / webcam / fluid schematic / step-highlight regardless
+        # of which tab is in front).
+        self.replay_bar = ReplayBar()
+        central = QWidget()
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.addWidget(self.replay_bar)
+        central_layout.addWidget(self.tabs, 1)
+        self.setCentralWidget(central)
 
         # Lock manual hardware access (setup/connect, fluid manual controls,
         # the embedded monet GUI) while the orchestrator owns the instruments.
@@ -252,7 +274,7 @@ class PycroFlowMainWindow(QMainWindow):
         from PycroFlow.live_analysis.client_seam import CallbackClient
 
         # A fresh run supersedes any previous run's replay.
-        self.run_sequence_tab.set_replay_controller(None, 0)
+        self.replay_bar.set_controller(None, 0)
         # Defensively finalize any still-open recording so a prior run (or a
         # failed start) can never leak a hub client or a stale recorder.
         self._replay_poll_timer.stop()
@@ -352,9 +374,9 @@ class PycroFlowMainWindow(QMainWindow):
                 )
             )
         if ctrl.duration_ms > 0:
-            self.run_sequence_tab.set_replay_controller(ctrl, ctrl.duration_ms)
+            self.replay_bar.set_controller(ctrl, ctrl.duration_ms)
             if enter:
-                self.run_sequence_tab.replay_btn.setChecked(True)
+                self.replay_bar.enter_replay()
 
     def _build_replay_controller(self, path):
         """Just-finished run: build the controller + this run's webcam source
@@ -432,12 +454,14 @@ class PycroFlowMainWindow(QMainWindow):
         self._wire_replay(ctrl, webcam_src, enter=True)
 
     def _on_replay_mode(self, on):
-        """Coordinate the other tabs when replay is toggled in the Run tab."""
+        """Coordinate the tabs when replay is toggled in the global ReplayBar."""
         # Freeze the schematic's live poll so replayed snapshots are not
         # overwritten by the (idle) current hardware state.
         self.fluid_tab.set_replay_mode(on)
         # Stop the webcam live preview so replayed clip frames own the pane.
         self.webcams_tab.set_replay_mode(on)
+        # Let the Run Sequence tab route step/round clicks as timeline jumps.
+        self.run_sequence_tab.set_replay_active(on)
         self.live_tab.set_run_status("replaying run" if on else "")
 
     def _sync_live_tab(self, state):

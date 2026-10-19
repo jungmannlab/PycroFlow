@@ -35,7 +35,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QAbstractItemView,
-    QSlider,
 )
 
 from PycroFlow.services.experiment_service import ExperimentState
@@ -206,23 +205,18 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._current_row = -1
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(500)
-        # --- post-run replay state (feature: scrub a finished run). The
-        # controller + its sinks (live view / fluid schematic) are supplied by
-        # the main window via set_replay_controller; this tab owns the scrubber
-        # and drives the run-sequence step highlight.
-        self._replay_controller = None
-        self._replay_duration = 0
-        self._replay_pos = 0
-        self._replay_speed = 1.0
-        self._replay_mode = False
-        # Optional callback(on: bool) the main window sets to coordinate the
-        # other tabs (pause the fluid poll, flag the live tab) in replay mode.
-        self.on_replay_mode = None
-        # Optional callback(path) the main window sets to open + replay a saved
-        # run's timeline file from disk.
-        self.on_open_past_run = None
-        self._replay_timer = QTimer(self)
-        self._replay_timer.setInterval(200)
+        # --- post-run replay (feature: scrub a finished run). The scrubber now
+        # lives in the global ReplayBar above the tabs (so a run can be scrubbed
+        # from any tab); this tab only contributes the run-sequence step
+        # highlight (:meth:`replay_set_progress`, the controller's progress
+        # sink) and routes step/round clicks back to the bar as timeline jumps.
+        self._replay_active = False
+        # Callback(system, index) set by the main window -> ReplayBar.seek_to_step
+        # so clicking a step/round jumps the timeline while replaying.
+        self.on_replay_seek_step = None
+        # Callback() the main window sets to drop a now-stale replay when the
+        # loaded sequence is structurally edited.
+        self.on_sequence_edited = None
         self._build_ui()
         self._connect_signals()
         self._refresh_controls(self._service.state)
@@ -261,15 +255,6 @@ class ExperimentTab(YamlDropMixin, QWidget):
             self.abort_btn,
         ):
             controls.addWidget(b)
-        # Enabled once a finished run has a recorded replay timeline; toggles
-        # the Progress group into a scrubber that drives the whole GUI replay.
-        self.replay_btn = QPushButton("▶ Replay run")
-        self.replay_btn.setCheckable(True)
-        self.replay_btn.setEnabled(False)
-        controls.addWidget(self.replay_btn)
-        # Open a saved run's *_replay.jsonl from disk and replay it.
-        self.open_run_btn = QPushButton("Open past run…")
-        controls.addWidget(self.open_run_btn)
         controls.addStretch()
         layout.addLayout(controls)
 
@@ -316,28 +301,6 @@ class ExperimentTab(YamlDropMixin, QWidget):
             )
             self.substep_bars[system] = (name, bar, count)
             self._set_substep_visible(system, False)
-        # Replay scrubber (hidden until Replay is toggled on a finished run):
-        # a timeline slider + transport controls that drive the whole-GUI
-        # replay. The run's progress bars stay above it for reference.
-        self.replay_row = QWidget()
-        replay_layout = QHBoxLayout(self.replay_row)
-        replay_layout.setContentsMargins(0, 0, 0, 0)
-        self.replay_play_btn = QPushButton("▶")
-        self.replay_play_btn.setFixedWidth(32)
-        replay_layout.addWidget(self.replay_play_btn)
-        self.replay_slider = QSlider(Qt.Orientation.Horizontal)
-        self.replay_slider.setRange(0, 0)
-        replay_layout.addWidget(self.replay_slider, 1)
-        self.replay_time_label = QLabel("0:00 / 0:00")
-        replay_layout.addWidget(self.replay_time_label)
-        replay_layout.addWidget(QLabel("speed"))
-        self.replay_speed_combo = QComboBox()
-        for s in ("0.5×", "1×", "2×", "4×", "8×"):
-            self.replay_speed_combo.addItem(s)
-        self.replay_speed_combo.setCurrentIndex(1)
-        replay_layout.addWidget(self.replay_speed_combo)
-        prog_grid.addWidget(self.replay_row, 7, 0, 1, 3)
-        self.replay_row.setVisible(False)
         layout.addWidget(prog_box)
 
         # --- per-subsystem step lists (side by side) + parameters below
@@ -472,14 +435,6 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.del_step_btn.clicked.connect(self._on_delete_step)
         self.move_up_btn.clicked.connect(lambda: self._on_move_step(-1))
         self.move_down_btn.clicked.connect(lambda: self._on_move_step(1))
-        self.replay_btn.toggled.connect(self._on_replay_toggled)
-        self.open_run_btn.clicked.connect(self._on_open_past_run)
-        self.replay_play_btn.clicked.connect(self._on_replay_play)
-        self.replay_slider.valueChanged.connect(self._on_replay_slider)
-        self.replay_speed_combo.currentIndexChanged.connect(
-            self._on_replay_speed
-        )
-        self._replay_timer.timeout.connect(self._replay_tick)
         self._poll_timer.timeout.connect(self._poll_progress)
         self.load_btn.clicked.connect(self._on_load)
         self.clear_btn.clicked.connect(self._on_clear)
@@ -808,94 +763,13 @@ class ExperimentTab(YamlDropMixin, QWidget):
 
     # --- post-run replay (scrub a finished run) ------------------------
 
-    _REPLAY_SPEEDS = (0.5, 1.0, 2.0, 4.0, 8.0)
+    def set_replay_active(self, on):
+        """Tell the tab whether the global ReplayBar is in replay mode.
 
-    def _on_open_past_run(self):
-        """Pick a saved run's timeline file and hand it to the main window."""
-        if not callable(self.on_open_past_run):
-            return
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Open a past run to replay",
-            "",
-            "Replay timelines (*_replay.jsonl);;All files (*)",
-        )
-        if path:
-            self.on_open_past_run(path)
-
-    def set_replay_controller(self, controller, duration_ms):
-        """Make a finished run scrubbable (or clear it with ``None``, 0).
-
-        Called by the main window once a run ends and its replay timeline has
-        been recorded. The ``controller``'s sinks (live view / fluid schematic
-        / this tab's :meth:`replay_set_progress`) are wired by the main window.
+        While active, clicking a step / picking a round jumps the timeline (via
+        :attr:`on_replay_seek_step`) instead of the live cross-highlight.
         """
-        self._replay_controller = controller
-        self._replay_duration = int(duration_ms or 0)
-        available = controller is not None and self._replay_duration > 0
-        self.replay_btn.setEnabled(available)
-        if not available and self.replay_btn.isChecked():
-            self.replay_btn.setChecked(False)  # exits replay mode (toggled)
-
-    def _on_replay_toggled(self, checked):
-        self._replay_mode = checked
-        self.replay_row.setVisible(checked)
-        if callable(self.on_replay_mode):
-            self.on_replay_mode(checked)
-        if checked:
-            self._replay_speed = self._REPLAY_SPEEDS[
-                self.replay_speed_combo.currentIndex()
-            ]
-            self.replay_slider.setRange(0, self._replay_duration)
-            self._replay_pos = 0
-            self.replay_slider.setValue(0)
-            self._replay_seek(0)
-        else:
-            self._replay_timer.stop()
-            self.replay_play_btn.setText("▶")
-
-    def _on_replay_play(self):
-        if not self._replay_mode:
-            return
-        if self._replay_timer.isActive():
-            self._replay_timer.stop()
-            self.replay_play_btn.setText("▶")
-        else:
-            if self._replay_pos >= self._replay_duration:
-                self._replay_pos = 0  # restart if parked at the end
-                self.replay_slider.setValue(0)
-            self._replay_timer.start()
-            self.replay_play_btn.setText("⏸")
-
-    def _replay_tick(self):
-        step = int(self._replay_timer.interval() * self._replay_speed)
-        self._replay_pos = min(self._replay_duration, self._replay_pos + step)
-        self.replay_slider.setValue(self._replay_pos)  # -> _on_replay_slider
-        if self._replay_pos >= self._replay_duration:
-            self._replay_timer.stop()
-            self.replay_play_btn.setText("▶")
-
-    def _on_replay_slider(self, value):
-        self._replay_pos = value
-        self._replay_seek(value)
-
-    def _on_replay_speed(self, index):
-        if 0 <= index < len(self._REPLAY_SPEEDS):
-            self._replay_speed = self._REPLAY_SPEEDS[index]
-
-    def _replay_seek(self, t_ms):
-        if self._replay_controller is not None:
-            self._replay_controller.seek(t_ms)
-        self.replay_time_label.setText(
-            "{} / {}".format(
-                self._fmt_ms(t_ms), self._fmt_ms(self._replay_duration)
-            )
-        )
-
-    @staticmethod
-    def _fmt_ms(ms):
-        s = int(ms // 1000)
-        return "{}:{:02d}".format(s // 60, s % 60)
+        self._replay_active = bool(on)
 
     def replay_set_progress(self, prog):
         """Progress sink for replay: drive the same progress bars the live run
@@ -1122,8 +996,8 @@ class ExperimentTab(YamlDropMixin, QWidget):
                 self._show_step_params(anchor, lst.currentRow())
                 break
         # In replay, jump the timeline to that round's start (its imaging step).
-        if self._replay_mode:
-            self._replay_seek_to_step("img", targets.get("img", 0))
+        if self._replay_active and callable(self.on_replay_seek_step):
+            self.on_replay_seek_step("img", targets.get("img", 0))
 
     @staticmethod
     def _is_dark(entry):
@@ -1436,28 +1310,17 @@ class ExperimentTab(YamlDropMixin, QWidget):
         if row < 0:
             # Deselection — e.g. from clearing another list, or repopulating.
             return
-        if self._replay_mode:
+        if self._replay_active and callable(self.on_replay_seek_step):
             # In replay, clicking a step jumps the timeline to when that step
-            # became active; the recorded progress then shades the lists.
+            # became active (the ReplayBar seeks); the recorded progress then
+            # shades the lists.
             self._show_step_params(system, row)
             self._refresh_edit_controls(self._service.state)
-            self._replay_seek_to_step(system, row)
+            self.on_replay_seek_step(system, row)
             return
         self._highlight_concurrent(system, row)
         self._show_step_params(system, row)
         self._refresh_edit_controls(self._service.state)
-
-    def _replay_seek_to_step(self, system, row):
-        """Seek the replay to the moment ``system`` reached step ``row``.
-
-        No-op when that step was never reached (e.g. an aborted run, or a step
-        past where the run got), so the current position holds.
-        """
-        if self._replay_controller is None:
-            return
-        t = self._replay_controller.first_time_reaching(system, row)
-        if t is not None:
-            self.replay_slider.setValue(int(t))  # -> _on_replay_slider -> seek
 
     def _highlight_concurrent(self, system, row):
         """Select + centre the concurrent step in the OTHER two lists."""
@@ -1609,9 +1472,10 @@ class ExperimentTab(YamlDropMixin, QWidget):
         """
         self._service.mark_protocol_modified()
         # A structural edit desyncs the step lists from any recorded run, so a
-        # stale replay would highlight the wrong steps — drop it (exits replay
-        # mode if active).
-        self.set_replay_controller(None, 0)
+        # stale replay would highlight the wrong steps — drop it (the main
+        # window clears the ReplayBar, which exits replay mode if active).
+        if callable(self.on_sequence_edited):
+            self.on_sequence_edited()
         self._populate_steps()
         self._update_modified_badge()
         # Restore a sensible selection so the user can keep editing.

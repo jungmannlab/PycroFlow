@@ -13,9 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `*_replay.jsonl` timeline (`live_analysis/replay_recorder.py`): the seam's
   thumbnail/metrics/state/log updates (thumbnails already carry image bytes +
   detection boxes, so no extra capture) plus 0.5 s polls of run-sequence
-  progress and fluidics state. After the run, the Run Sequence tab's Progress
-  group gains a **▶ Replay run** toggle that reveals a timeline slider +
-  play/speed controls; scrubbing re-emits the recorded `LiveUpdate`s through the
+  progress and fluidics state. After the run, a **global replay bar above the
+  tabs** (`gui/widgets/replay_bar.py`) gains a **▶ Replay run** toggle that
+  reveals a timeline slider + play/speed controls — above the tabs so a run can
+  be scrubbed while viewing ANY tab's data; scrubbing re-emits the recorded
+  `LiveUpdate`s through the
   real live panels (image + boxes), drives the fluid schematic (its live poll is
   suspended), drives the acquisition progress bars (overall + steps-in-round +
   status line) to the scrubbed position, highlights the run-sequence step active
@@ -29,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mode **clicking a step or picking a round jumps the timeline to when that
   protocol position became active** (mapped from the recorded progress). The
   timeline file embeds the run's protocol in its header, so a past run can be
-  reopened from disk — **Open past run…** in the Run Sequence tab loads a saved
+  reopened from disk — **Open past run…** in the replay bar loads a saved
   `*_replay.jsonl` (its run id disambiguates multiple runs in one folder),
   repopulates the step lists from the embedded protocol, finds the run's webcam
   clips under the folder by run id (incl. `fluidics_cam[_N]` subfolders), and
