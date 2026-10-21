@@ -266,9 +266,7 @@ class LegacyArchitecture(AbstractSystem):
             try:
                 mux.close()
             except Exception as exc:
-                logger.warning(
-                    "multiplexer close failed: {!r}".format(exc)
-                )
+                logger.warning("multiplexer close failed: {!r}".format(exc))
 
     def __del__(self):
         self.close()
