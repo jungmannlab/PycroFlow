@@ -246,6 +246,38 @@ class IbidiMultiplexerDriverTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             mx.identify()
 
+    def test_close_clears_buffers_then_closes_and_is_idempotent(self):
+        # Graceful shutdown: purge the serial buffers before dropping the
+        # handle (so stale bytes don't carry into the next session), but never
+        # block draining output to a possibly-unresponsive device — a wedged
+        # flush() would hang the whole shutdown.
+        from unittest.mock import MagicMock, call
+
+        mx = IbidiMultiplexer("7", connect=False)
+        ser = MagicMock()
+        ser.is_open = True
+        mx._serial = ser
+        mx.close()
+        ser.reset_input_buffer.assert_called_once()
+        ser.reset_output_buffer.assert_called_once()
+        ser.close.assert_called_once()
+        # pending output is discarded, not drained: flush() must NOT be called
+        ser.flush.assert_not_called()
+        # buffers are cleared before the port is closed, not after
+        self.assertLess(
+            ser.method_calls.index(call.reset_output_buffer()),
+            ser.method_calls.index(call.close()),
+        )
+        self.assertIsNone(mx._serial)
+        mx.close()  # second call is a no-op, must not raise
+
+    def test_close_releases_the_fake_serial_port(self):
+        with emu.patch_ibidi_serial() as fake:
+            mx = IbidiMultiplexer("7")
+            self.assertTrue(fake.is_open)
+            mx.close()
+            self.assertFalse(fake.is_open)
+
 
 class IbidiLegacyArchitectureIntegrationTest(unittest.TestCase):
     """Build the real LegacyArchitecture from the IbidiEmulator setup."""
@@ -287,6 +319,28 @@ class IbidiLegacyArchitectureIntegrationTest(unittest.TestCase):
         self.assertIsNotNone(la.multiplexer)
         self.assertIsInstance(la.multiplexer, IbidiMultiplexer)
         self.assertIn("ibidi", la.valve_a)
+
+    def test_close_releases_the_multiplexer_port(self):
+        # Deterministic shutdown: LegacyArchitecture.close() must release the
+        # ibidi serial port (rather than leaving it to __del__ / GC), and be
+        # safe to call more than once.
+        la, fake = self._build()
+        self.assertTrue(fake.is_open)
+        la.close()
+        self.assertFalse(fake.is_open)
+        la.close()  # idempotent — must not raise
+
+    def test_close_still_releases_port_when_spill_sensor_fails(self):
+        # A failure stopping the spill sensor must not leave the ibidi port
+        # held: mux.close() still has to run, and the single-attempt _closed
+        # guard must not strand it.
+        from unittest.mock import MagicMock
+
+        la, fake = self._build()
+        la.spill_sensor = MagicMock()
+        la.spill_sensor.stop_monitoring.side_effect = RuntimeError("boom")
+        la.close()
+        self.assertFalse(fake.is_open)
 
     def test_set_valves_routes_multi_channel_reservoir(self):
         # A reservoir wired through several channels (valve_pos {ibidi: [..]})
