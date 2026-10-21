@@ -250,10 +250,25 @@ class LegacyArchitecture(AbstractSystem):
         if getattr(self, "_closed", False):
             return
         self._closed = True
-        self._stop_spill_sensor()
+        # Release each resource independently: the ``_closed`` guard means we
+        # get exactly one attempt, so a failure stopping the spill sensor must
+        # not skip closing the multiplexer's serial port (the port is the
+        # thing that otherwise stays held across a restart). Each step is
+        # best-effort; an error is logged, not propagated.
+        try:
+            self._stop_spill_sensor()
+        except Exception as exc:
+            logger.warning(
+                "spill sensor stop failed on close: {!r}".format(exc)
+            )
         mux = getattr(self, "multiplexer", None)
         if mux is not None:
-            mux.close()
+            try:
+                mux.close()
+            except Exception as exc:
+                logger.warning(
+                    "multiplexer close failed: {!r}".format(exc)
+                )
 
     def __del__(self):
         self.close()

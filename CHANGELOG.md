@@ -22,9 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `disconnect_fluid()` now calls `LegacyArchitecture.close()` **before**
     tearing down the Hamilton bus and dropping the reference.
   - New `LegacyArchitecture.close()` — a deterministic, idempotent counterpart
-    to `__del__` that stops the spill sensor and closes the multiplexer.
-  - `IbidiMultiplexer.close()` now **flushes and clears the serial buffers**
-    before closing, so the device is not left mid-transaction (graceful close).
+    to `__del__` that stops the spill sensor and closes the multiplexer. Each
+    step is best-effort so a spill-sensor failure can't strand the ibidi port.
+  - `IbidiMultiplexer.close()` now **clears (discards) the serial buffers**
+    under the port lock before closing, so no stale bytes carry into the next
+    session. Output is discarded, not drained — closing never blocks on a
+    `flush()` that a wedged device would hang forever.
   - `IbidiMultiplexer` opens the port with `exclusive=True` (POSIX lock; a
     no-op on Windows, where COM ports are already exclusive) so a stale handle
     fails the next open loudly instead of two handles silently sharing the line.

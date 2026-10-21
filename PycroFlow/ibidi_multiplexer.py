@@ -214,27 +214,29 @@ class IbidiMultiplexer(_ValveABC):
     def close(self):
         """Close the serial connection. Safe to call repeatedly.
 
-        Drains and clears the serial buffers before dropping the handle so
-        the device is not left mid-transaction. An abrupt teardown that
-        leaves a half-written command on the USB-CDC link is the kind of
-        thing that wedges the actuator's firmware until a physical USB/power
-        replug — flushing first makes the close graceful.
+        Clears the serial buffers before dropping the handle so no stale
+        bytes — a half-read reply, an aborted write — carry into the next
+        session. Pending output is *discarded* (``reset_output_buffer``), not
+        drained: on a teardown we must never block waiting for a possibly
+        unresponsive device to accept bytes, and a wedged ``flush`` would hang
+        the whole shutdown. Takes ``self._lock`` so it can't swap the handle
+        out from under an in-flight :meth:`_command` on another thread.
         """
-        if self._serial is not None:
-            try:
-                if getattr(self._serial, "is_open", True):
-                    for name in (
-                        "flush",
-                        "reset_input_buffer",
-                        "reset_output_buffer",
-                    ):
-                        fn = getattr(self._serial, name, None)
-                        if callable(fn):
-                            fn()
-                    self._serial.close()
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("ibidi close failed: {!r}".format(exc))
-            self._serial = None
+        with self._lock:
+            if self._serial is not None:
+                try:
+                    if getattr(self._serial, "is_open", True):
+                        for name in (
+                            "reset_input_buffer",
+                            "reset_output_buffer",
+                        ):
+                            fn = getattr(self._serial, name, None)
+                            if callable(fn):
+                                fn()
+                        self._serial.close()
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning("ibidi close failed: {!r}".format(exc))
+                self._serial = None
 
     def __del__(self):  # pragma: no cover - GC timing dependent
         self.close()
