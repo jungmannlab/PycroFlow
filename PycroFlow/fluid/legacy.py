@@ -238,11 +238,25 @@ class LegacyArchitecture(AbstractSystem):
             self.spill_sensor.stop_monitoring()
             self.spill_sensor.disconnect()
 
-    def __del__(self):
+    def close(self):
+        """Release hardware this architecture owns directly.
+
+        Stops the spill sensor and closes the ibidi multiplexer's serial
+        port. This is the *deterministic* counterpart to :meth:`__del__`: it
+        is called from the disconnect path so the ibidi port is released on
+        shutdown rather than whenever the garbage collector happens to run
+        (which may be never, before the process exits). Idempotent.
+        """
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
         self._stop_spill_sensor()
         mux = getattr(self, "multiplexer", None)
         if mux is not None:
             mux.close()
+
+    def __del__(self):
+        self.close()
 
     def _assign_system_config(self, config):
         """Assign a system configuration.

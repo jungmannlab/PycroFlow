@@ -246,6 +246,36 @@ class IbidiMultiplexerDriverTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             mx.identify()
 
+    def test_close_flushes_then_closes_and_is_idempotent(self):
+        # Graceful shutdown: drain/clear the serial buffers before dropping
+        # the handle, so the device is not left mid-transaction (which can
+        # wedge the firmware until a physical replug).
+        from unittest.mock import MagicMock, call
+
+        mx = IbidiMultiplexer("7", connect=False)
+        ser = MagicMock()
+        ser.is_open = True
+        mx._serial = ser
+        mx.close()
+        ser.flush.assert_called_once()
+        ser.reset_input_buffer.assert_called_once()
+        ser.reset_output_buffer.assert_called_once()
+        ser.close.assert_called_once()
+        # the flush must happen before the port is closed, not after
+        self.assertLess(
+            ser.method_calls.index(call.flush()),
+            ser.method_calls.index(call.close()),
+        )
+        self.assertIsNone(mx._serial)
+        mx.close()  # second call is a no-op, must not raise
+
+    def test_close_releases_the_fake_serial_port(self):
+        with emu.patch_ibidi_serial() as fake:
+            mx = IbidiMultiplexer("7")
+            self.assertTrue(fake.is_open)
+            mx.close()
+            self.assertFalse(fake.is_open)
+
 
 class IbidiLegacyArchitectureIntegrationTest(unittest.TestCase):
     """Build the real LegacyArchitecture from the IbidiEmulator setup."""
@@ -287,6 +317,16 @@ class IbidiLegacyArchitectureIntegrationTest(unittest.TestCase):
         self.assertIsNotNone(la.multiplexer)
         self.assertIsInstance(la.multiplexer, IbidiMultiplexer)
         self.assertIn("ibidi", la.valve_a)
+
+    def test_close_releases_the_multiplexer_port(self):
+        # Deterministic shutdown: LegacyArchitecture.close() must release the
+        # ibidi serial port (rather than leaving it to __del__ / GC), and be
+        # safe to call more than once.
+        la, fake = self._build()
+        self.assertTrue(fake.is_open)
+        la.close()
+        self.assertFalse(fake.is_open)
+        la.close()  # idempotent — must not raise
 
     def test_set_valves_routes_multi_channel_reservoir(self):
         # A reservoir wired through several channels (valve_pos {ibidi: [..]})

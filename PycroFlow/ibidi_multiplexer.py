@@ -191,9 +191,17 @@ class IbidiMultiplexer(_ValveABC):
 
         Shared by :meth:`connect` and :meth:`_reopen` so there is a single
         place that constructs the :class:`~serial.Serial` handle.
+
+        ``exclusive=True`` asks the OS for an exclusive lock on the port
+        (POSIX ``TIOCEXCL``; Windows COM ports are exclusive already, so it is
+        a no-op there). A stale handle then fails the next open *loudly*
+        instead of two handles silently sharing the line.
         """
         self._serial = Serial(
-            self._port, baudrate=self._baud, timeout=self._timeout
+            self._port,
+            baudrate=self._baud,
+            timeout=self._timeout,
+            exclusive=True,
         )
 
     @staticmethod
@@ -204,10 +212,25 @@ class IbidiMultiplexer(_ValveABC):
         return port
 
     def close(self):
-        """Close the serial connection. Safe to call repeatedly."""
+        """Close the serial connection. Safe to call repeatedly.
+
+        Drains and clears the serial buffers before dropping the handle so
+        the device is not left mid-transaction. An abrupt teardown that
+        leaves a half-written command on the USB-CDC link is the kind of
+        thing that wedges the actuator's firmware until a physical USB/power
+        replug — flushing first makes the close graceful.
+        """
         if self._serial is not None:
             try:
                 if getattr(self._serial, "is_open", True):
+                    for name in (
+                        "flush",
+                        "reset_input_buffer",
+                        "reset_output_buffer",
+                    ):
+                        fn = getattr(self._serial, name, None)
+                        if callable(fn):
+                            fn()
                     self._serial.close()
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("ibidi close failed: {!r}".format(exc))
