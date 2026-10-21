@@ -100,6 +100,7 @@ class MonitoringController:
 
         self._proc: Optional[subprocess.Popen] = None
         self._control_dir: Optional[str] = None
+        self._resolved_output_dir: Optional[str] = None
         self._registry = None  # the SignalRegistry we subscribed to
 
         self._queue: "queue.Queue[dict]" = queue.Queue(maxsize=_EMIT_QUEUE_MAX)
@@ -219,6 +220,18 @@ class MonitoringController:
             len(self._follows),
             self.run_id,
         )
+
+    @property
+    def output_dir(self) -> Optional[str]:
+        """Directory this run's webcam clips were written to (None until the
+        controller has started a run). Used by the post-run replay to find the
+        ``.avi`` clips to scrub."""
+        return self._resolved_output_dir
+
+    @property
+    def fps(self) -> int:
+        """The capture frame rate (clips carry no fps in their filename)."""
+        return self._config.fps
 
     def _resolve_output_dir(self) -> str:
         """Where clips land: the setup's ``output_dir`` if set, else the first

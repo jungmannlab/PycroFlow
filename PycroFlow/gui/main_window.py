@@ -15,6 +15,8 @@ Owns the :class:`QtBridge` that marshals ExperimentService observer callbacks
 onto the GUI thread.
 """
 
+import os
+
 from PyQt6.QtWidgets import (
     QMainWindow,
     QTabWidget,
@@ -22,10 +24,13 @@ from PyQt6.QtWidgets import (
     QLabel,
     QComboBox,
     QMessageBox,
+    QWidget,
+    QVBoxLayout,
 )
 
 # Qt6 moved QAction out of QtWidgets into QtGui.
 from PyQt6.QtGui import QAction
+from PyQt6.QtCore import QTimer
 
 from loguru import logger
 
@@ -41,6 +46,7 @@ from PycroFlow.gui.tabs.monet_tab import MonetTab
 from PycroFlow.gui.tabs.webcams_tab import WebcamsTab
 from PycroFlow.gui.tabs.live_tab import LiveTabHost
 from PycroFlow.gui.tabs.doctor_tab import DoctorTab
+from PycroFlow.gui.widgets.replay_bar import ReplayBar
 from PycroFlow.services.live_preview import LivePreviewSession
 
 # Experiment states during which hardware must not be touched manually (the
@@ -75,6 +81,28 @@ class PycroFlowMainWindow(QMainWindow):
         self._build_tabs()
         self._build_statusbar()
         self._init_setup()
+
+        # --- post-run replay recording (feature: scrub a finished run).
+        # A recorder taps the live stream + polls progress/fluid state while a
+        # run is active; on finish, a controller built from the timeline is
+        # handed to the global ReplayBar above the tabs (so a run can be
+        # scrubbed from any tab). See replay_recorder / replay_player.
+        self._replay_recorder = None
+        self._replay_hub_client = None
+        self._webcam_replay = None
+        self._replay_poll_timer = QTimer(self)
+        self._replay_poll_timer.setInterval(500)
+        self._replay_poll_timer.timeout.connect(self._replay_poll)
+        self.replay_bar.on_mode = self._on_replay_mode
+        self.replay_bar.on_open_past_run = self.open_past_run
+        # Clicking a step / picking a round in the Run Sequence tab jumps the
+        # global scrubber; a structural edit drops the now-stale replay.
+        self.run_sequence_tab.on_replay_seek_step = (
+            self.replay_bar.seek_to_step
+        )
+        self.run_sequence_tab.on_sequence_edited = lambda: (
+            self.replay_bar.set_controller(None, 0)
+        )
 
     # --- toolbar ------------------------------------------------------
 
@@ -152,7 +180,18 @@ class PycroFlowMainWindow(QMainWindow):
         self.tabs.addTab(self.live_tab, "Live")
         self.tabs.addTab(self.monet_tab, "Monet")
         self.tabs.addTab(self.doctor_tab, "Doctor")
-        self.setCentralWidget(self.tabs)
+
+        # The replay scrubber lives ABOVE the tabs so a finished/opened run can
+        # be scrubbed while viewing ANY tab's data (the controller's sinks drive
+        # the live view / webcam / fluid schematic / step-highlight regardless
+        # of which tab is in front).
+        self.replay_bar = ReplayBar()
+        central = QWidget()
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.addWidget(self.replay_bar)
+        central_layout.addWidget(self.tabs, 1)
+        self.setCentralWidget(central)
 
         # Lock manual hardware access (setup/connect, fluid manual controls,
         # the embedded monet GUI) while the orchestrator owns the instruments.
@@ -210,6 +249,220 @@ class PycroFlowMainWindow(QMainWindow):
         """Lock/unlock manual hardware access on experiment state changes."""
         self._lock_hardware(new in _RUN_LOCK_STATES)
         self._sync_live_tab(new)
+        self._handle_replay_recording(old, new)
+
+    # --- post-run replay recording ------------------------------------
+
+    def _handle_replay_recording(self, old, new):
+        """Start recording on run start; finalize + offer replay on run end."""
+        started = new in _RUN_LOCK_STATES and old not in _RUN_LOCK_STATES
+        ended = old in _RUN_LOCK_STATES and new not in _RUN_LOCK_STATES
+        if started:
+            self._start_replay_recording()
+        elif ended:
+            self._stop_replay_recording()
+
+    def _replay_path(self):
+        design = self._experiment_service.experiment_design or {}
+        save_dir = design.get("save_dir") or "."
+        base = design.get("base_name") or "run"
+        rid = self._experiment_service.live_run_id or "last"
+        return os.path.join(save_dir, "{}_{}_replay.jsonl".format(base, rid))
+
+    def _start_replay_recording(self):
+        from PycroFlow.live_analysis.replay_recorder import ReplayRecorder
+        from PycroFlow.live_analysis.client_seam import CallbackClient
+
+        # A fresh run supersedes any previous run's replay.
+        self.replay_bar.set_controller(None, 0)
+        # Defensively finalize any still-open recording so a prior run (or a
+        # failed start) can never leak a hub client or a stale recorder.
+        self._replay_poll_timer.stop()
+        if self._replay_hub_client is not None:
+            hub, client = self._replay_hub_client
+            hub.remove(client)
+            self._replay_hub_client = None
+        if self._replay_recorder is not None:
+            self._replay_recorder.stop()
+            self._replay_recorder = None
+        if self._webcam_replay is not None:
+            self._webcam_replay.close()
+            self._webcam_replay = None
+        try:
+            rec = ReplayRecorder(self._replay_path())
+            rec.start(
+                self._experiment_service.live_run_id,
+                protocol=self._experiment_service.protocol,
+            )
+        except Exception as exc:  # noqa: BLE001 - recording never stops a run
+            logger.warning("replay recorder could not start: {!r}".format(exc))
+            return
+        # Tap the live stream (thumbnails/metrics/state) when present.
+        service = self._experiment_service.live_service
+        hub = getattr(service, "hub", None)
+        if hub is not None:
+            client = CallbackClient(rec.on_update)
+            hub.add(client)
+            self._replay_hub_client = (hub, client)
+        self._replay_recorder = rec
+        self._replay_poll_timer.start()
+
+    def _replay_poll(self):
+        rec = self._replay_recorder
+        if rec is None:
+            return
+        try:
+            rec.record_progress(self._experiment_service.progress())
+        except Exception:  # noqa: BLE001 - best-effort snapshot
+            pass
+        try:
+            rec.record_fluid_state(self._system_service.fluid_state())
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _stop_replay_recording(self):
+        self._replay_poll_timer.stop()
+        rec, self._replay_recorder = self._replay_recorder, None
+        if self._replay_hub_client is not None:
+            hub, client = self._replay_hub_client
+            hub.remove(client)
+            self._replay_hub_client = None
+        if rec is None:
+            return
+        # A final snapshot so the timeline ends on the run's terminal state.
+        rec.record_progress(self._safe_progress())
+        try:
+            rec.record_fluid_state(self._system_service.fluid_state())
+        except Exception:  # noqa: BLE001
+            pass
+        rec.stop()
+        self._build_replay_controller(rec.path)
+
+    def _safe_progress(self):
+        try:
+            return self._experiment_service.progress()
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def _load_controller(self, path):
+        """Load a replay timeline file into a controller wired to the live
+        view / step-highlight / fluid-schematic sinks (or None on failure)."""
+        from PycroFlow.live_analysis.replay_player import ReplayController
+
+        try:
+            return ReplayController.from_file(
+                path,
+                emit_update=self.live_tab.replay_emit,
+                set_progress=self.run_sequence_tab.replay_set_progress,
+                set_fluid_state=self.fluid_tab.set_schematic_state,
+            )
+        except Exception as exc:  # noqa: BLE001 - replay is best-effort
+            logger.warning("could not load replay timeline: {!r}".format(exc))
+            return None
+
+    def _wire_replay(self, ctrl, webcam_src, enter=False):
+        """Attach the webcam sink + hand the controller to the scrubber.
+
+        ``enter`` auto-opens replay mode (used when opening a past run, where
+        the user explicitly asked to review it)."""
+        self._webcam_replay = None
+        if webcam_src is not None and webcam_src.clip_count > 0:
+            self._webcam_replay = webcam_src
+            ctrl.set_webcam_sink(
+                lambda t: self.webcams_tab.show_replay_frame(
+                    webcam_src.frame_at(t)
+                )
+            )
+        if ctrl.duration_ms > 0:
+            self.replay_bar.set_controller(ctrl, ctrl.duration_ms)
+            if enter:
+                self.replay_bar.enter_replay()
+
+    def _build_replay_controller(self, path):
+        """Just-finished run: build the controller + this run's webcam source
+        (from the monitoring controller's output dir)."""
+        ctrl = self._load_controller(path)
+        if ctrl is None:
+            return
+        self._wire_replay(ctrl, self._webcam_source_from_monitoring(ctrl))
+
+    def _webcam_source_from_monitoring(self, ctrl):
+        mon = self._monitoring
+        clip_dir = (
+            getattr(mon, "output_dir", None) if mon is not None else None
+        )
+        if not clip_dir or not ctrl.t0_utc:
+            return None
+        try:
+            from PycroFlow.monitoring.webcam_replay import WebcamReplaySource
+
+            return WebcamReplaySource.from_dir(
+                clip_dir, ctrl.t0_utc, fps=getattr(mon, "fps", 5)
+            )
+        except Exception as exc:  # noqa: BLE001 - webcam replay is best-effort
+            logger.warning("could not index webcam clips: {!r}".format(exc))
+            return None
+
+    def open_past_run(self, path):
+        """Open a saved ``*_replay.jsonl`` and replay that run from disk.
+
+        Loads the embedded protocol into the view (so the step lists match),
+        finds the run's webcam clips under the file's folder by run id, wires
+        everything up and enters replay mode. Refused while a run is active.
+        """
+        if self._experiment_service.state in _RUN_LOCK_STATES:
+            QMessageBox.warning(
+                self,
+                "Run in progress",
+                "Finish or abort the current run before opening a past run.",
+            )
+            return
+        ctrl = self._load_controller(path)
+        if ctrl is None or ctrl.duration_ms <= 0:
+            QMessageBox.warning(
+                self,
+                "Could not open run",
+                "No replay timeline was found in that file.",
+            )
+            return
+        # Repopulate the step lists from the embedded protocol so the
+        # step-highlight is meaningful (best-effort; replay still shows the
+        # live view / webcam / fluid without it).
+        if ctrl.protocol:
+            try:
+                self._experiment_service.load_protocol(ctrl.protocol)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "could not load the past run's protocol: {!r}".format(exc)
+                )
+        webcam_src = None
+        if ctrl.t0_utc:
+            try:
+                from PycroFlow.monitoring.webcam_replay import (
+                    WebcamReplaySource,
+                )
+
+                webcam_src = WebcamReplaySource.from_run(
+                    os.path.dirname(os.path.abspath(path)),
+                    ctrl.run_id,
+                    ctrl.t0_utc,
+                )
+            except Exception as exc:  # noqa: BLE001 - webcam is best-effort
+                logger.warning(
+                    "could not index past-run webcam clips: {!r}".format(exc)
+                )
+        self._wire_replay(ctrl, webcam_src, enter=True)
+
+    def _on_replay_mode(self, on):
+        """Coordinate the tabs when replay is toggled in the global ReplayBar."""
+        # Freeze the schematic's live poll so replayed snapshots are not
+        # overwritten by the (idle) current hardware state.
+        self.fluid_tab.set_replay_mode(on)
+        # Stop the webcam live preview so replayed clip frames own the pane.
+        self.webcams_tab.set_replay_mode(on)
+        # Let the Run Sequence tab route step/round clicks as timeline jumps.
+        self.run_sequence_tab.set_replay_active(on)
+        self.live_tab.set_run_status("replaying run" if on else "")
 
     def _sync_live_tab(self, state):
         """Attach the Live tab to the run's live-analysis stream (and detach

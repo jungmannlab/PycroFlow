@@ -131,6 +131,55 @@ class TestExperimentDesignSchema(unittest.TestCase):
         model = validate_experiment_design(design)
         self.assertEqual(model.fluid.settings.experiment.type, "Exchange")
 
+    @staticmethod
+    def _exchange_design(imagers, initial_imager=None):
+        experiment = {
+            "type": "Exchange",
+            "wash_buffer": "B",
+            "imagers": list(imagers),
+        }
+        if initial_imager is not None:
+            experiment["initial_imager"] = initial_imager
+        return {
+            "base_name": "x",
+            "fluid": {
+                "settings": {
+                    "vol_wash": 10,
+                    "vol_reagent": 5,
+                    "reservoir_names": {1: "R1", 2: "R2"},
+                    "experiment": experiment,
+                }
+            },
+            "img": {"settings": {"t_exp": 100, "frames": 100}},
+        }
+
+    def test_initial_imager_reuse_no_longer_raises(self):
+        # Reusing the initial imager in the rounds is a redundant imaging round,
+        # which is allowed (e.g. for testing) — it must validate, not raise.
+        from PycroFlow.schemas import design_warnings
+
+        design = self._exchange_design(["R1"], initial_imager="R1")
+        model = validate_experiment_design(design)  # no raise
+        warnings = design_warnings(model)
+        self.assertTrue(any("R1" in w for w in warnings))
+        # design_warnings accepts the raw dict too.
+        self.assertTrue(design_warnings(design))
+
+    def test_duplicate_imagers_not_flagged(self):
+        # Repeating imagers across rounds is ordinary Exchange-PAINT — it must
+        # NOT produce warnings (the operator explicitly wants redundant rounds).
+        from PycroFlow.schemas import design_warnings
+
+        design = self._exchange_design(["R1", "R2", "R1", "R2"])
+        self.assertEqual(design_warnings(design), [])
+
+    def test_clean_design_has_no_warnings(self):
+        from PycroFlow.schemas import design_warnings
+
+        design = self._exchange_design(["R1"], initial_imager="R2")
+        # R2 is initial and NOT in the rounds list -> no warning.
+        self.assertEqual(design_warnings(design), [])
+
     def test_rejects_bad_experiment_type(self):
         design = _example_design()
         design["fluid"]["settings"]["experiment"]["type"] = "NOPE"
@@ -678,10 +727,16 @@ class TestInitialImagerValidation(unittest.TestCase):
             "img": {"settings": {"t_exp": 100, "frames": 100}},
         }
 
-    def test_overlap_rejected(self):
-        with self.assertRaises(Exception) as ctx:
-            validate_experiment_design(self._design("R1", ["R1", "R2"]))
-        self.assertIn("twice", str(ctx.exception).lower())
+    def test_overlap_allowed_but_warned(self):
+        # Redundant imaging rounds are allowed (e.g. for testing): reusing the
+        # initial imager in the rounds validates, but surfaces a soft warning
+        # rather than a hard error.
+        from PycroFlow.schemas import design_warnings
+
+        model = validate_experiment_design(self._design("R1", ["R1", "R2"]))
+        self.assertEqual(model.fluid.settings.experiment.initial_imager, "R1")
+        warnings = design_warnings(model)
+        self.assertTrue(any("R1" in w for w in warnings))
 
     def test_separate_initial_and_imagers_ok(self):
         model = validate_experiment_design(self._design("R1", ["R2"]))

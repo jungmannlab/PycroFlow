@@ -223,6 +223,71 @@ class TestExperimentService(unittest.TestCase):
         self.assertIs(svc.orchestrator.fluid_system, fluid)
         self.assertEqual(svc.state, ExperimentState.RUNNING)
 
+    def test_modified_flag_set_and_reset(self):
+        proto = {
+            "fluid": {
+                "protocol_entries": [
+                    {"$type": "inject", "reservoir_id": 1, "volume": 10}
+                ]
+            }
+        }
+        svc = ExperimentService()
+        svc.load_protocol(proto)
+        self.assertFalse(svc.protocol_modified)
+        svc.mark_protocol_modified()
+        self.assertTrue(svc.protocol_modified)
+        # Reloading a protocol resets the flag (pristine again).
+        svc.load_protocol(proto)
+        self.assertFalse(svc.protocol_modified)
+
+    def test_start_blocks_modified_hanging_sequence(self):
+        proto = {
+            "img": {
+                "protocol_entries": [
+                    {
+                        "$type": "wait for signal",
+                        "target": "fluid",
+                        "value": "nobody-emits-this",
+                    }
+                ]
+            }
+        }
+        svc = ExperimentService()
+        svc.load_protocol(proto)
+        svc.mark_protocol_modified()
+        with self.assertRaises(RuntimeError) as ctx:
+            svc.start()
+        self.assertIn("hang", str(ctx.exception).lower())
+
+    def test_start_gate_skips_unmodified_sequence(self):
+        # The same hanging protocol, NOT hand-edited, is not blocked by the
+        # gate (un-edited runs keep their existing behavior).
+        proto = {
+            "img": {
+                "protocol_entries": [
+                    {
+                        "$type": "wait for signal",
+                        "target": "fluid",
+                        "value": "nobody-emits-this",
+                    }
+                ]
+            }
+        }
+        svc = ExperimentService()
+        svc.load_protocol(proto)
+        with (
+            patch(
+                "PycroFlow.orchestration.core.ProtocolOrchestrator."
+                "start_orchestration"
+            ),
+            patch(
+                "PycroFlow.orchestration.core.ProtocolOrchestrator."
+                "start_protocol"
+            ),
+        ):
+            svc.start()  # must not raise over the (skipped) runnable gate
+        self.assertEqual(svc.state, ExperimentState.RUNNING)
+
 
 class TestSystemService(unittest.TestCase):
 

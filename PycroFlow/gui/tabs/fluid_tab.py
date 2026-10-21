@@ -342,6 +342,26 @@ class FluidTab(QWidget):
         except Exception:  # pragma: no cover - never let the timer die
             self.schematic.set_state(None)
 
+    def set_replay_mode(self, on):
+        """Suspend the live state poll so replayed snapshots are not overwritten.
+
+        During post-run replay the schematic is driven by recorded fluid-state
+        snapshots (:meth:`set_schematic_state`); the 300 ms live poll would
+        otherwise clobber them with the (idle) current hardware state.
+        """
+        if on:
+            self._poll_timer.stop()
+        elif not self._poll_timer.isActive():
+            self._poll_timer.start()
+            self._refresh_schematic_state()
+
+    def set_schematic_state(self, state):
+        """Push a recorded valve/syringe snapshot to the schematic (replay)."""
+        try:
+            self.schematic.set_state(state)
+        except Exception:  # pragma: no cover - schematic is best-effort
+            pass
+
     def _on_channel_clicked(self, channel):
         """Toggle one ibidi channel open/closed from a port click."""
         if self._run_locked or self._svc.fluid_system is None:

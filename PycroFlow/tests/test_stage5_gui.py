@@ -326,6 +326,278 @@ class TestMainWindow(unittest.TestCase):
         # The parameter box labels which list the step came from.
         self.assertIn("Fluid", tab.step_param_label.text())
 
+    def test_sequence_edit_add_delete_move_and_modified_flag(self):
+        import copy
+        from PycroFlow.examples.demo_protocols import protocol
+
+        w = self._build()
+        tab = w.run_sequence_tab
+        # Deep-copy: editing mutates the loaded protocol, and the demo object
+        # is shared across tests.
+        tab._service.load_protocol(copy.deepcopy(protocol))
+        entries = tab._service.protocol["fluid"]["protocol_entries"]
+        n0 = len(entries)
+        self.assertFalse(tab._service.protocol_modified)
+
+        # Add an incubate step after fluid row 0.
+        tab.step_lists["fluid"].setCurrentRow(0)
+        tab.add_type_combo.setCurrentText("incubate")
+        tab._on_add_step()
+        self.assertEqual(len(entries), n0 + 1)
+        self.assertEqual(entries[1]["$type"], "incubate")
+        self.assertTrue(tab._service.protocol_modified)
+        # isVisible() is False without a shown window; isHidden() reflects the
+        # setVisible intent headlessly.
+        self.assertFalse(tab.modified_label.isHidden())
+
+        # Duplicate the current row, then delete it back.
+        tab._on_duplicate_step()
+        self.assertEqual(len(entries), n0 + 2)
+        tab._on_delete_step()
+        self.assertEqual(len(entries), n0 + 1)
+
+        # Move a step down then up — order changes but length holds.
+        tab.step_lists["fluid"].setCurrentRow(0)
+        first_type = entries[0]["$type"]
+        tab._on_move_step(1)
+        self.assertEqual(entries[1]["$type"], first_type)
+        self.assertEqual(len(entries), n0 + 1)
+
+    def test_edit_into_deadlock_is_caught_inline(self):
+        import copy
+        from PycroFlow.examples.demo_protocols import protocol
+
+        w = self._build()
+        tab = w.run_sequence_tab
+        tab._service.load_protocol(copy.deepcopy(protocol))
+        # Add an img wait for a signal nobody emits -> inline check flags it.
+        tab.step_lists["img"].setCurrentRow(0)
+        tab.add_type_combo.setCurrentText("wait for signal")
+        tab._on_add_step()
+        # The freshly added wait defaults to value 'custom signal' (unemitted).
+        self.assertIn("⚠", tab.consistency_label.text())
+
+    def test_monitoring_acquires_excluded_from_round_count(self):
+        import PycroFlow.protocols as pprot
+        from PycroFlow.schemas import validate_experiment_design
+
+        design = {
+            "base_name": "x",
+            "fluid": {
+                "parameters": {"max_velocity": 200.0},
+                "settings": {
+                    "vol_wash": 200.0,
+                    "vol_reagent": 100.0,
+                    "reservoir_names": {2: "Buffer", 3: "I1", 4: "I2"},
+                    "experiment": {
+                        "type": "Exchange",
+                        "wash_buffer": "Buffer",
+                        "imagers": ["I1", "I2"],
+                        "monitor_fluid": True,
+                    },
+                },
+            },
+            "img": {"settings": {"t_exp": 100.0, "frames": 10}},
+            "illu": {"settings": {"laser": 560, "power_acq": 35.0}},
+        }
+        design = validate_experiment_design(design).model_dump(by_alias=True)
+        proto = pprot.ProtocolBuilder().build_protocol(design)
+
+        w = self._build()
+        tab = w.run_sequence_tab
+        tab._service.load_protocol(proto)
+        # Two imagers -> two scientific rounds, despite the 3 monitor movies.
+        self.assertEqual(len(tab._round_names), 2)
+        # Go-to combo: "Start of run" + one per round.
+        self.assertEqual(tab.goto_combo.count(), 3)
+        # Sanity: the protocol really contains monitoring acquires.
+        monitors = [
+            e for e in proto["img"]["protocol_entries"] if e.get("monitoring")
+        ]
+        self.assertEqual(len(monitors), 3)
+
+    def test_replay_scrubber_drives_step_highlight(self):
+        from PycroFlow.live_analysis.replay_player import ReplayController
+        from PycroFlow.gui.tabs.experiment_tab import (
+            _ACTIVE_COLOR,
+            _FINISHED_COLOR,
+        )
+        from PycroFlow.examples.demo_protocols import protocol
+        import copy
+
+        w = self._build()
+        tab = w.run_sequence_tab
+        bar = w.replay_bar  # the scrubber lives above the tabs now
+        tab._service.load_protocol(copy.deepcopy(protocol))
+
+        # Replay button is disabled until a controller is attached.
+        self.assertFalse(bar.replay_btn.isEnabled())
+
+        emitted = []
+        events = [
+            {
+                "t_ms": 0,
+                "kind": "state",
+                "payload": {"state": "experiment_started"},
+            },
+            {
+                "t_ms": 1000,
+                "kind": "progress",
+                "payload": {"fluid": [2, 6], "img": [0, 2], "illu": [0, 3]},
+            },
+        ]
+        ctrl = ReplayController(
+            events,
+            emit_update=emitted.append,
+            set_progress=tab.replay_set_progress,
+            set_fluid_state=lambda s: None,
+        )
+        bar.set_controller(ctrl, ctrl.duration_ms)
+        self.assertTrue(bar.replay_btn.isEnabled())
+
+        # Entering replay reveals the scrubber; seeking highlights the step
+        # the fluid subsystem was on at that time (index 2 -> active).
+        bar.replay_btn.setChecked(True)
+        self.assertFalse(bar.slider.isHidden())
+        bar.slider.setValue(1000)
+        fluid_list = tab.step_lists["fluid"]
+        self.assertEqual(
+            fluid_list.item(2).background().color().name(),
+            _ACTIVE_COLOR.name(),
+        )
+        self.assertEqual(
+            fluid_list.item(0).background().color().name(),
+            _FINISHED_COLOR.name(),
+        )
+        # The replay also drives the acquisition progress bars: done 2+0+0=2
+        # of total 6+2+3=11 -> ~18%.
+        self.assertEqual(tab.overall_count.text(), "2/11")
+        self.assertEqual(tab.overall_bar.value(), int(100 * 2 / 11))
+        # The live-view 'state' update was re-emitted for the panels.
+        self.assertTrue(any(u.kind == "state" for u in emitted))
+
+        # Leaving replay hides the scrubber again.
+        bar.replay_btn.setChecked(False)
+        self.assertTrue(bar.slider.isHidden())
+
+        # A structural edit desyncs the lists from the recording, so the stale
+        # replay is dropped (button disabled, replay mode exited).
+        bar.set_controller(ctrl, ctrl.duration_ms)
+        bar.replay_btn.setChecked(True)
+        tab.step_lists["fluid"].setCurrentRow(0)
+        tab.add_type_combo.setCurrentText("incubate")
+        tab._on_add_step()
+        self.assertFalse(bar.replay_btn.isEnabled())
+        self.assertFalse(bar.replay_btn.isChecked())
+        self.assertTrue(bar.slider.isHidden())
+
+    def test_replay_click_step_jumps_timeline(self):
+        from PycroFlow.live_analysis.replay_player import ReplayController
+        from PycroFlow.examples.demo_protocols import protocol
+        import copy
+
+        w = self._build()
+        tab = w.run_sequence_tab
+        bar = w.replay_bar
+        tab._service.load_protocol(copy.deepcopy(protocol))
+        events = [
+            {
+                "t_ms": 1000,
+                "kind": "progress",
+                "payload": {"fluid": [1, 6], "img": [0, 2], "illu": [0, 3]},
+            },
+            {
+                "t_ms": 3000,
+                "kind": "progress",
+                "payload": {"fluid": [4, 6], "img": [1, 2], "illu": [1, 3]},
+            },
+        ]
+        ctrl = ReplayController(events, set_progress=tab.replay_set_progress)
+        bar.set_controller(ctrl, ctrl.duration_ms)
+        bar.replay_btn.setChecked(True)
+
+        # Clicking fluid step 4 (in the tab) jumps the global timeline to when
+        # fluid reached it.
+        tab.step_lists["fluid"].setCurrentRow(4)
+        self.assertEqual(bar.slider.value(), 3000)
+        # Clicking an earlier step jumps back.
+        tab.step_lists["fluid"].setCurrentRow(1)
+        self.assertEqual(bar.slider.value(), 1000)
+
+    def test_open_past_run_from_disk(self):
+        import os
+        import json
+        import tempfile
+        import datetime as dt
+        import numpy as np
+        from PycroFlow.monitoring.avi import RawAviWriter
+
+        folder = tempfile.mkdtemp()
+        t0 = dt.datetime(2026, 1, 1, 0, 0, 0, tzinfo=dt.timezone.utc)
+        jsonl = os.path.join(folder, "base_RUNID_replay.jsonl")
+        proto = {
+            "fluid": {
+                "protocol_entries": [
+                    {"$type": "inject", "reservoir_id": 1, "volume": 10},
+                    {"$type": "incubate", "duration": 5},
+                ]
+            },
+            "img": {
+                "protocol_entries": [
+                    {"$type": "acquire", "frames": 5, "t_exp": 100}
+                ]
+            },
+        }
+        with open(jsonl, "w") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "t_ms": 0,
+                        "kind": "meta",
+                        "payload": {
+                            "t0_utc": t0.timestamp(),
+                            "run_id": "RUNID",
+                            "protocol": proto,
+                        },
+                    }
+                )
+                + "\n"
+            )
+            f.write(
+                json.dumps(
+                    {
+                        "t_ms": 1000,
+                        "kind": "progress",
+                        "payload": {"fluid": [1, 2], "img": [0, 1]},
+                    }
+                )
+                + "\n"
+            )
+        cam = os.path.join(folder, "fluidics_cam")
+        os.makedirs(cam)
+        clip = os.path.join(
+            cam, "run_RUNID_round000_fluid-step0_20260101T000000Z.avi"
+        )
+        with RawAviWriter(clip, width=4, height=4, fps=5) as cw:
+            for v in (7, 8, 9):
+                cw.write(np.full((4, 4, 3), v, dtype=np.uint8))
+
+        w = self._build()
+        w.open_past_run(jsonl)
+        tab = w.run_sequence_tab
+        bar = w.replay_bar
+        # The embedded protocol repopulated the step lists.
+        self.assertEqual(tab.step_lists["fluid"].count(), 2)
+        # Replay is wired, enabled and auto-entered (in the global bar).
+        self.assertTrue(bar.replay_btn.isEnabled())
+        self.assertTrue(bar.active)
+        self.assertTrue(tab._replay_active)
+        # The run's webcam clip was found by run id (under fluidics_cam/).
+        self.assertEqual(w._webcam_replay.clip_count, 1)
+        # Scrubbing shows a webcam frame.
+        bar.slider.setValue(1000)
+        self.assertFalse(w.webcams_tab.preview_label.pixmap().isNull())
+
     def test_close_event_is_safe(self):
         from PyQt6.QtGui import QCloseEvent
 
@@ -1584,7 +1856,15 @@ class TestSchemaForm(unittest.TestCase):
         from PycroFlow.schemas.experiment_design import ExchangeExperiment
 
         fields = [f for f in ExchangeExperiment.model_fields if f != "type"]
-        self.assertEqual(fields, ["wash_buffer", "initial_imager", "imagers"])
+        # The core fields keep their order (initial_imager before the rounds);
+        # the optional wash-monitoring fields follow.
+        self.assertEqual(
+            fields[:3], ["wash_buffer", "initial_imager", "imagers"]
+        )
+        self.assertEqual(
+            fields[3:],
+            ["monitor_fluid", "monitor_t_exp", "monitor_margin_s"],
+        )
 
     def test_exchange_imager_rows_update_live_on_reservoir_edit(self):
         from PycroFlow.gui.widgets.schema_form import SchemaForm
@@ -2525,6 +2805,21 @@ class TestWebcamsTab(unittest.TestCase):
             self._changed += 1
 
         return WebcamsTab(svc, on_config_changed=on_changed), svc
+
+    def test_replay_frame_display_and_mode(self):
+        import numpy as np
+
+        tab, _ = self._tab()
+        # Entering replay mode stops any preview and labels the pane.
+        tab.set_replay_mode(True)
+        # Pushing a recorded composite frame renders without error and sets a
+        # pixmap on the preview label.
+        frame = np.full((8, 8, 3), 128, dtype=np.uint8)
+        tab.show_replay_frame(frame)
+        self.assertFalse(tab.preview_label.pixmap().isNull())
+        # A missing frame is a no-op (holds the last shown frame).
+        tab.show_replay_frame(None)
+        self.assertFalse(tab.preview_label.pixmap().isNull())
 
     def test_rows_apply_and_empty_setup(self):
         tab, svc = self._tab()
