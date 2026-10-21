@@ -63,6 +63,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Design tab on Save/Translate; ordinary repeats within the imagers list are not
   flagged at all.
 
+- **ibidi multiplexer serial port is now released deterministically on
+  shutdown.** After a PycroFlow restart the ibidi MultiFlOW could not be
+  reconnected without physically replugging the USB/power cables. The port was
+  only ever closed via garbage-collection-dependent `__del__` hooks: the GUI's
+  `SystemService.close()` never disconnected the fluid system, and even
+  `disconnect_fluid()` closed only the Hamilton bus (`ha.disconnect()`), not
+  the ibidi's separate serial link. Abruptly dropping a live USB-CDC handle
+  (potentially mid-command) can leave the actuator's firmware wedged until a
+  physical replug.
+  - `SystemService.close()` now calls `disconnect_fluid()`, and
+    `disconnect_fluid()` now calls `LegacyArchitecture.close()` **before**
+    tearing down the Hamilton bus and dropping the reference.
+  - New `LegacyArchitecture.close()` — a deterministic, idempotent counterpart
+    to `__del__` that stops the spill sensor and closes the multiplexer. Each
+    step is best-effort so a spill-sensor failure can't strand the ibidi port.
+  - `IbidiMultiplexer.close()` now **clears (discards) the serial buffers**
+    under the port lock before closing, so no stale bytes carry into the next
+    session. Output is discarded, not drained — closing never blocks on a
+    `flush()` that a wedged device would hang forever.
+  - `IbidiMultiplexer` opens the port with `exclusive=True` (POSIX lock; a
+    no-op on Windows, where COM ports are already exclusive) so a stale handle
+    fails the next open loudly instead of two handles silently sharing the line.
+  - Hermetic tests: graceful flush-before-close + idempotency, port release via
+    `LegacyArchitecture.close()`, and `SystemService.close()` disconnecting the
+    fluid architecture.
+  - *Note:* if reconnecting turns out to also require a **power** cycle (not just
+    a USB replug), the device firmware is wedging rather than the OS holding the
+    port — a follow-up to leave the device in a known-idle state (and possibly
+    issue a reset command) on close would then be warranted.
 - **Webcams tab exposes the capture knobs.** Each camera row now has optional
   **`exp` / `auto-exp` / `fourcc`** fields (blank = leave to the driver), so
   exposure can be tuned against the live preview and saved to the setup from the

@@ -191,9 +191,17 @@ class IbidiMultiplexer(_ValveABC):
 
         Shared by :meth:`connect` and :meth:`_reopen` so there is a single
         place that constructs the :class:`~serial.Serial` handle.
+
+        ``exclusive=True`` asks the OS for an exclusive lock on the port
+        (POSIX ``TIOCEXCL``; Windows COM ports are exclusive already, so it is
+        a no-op there). A stale handle then fails the next open *loudly*
+        instead of two handles silently sharing the line.
         """
         self._serial = Serial(
-            self._port, baudrate=self._baud, timeout=self._timeout
+            self._port,
+            baudrate=self._baud,
+            timeout=self._timeout,
+            exclusive=True,
         )
 
     @staticmethod
@@ -204,14 +212,31 @@ class IbidiMultiplexer(_ValveABC):
         return port
 
     def close(self):
-        """Close the serial connection. Safe to call repeatedly."""
-        if self._serial is not None:
-            try:
-                if getattr(self._serial, "is_open", True):
-                    self._serial.close()
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("ibidi close failed: {!r}".format(exc))
-            self._serial = None
+        """Close the serial connection. Safe to call repeatedly.
+
+        Clears the serial buffers before dropping the handle so no stale
+        bytes — a half-read reply, an aborted write — carry into the next
+        session. Pending output is *discarded* (``reset_output_buffer``), not
+        drained: on a teardown we must never block waiting for a possibly
+        unresponsive device to accept bytes, and a wedged ``flush`` would hang
+        the whole shutdown. Takes ``self._lock`` so it can't swap the handle
+        out from under an in-flight :meth:`_command` on another thread.
+        """
+        with self._lock:
+            if self._serial is not None:
+                try:
+                    if getattr(self._serial, "is_open", True):
+                        for name in (
+                            "reset_input_buffer",
+                            "reset_output_buffer",
+                        ):
+                            fn = getattr(self._serial, name, None)
+                            if callable(fn):
+                                fn()
+                        self._serial.close()
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning("ibidi close failed: {!r}".format(exc))
+                self._serial = None
 
     def __del__(self):  # pragma: no cover - GC timing dependent
         self.close()

@@ -304,6 +304,17 @@ class TestSystemService(unittest.TestCase):
         svc.close()  # nothing to close
         svc.close()  # still nothing — must not raise
 
+    def test_close_disconnects_fluid_architecture(self):
+        # close() must release the fluid architecture (which owns the ibidi
+        # multiplexer's serial port), not just imaging — otherwise the port is
+        # closed only at GC time and can stay held across a PycroFlow restart.
+        fluid = MagicMock()
+        svc = SystemService(fluid_system=fluid)
+        with patch("PycroFlow.hamilton_architecture.disconnect"):
+            svc.close()
+        fluid.close.assert_called_once()
+        self.assertIsNone(svc.fluid_system)
+
     def test_manual_pump_delegates(self):
         fluid = MagicMock()
         fluid.pump_a = MagicMock()

@@ -386,6 +386,20 @@ class SystemService:
         """Release the fluid (Hamilton serial) connection. No-op if absent."""
         if self.fluid_system is None:
             return
+        # Release resources the architecture owns directly (ibidi multiplexer
+        # serial port, spill sensor) before tearing down the Hamilton bus and
+        # dropping the reference. ``ha.disconnect()`` only closes the Hamilton
+        # bus; the ibidi port is a separate serial link and would otherwise be
+        # closed only at GC time — which on a PycroFlow restart can leave it
+        # held, needing a physical USB/power replug to reconnect.
+        close = getattr(self.fluid_system, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception as exc:
+                logger.warning(
+                    "fluid architecture close failed: {!r}".format(exc)
+                )
         try:
             import PycroFlow.hamilton_architecture as ha
 
@@ -1116,6 +1130,7 @@ class SystemService:
     def close(self) -> None:
         """Release everything releasable. Idempotent."""
         self.stop_all_moves()
+        self.disconnect_fluid()
         self.close_imaging()
 
     # --- Internals -----------------------------------------------------
