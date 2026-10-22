@@ -26,6 +26,11 @@ from PycroFlow.live_analysis.frame_source import (
     position_from_name,
 )
 from PycroFlow.live_analysis.metrics import RunningMetrics
+from PycroFlow.live_analysis.qc_gate import (
+    QcThresholds,
+    evaluate_qc,
+    qc_gate_mark_ready,
+)
 from PycroFlow.live_analysis.run_id import new_run_id
 
 __all__ = [
@@ -39,4 +44,7 @@ __all__ = [
     "position_from_name",
     "RunningMetrics",
     "new_run_id",
+    "QcThresholds",
+    "evaluate_qc",
+    "qc_gate_mark_ready",
 ]
