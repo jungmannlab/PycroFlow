@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **WP-9 hand-off QC gate (Phase B).** A rule-based, deterministic QC gate
+  (`live_analysis/qc_gate.py`) marks a QC-passed dataset **ready** for cluster
+  hand-off. `evaluate_qc(metrics, QcThresholds)` is a pure evaluator scoring a
+  `RunningMetrics` snapshot against **configurable thresholds** (carried on
+  `FovConfig.qc_thresholds`, not hard-coded): `min_n_locs` (default 1),
+  `max_nena_nm` (default off), `min_spots_per_frame` (default off) — a `None`
+  threshold disables its rule. It returns a structured verdict
+  (`{passed, reasons, metrics}`). In `LiveAnalysisService.run_fov`, after the
+  per-FOV `acquisition_run` record is posted (satisfying `mark_ready`'s FK), the
+  gate evaluates the final metrics and, **iff they pass** (and coverage is
+  complete), calls `registry.mark_ready(acquisition_run_id=...)` so the Phase-C
+  cluster worker can `claim` the dataset; a fail records the reasons and does
+  **not** ready it. The verdict rides on `FovResult.qc` and the `qc` seam
+  channel. Best-effort / non-blocking throughout: registry unset is a no-op (the
+  run is byte-identical to today), and a registry outage / duplicate-ready (409)
+  / any client error is swallowed and logged — the gate NEVER blocks or breaks
+  acquisition.
 - **Post-run replay (master scrubber).** A run's live streams are recorded to a
   `*_replay.jsonl` timeline (`live_analysis/replay_recorder.py`): the seam's
   thumbnail/metrics/state/log updates (thumbnails already carry image bytes +
