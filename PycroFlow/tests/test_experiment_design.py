@@ -509,6 +509,26 @@ class TestEmulatedFluidOps(unittest.TestCase):
         svc = self._connected()
         svc.fill_tubings()  # over the fake serial; must not raise
 
+    def test_fill_expels_flushbuffer_through_output_needle(self):
+        # Regression (same class as the cleaning fix): on a flush-valve-less
+        # setup the final flushbuffer expel in fill_tubings must push out the
+        # sample needle. It must never ask _set_flush_valve to route to the
+        # input ('inject') side — that would yank pump_a off its output port
+        # mid-dispense and push the buffer to the reservoir side instead.
+        from unittest import mock
+
+        svc = self._connected()
+        fs = svc.fluid_system
+        self.assertIsNone(fs._sample_side_flushvalve())
+        with mock.patch.object(
+            fs, "_set_flush_valve", wraps=fs._set_flush_valve
+        ) as flush_spy:
+            fs.fill_tubings()
+        # The flush-valve path is exercised (dest != 'sample' -> True) but is
+        # never driven to the input side (False) during the fill.
+        args = [c.args[0] for c in flush_spy.call_args_list if c.args]
+        self.assertNotIn(False, args)
+
     def test_clean_tubings_is_gui_safe(self):
         from unittest import mock
 
@@ -533,7 +553,7 @@ class TestEmulatedFluidOps(unittest.TestCase):
         svc = self._connected()
         fs = svc.fluid_system
         # No real flush valve -> the expel must not touch the flush valve.
-        self.assertIsNone(fs._expel_flushvalve())
+        self.assertIsNone(fs._sample_side_flushvalve())
         with (
             mock.patch.object(
                 fs, "_set_flush_valve", wraps=fs._set_flush_valve

@@ -1219,6 +1219,26 @@ class LegacyArchitecture(AbstractSystem):
         self._set_valves(self.special_names["flushbuffer_a"])
         self._inject(flush_volume)
 
+    def _resolve_cleaning_reservoir_ids(self, cleaning_reservoirs):
+        """Resolve cleaning entries (ints or special-name strings) to ids.
+
+        Names are looked up in ``special_names``; entries that resolve to
+        nothing are skipped. Shared by :meth:`clean_tubings` and the GUI's
+        cleaning-volume estimate so both agree on which tanks are cleaning
+        liquids.
+        """
+        ids = []
+        for res in cleaning_reservoirs or []:
+            rid = res if isinstance(res, int) else self.special_names.get(res)
+            if rid is not None:
+                ids.append(rid)
+        return ids
+
+    def _reservoirs_to_clean(self, cleaning_ids):
+        """Reservoirs to clean: every wired reservoir bar the cleaning tanks."""
+        cleaning = set(cleaning_ids)
+        return [rid for rid in self.reservoir_a.keys() if rid not in cleaning]
+
     def clean_tubings(
         self,
         cleaning_reservoirs=None,
@@ -1374,11 +1394,7 @@ class LegacyArchitecture(AbstractSystem):
                 "settings to reservoir ids (e.g. [12]) or special names "
                 "(e.g. ['h2o']) that are defined in special_names."
             )
-        res_to_clean = [
-            rid
-            for rid in self.reservoir_a.keys()
-            if rid not in cleaning_reservoirs
-        ]
+        res_to_clean = self._reservoirs_to_clean(cleaning_reservoirs)
 
         logger.debug(
             f"Starting clean_tubings (mode={mode}). "
@@ -1433,18 +1449,21 @@ class LegacyArchitecture(AbstractSystem):
 
         print("Tubing cleaning procedure complete.")
 
-    def _expel_flushvalve(self):
-        """Flush-valve setting for a push-out-through-the-sample-needle stroke.
+    def _sample_side_flushvalve(self):
+        """Flush-valve setting for a stroke through the sample/needle side.
+
+        Use for any ``_pump`` move that draws from or pushes to the sample
+        needle (pickup_dir/dispense_dir ``'out'``).
 
         On a setup with a real :class:`Valve` flush valve, route it to the
-        sample/inject path (``False``) so expelled liquid leaves through the
-        sample needle. On a setup **without** a separate flush valve (e.g. the
-        ibidi multiplexer, where the pump's own valve is the only selector),
-        return ``None`` so :meth:`_pump` does not call :meth:`_set_flush_valve`
-        — otherwise it would drive pump_a back to its ``flush_pos['inject']``
-        (input) position right before the dispense, pushing the liquid to the
-        reservoir side instead of out the needle. ``dispense_dir='out'`` alone
-        then correctly leaves pump_a at its output port.
+        sample/inject path (``False``) so the liquid travels through the sample
+        needle. On a setup **without** a separate flush valve (e.g. the ibidi
+        multiplexer, where the pump's own valve is the only selector), return
+        ``None`` so :meth:`_pump` does not call :meth:`_set_flush_valve` —
+        otherwise it would drive pump_a to its ``flush_pos['inject']`` (input)
+        position right before the move, sending the liquid to the reservoir
+        side instead of through the needle. ``pickup_dir``/``dispense_dir``
+        then alone leave pump_a at the correct port.
         """
         return False if isinstance(self.valve_flush, Valve) else None
 
@@ -1472,8 +1491,8 @@ class LegacyArchitecture(AbstractSystem):
             logger.debug(f"  Emptying reservoir {res_id} ({vol} ul)")
 
             # Push from reservoir out through the sample needle (pump_a to
-            # its output port; _expel_flushvalve avoids re-routing it to the
-            # input side on flush-valve-less setups).
+            # its output port; _sample_side_flushvalve avoids re-routing it to
+            # the input side on flush-valve-less setups).
             self._pump(
                 self.pump_a,
                 vol,
@@ -1481,7 +1500,7 @@ class LegacyArchitecture(AbstractSystem):
                 pickup_dir="in",
                 dispense_dir="out",
                 pickup_res=res_id,
-                dispense_flushvalve=self._expel_flushvalve(),
+                dispense_flushvalve=self._sample_side_flushvalve(),
                 delay=delay,
             )
 
@@ -1560,7 +1579,7 @@ class LegacyArchitecture(AbstractSystem):
                 pickup_dir="in",
                 dispense_dir="out",
                 pickup_res=last_res,
-                dispense_flushvalve=self._expel_flushvalve(),
+                dispense_flushvalve=self._sample_side_flushvalve(),
                 delay=delay,
             )
 
@@ -1616,7 +1635,7 @@ class LegacyArchitecture(AbstractSystem):
                     pickup_dir="in",
                     dispense_dir="out",
                     pickup_res=res_id,
-                    dispense_flushvalve=self._expel_flushvalve(),
+                    dispense_flushvalve=self._sample_side_flushvalve(),
                     delay=delay,
                 )
 
@@ -2423,7 +2442,7 @@ class LegacyArchitecture(AbstractSystem):
                 vol,
                 velocity=velocity,
                 pickup_res=self.special_names["flushbuffer_a"],
-                dispense_flushvalve=False,
+                dispense_flushvalve=self._sample_side_flushvalve(),
                 delay=delay,
             )
         return total_vol
@@ -2501,7 +2520,7 @@ class LegacyArchitecture(AbstractSystem):
             vol,
             velocity=velocity,
             pickup_res=src_res_id,
-            dispense_flushvalve=False,
+            dispense_flushvalve=self._sample_side_flushvalve(),
             delay=delay,
         )
         # fill reservoirs
@@ -2553,7 +2572,9 @@ class LegacyArchitecture(AbstractSystem):
                 dispense_res=self.special_names["flushbuffer_a"],
                 pickup_res=res_id,
             )
-        # empty sample tubing
+        # empty sample tubing (draw from the sample side — pump_a stays at its
+        # output port; _sample_side_flushvalve avoids re-routing it to the
+        # input side on flush-valve-less setups).
         vol = self.tubing_config.get("valve_flush", "sample")
         vol += extra_vol
         self._pump(
@@ -2563,7 +2584,7 @@ class LegacyArchitecture(AbstractSystem):
             pickup_dir="out",
             dispense_dir="in",
             dispense_res=self.special_names["flushbuffer_a"],
-            pickup_flushvalve=False,
+            pickup_flushvalve=self._sample_side_flushvalve(),
         )
         # fill flushbuffer-reservoir to flush outlet
         vol = (

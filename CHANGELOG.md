@@ -113,15 +113,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed / Changed
 
-- **Cleaning now expels through the output needle (ibidi fix).** On setups
-  without a separate flush valve (the ibidi multiplexer — and in fact every
-  shipped setup, since none declares `valve_flush`), the cleaning expel step
-  passed `dispense_flushvalve=False`, which drove `_set_flush_valve` to reset
-  pump_a to its input position right before the dispense — so cleaning liquid
-  was only shuffled between input reservoirs instead of being pushed out the
-  sample needle. The clean helpers now use `_expel_flushvalve()` (None on
-  flush-valve-less setups), so `dispense_dir='out'` governs and each path is
-  expelled through the needle and extracted to waste by `pump_out`.
+- **Cleaning and tubing-fill now expel through the output needle (ibidi fix).**
+  On setups without a separate flush valve (the ibidi multiplexer — and in fact
+  every shipped setup, since none declares `valve_flush`), the push-out-to-needle
+  steps passed `dispense_flushvalve=False` / `pickup_flushvalve=False`, which
+  drove `_set_flush_valve` to reset pump_a to its input position right before the
+  move — so liquid was only shuffled between input reservoirs instead of being
+  pushed out the sample needle. A shared `_sample_side_flushvalve()` helper
+  (None on flush-valve-less setups) now governs these strokes so
+  `pickup_dir`/`dispense_dir` alone set the pump port; applied to the three
+  `clean_tubings` paths **and** the `fill_tubings` / `fill_tubings_reverse` /
+  `empty_tubings_to_flushbuffer` needle strokes. Each path is expelled through
+  the needle and extracted to waste by `pump_out`.
 - **Imager-reuse verification softened to a warning.** Reusing an imager
   (notably `initial_imager` re-listed in the exchange rounds) no longer raises a
   hard validation error — redundant imaging rounds are a legitimate thing to

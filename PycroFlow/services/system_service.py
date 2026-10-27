@@ -505,33 +505,28 @@ class SystemService:
         if not n_rounds:
             return None
         # Reservoirs actually cleaned = all wired reservoirs minus the cleaning
-        # tanks themselves (mirrors clean_tubings' res_to_clean).
-        clean_ids = set()
-        for res in rounds:
-            rid = res if isinstance(res, int) else fs.special_names.get(res)
-            if rid is not None:
-                clean_ids.add(rid)
-        res_to_clean = [
-            rid
-            for rid in getattr(fs, "reservoir_a", {}).keys()
-            if rid not in clean_ids
-        ]
+        # tanks themselves. Reuse the architecture's own resolution so the
+        # estimate can't drift from what clean_tubings actually does.
+        clean_ids = fs._resolve_cleaning_reservoir_ids(rounds)
+        res_to_clean = fs._reservoirs_to_clean(clean_ids)
         if not res_to_clean:
             return None
         try:
-            inlet = {rid: float(calc(rid)) for rid in res_to_clean}
+            inlets = [float(calc(rid)) for rid in res_to_clean]
         except Exception:  # pragma: no cover - tubing model incomplete
             return None
         extra = float(cfg.get("extra_volume", 100) or 0)
         reuse = cfg.get("reuse_cleaning_liquid", True)
         if reuse:
-            per_round = max(inlet.values()) + extra
+            # One fill shuttled through every reservoir: the largest path sets
+            # the fill volume for the round.
+            per_round = max(inlets) + extra
         else:
-            per_round = sum(v + extra for v in inlet.values())
+            per_round = sum(v + extra for v in inlets)
         total = n_rounds * per_round
         pre_empty = cfg.get("pre_empty_volume")
         if pre_empty:
-            total += sum(inlet.values()) + float(pre_empty) * len(res_to_clean)
+            total += sum(inlets) + float(pre_empty) * len(res_to_clean)
         return total
 
     def deliver_fluid(self, reservoir_id: int, volume: float) -> None:
