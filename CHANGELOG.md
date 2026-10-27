@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Migrate to picasso 1.0** (`picassosr>=1.0.0a1`). The live-analysis seam is
+  updated for the 1.0 API: `localize_batch` now converts the identification
+  param dict (`"Min. Net Gradient"`, `"Box Size"`) into a
+  `picasso.localize.IdentificationParameters` before calling the upstreamed
+  `localize.localize_frames` (which in 1.0 takes `identification_parameters=`
+  instead of a `params` dict, and `parallel` instead of `threaded`). The live
+  NeNA metric now reads `postprocess.nena`'s precision as **nm** (1.0 returns
+  nm; 0.11 returned camera pixels), deriving the px value from the pixel size.
+  `localize.identify_in_image` and `io.TiffMultiMap` are unchanged in 1.0.
+
 ### Added
 
 - **WP-9 hand-off QC gate (Phase B).** A rule-based, deterministic QC gate

@@ -33,8 +33,9 @@ dependencies = [
     "loguru",
     "pyyaml>=6.0.3,<7",
     "pydantic>=2,<3",
-    # picasso 0.12 line (localize_frames; requires Python >=3.11). Supersedes the B7 git-pin bridge.
-    "picassosr>=0.12.0a3",
+    # picasso 1.0 line (localize_frames upstreamed; nm units; requires Python
+    # >=3.11). Supersedes the 0.12 pre-release / B7 git-pin bridge.
+    "picassosr>=1.0.0a1",
     # WP-4: append-only provenance/metrics DB client (per-FOV record sink).
     # picasso-registry is NOT on PyPI (like monet's dep, C39/C40) -- pin the
     # released tag with the [client] extra (requests + python-ulid). A bare
