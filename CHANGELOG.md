@@ -21,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Fluid tab: full fluid move + open-all-valves.** The Manual control section
+  now picks one of three pump operations from a dropdown — single pump stroke,
+  pump move, or a new **full fluid move** — showing only the selected
+  operation's controls (`QStackedWidget`) to de-clutter the tab. The full fluid
+  move runs the protocol's `inject` manually: pump_a drives liquid from a
+  chosen reservoir to the sample while pump_out simultaneously extracts to
+  waste (`SystemService.full_fluid_move` → the architecture's `_inject`, with
+  optional velocity / extraction factor). The ibidi multiplexer's "Close all
+  valves" button gains an **"Open all valves"** companion
+  (`SystemService.open_all_valves` → `multiplexer.open_all()`); both appear only
+  on multiplexer setups.
 - **WP-9 hand-off QC gate (Phase B).** A rule-based, deterministic QC gate
   (`live_analysis/qc_gate.py`) marks a QC-passed dataset **ready** for cluster
   hand-off. `evaluate_qc(metrics, QcThresholds)` is a pure evaluator scoring a

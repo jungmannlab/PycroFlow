@@ -736,6 +736,28 @@ class SystemService:
             )
         mux.close_all()
 
+    def open_all_valves(self) -> None:
+        """Open every ibidi multiplexer channel at once (manual).
+
+        The counterpart to :meth:`close_all_valves`: the multiplexer's
+        channels are independent bi-stable valves, so unlike a Hamilton MVP
+        rotary valve (always at exactly one port) they can all be opened
+        together. Only meaningful for setups using the ibidi multiplexer.
+
+        Raises
+        ------
+        RuntimeError
+            The connected fluid system has no ibidi multiplexer.
+        """
+        self._require("fluid_system")
+        mux = getattr(self.fluid_system, "multiplexer", None)
+        if mux is None:
+            raise RuntimeError(
+                "the connected fluid system has no ibidi multiplexer to "
+                "open"
+            )
+        mux.open_all()
+
     def toggle_multiplexer_channel(self, channel):
         """Flip one ibidi channel open<->closed, ignoring reservoir routing.
 
@@ -1101,6 +1123,55 @@ class SystemService:
                 "no such pump on fluid_system: {!r}".format(pump_name)
             )
         return pump_method(pump_obj, *args, **kwargs)
+
+    def full_fluid_move(
+        self,
+        reservoir_id: int,
+        volume: float,
+        velocity=None,
+        extractionfactor=None,
+        delay: float = 0,
+    ):
+        """Inject from a reservoir to the sample while extracting to waste.
+
+        The protocol ``inject`` step done manually: route the manifold valves
+        to ``reservoir_id``, then run pump_a (reservoir → sample) and pump_out
+        (sample → waste) together over ``volume`` µl. Unlike
+        :meth:`manual_pump` (one pump at a time), this is the full two-pump
+        exchange a Run Sequence ``inject`` performs.
+
+        Parameters
+        ----------
+        reservoir_id : int
+            Reservoir to inject from. Routed via :meth:`set_valves`, so any id
+            wired in the setup manifold is allowed (not only design ids).
+        volume : float
+            Total volume to inject (µl); split into syringe strokes as needed.
+        velocity : float, optional
+            Injection velocity (µl/min). Defaults to the design's
+            ``max_velocity``.
+        extractionfactor : float, optional
+            Extraction-to-injection flow-rate ratio for pump_out. Defaults to
+            the design's ``extractionfactor``.
+        delay : float, default: 0
+            Seconds to settle between each stroke's pickup and dispense.
+
+        Raises
+        ------
+        KeyError
+            ``reservoir_id`` is not wired in the setup's manifold.
+        """
+        self._require("fluid_system")
+        inject = getattr(self.fluid_system, "_inject", None)
+        if inject is None:
+            raise RuntimeError("fluid_system has no _inject method")
+        self.set_valves(reservoir_id)
+        kwargs = {"delay": delay}
+        if velocity is not None:
+            kwargs["velocity"] = velocity
+        if extractionfactor is not None:
+            kwargs["extractionfactor"] = extractionfactor
+        inject(volume, **kwargs)
 
     # --- Imaging -------------------------------------------------------
 
