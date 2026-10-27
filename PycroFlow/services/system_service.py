@@ -461,9 +461,78 @@ class SystemService:
 
     def clean_tubings(self) -> None:
         # confirm=False: no terminal prompt — GUI callers confirm via a
-        # dialog before calling, and there is no stdin to block on.
+        # dialog before calling, and there is no stdin to block on. All other
+        # cleaning parameters default from the design's cleaning section,
+        # stored on the architecture as ``cleaning_config``.
         self._require("fluid_system")
         self.fluid_system.clean_tubings(confirm=False)
+
+    def cleaning_requires_confirmation(self) -> bool:
+        """Whether the design's cleaning section asks for a needles-connected
+        confirmation before cleaning (default True; True when disconnected)."""
+        cfg = getattr(self.fluid_system, "cleaning_config", None) or {}
+        return bool(cfg.get("require_needles_confirmation", True))
+
+    def estimate_cleaning_volume(self):
+        """Estimate the cleaning liquid required (µl), or ``None``.
+
+        Advisory, like the other per-liquid volume estimates: reuses the
+        architecture's tubing model (``_calc_vol_to_inlet``) to sum the fill
+        volumes the clean procedure would pump, so the GUI can warn when a
+        cleaning tank is too small. ``None`` when no fluid system is connected
+        or the tubing model is unavailable.
+
+        Reuse mode (``chain``) shuttles one fill volume through every reservoir
+        per round; discard mode (``individual``) draws a fresh fill per
+        reservoir. A pre-empty step adds its volume per reservoir.
+
+        Returns
+        -------
+        float or None
+            Estimated total cleaning-liquid volume in µl.
+        """
+        fs = self.fluid_system
+        if fs is None:
+            return None
+        calc = getattr(fs, "_calc_vol_to_inlet", None)
+        if not callable(calc):
+            return None
+        cfg = getattr(fs, "cleaning_config", {}) or {}
+        rounds = cfg.get("cleaning_rounds") or getattr(
+            fs, "cleaning_reservoirs", []
+        )
+        n_rounds = len(rounds) if rounds else 0
+        if not n_rounds:
+            return None
+        # Reservoirs actually cleaned = all wired reservoirs minus the cleaning
+        # tanks themselves (mirrors clean_tubings' res_to_clean).
+        clean_ids = set()
+        for res in rounds:
+            rid = res if isinstance(res, int) else fs.special_names.get(res)
+            if rid is not None:
+                clean_ids.add(rid)
+        res_to_clean = [
+            rid
+            for rid in getattr(fs, "reservoir_a", {}).keys()
+            if rid not in clean_ids
+        ]
+        if not res_to_clean:
+            return None
+        try:
+            inlet = {rid: float(calc(rid)) for rid in res_to_clean}
+        except Exception:  # pragma: no cover - tubing model incomplete
+            return None
+        extra = float(cfg.get("extra_volume", 100) or 0)
+        reuse = cfg.get("reuse_cleaning_liquid", True)
+        if reuse:
+            per_round = max(inlet.values()) + extra
+        else:
+            per_round = sum(v + extra for v in inlet.values())
+        total = n_rounds * per_round
+        pre_empty = cfg.get("pre_empty_volume")
+        if pre_empty:
+            total += sum(inlet.values()) + float(pre_empty) * len(res_to_clean)
+        return total
 
     def deliver_fluid(self, reservoir_id: int, volume: float) -> None:
         self._require("fluid_system")
@@ -1123,6 +1192,71 @@ class SystemService:
                 "no such pump on fluid_system: {!r}".format(pump_name)
             )
         return pump_method(pump_obj, *args, **kwargs)
+
+    def single_stroke(
+        self,
+        pump_name: str,
+        vol: float,
+        action: str = "pickup",
+        port: str = "in",
+        velocity=None,
+    ) -> None:
+        """Run one syringe movement on a named pump — draw OR expel.
+
+        Unlike :meth:`manual_pump` (which does a full pickup-then-dispense
+        cycle via the architecture's ``_pump``), this is a single syringe
+        stroke: it sets the pump's integrated valve to ``port`` and then issues
+        exactly one ``pickup`` or ``dispense``. Reservoir routing is left
+        untouched, so the stroke moves liquid through wherever the valves
+        currently point.
+
+        Parameters
+        ----------
+        pump_name : str
+            ``'pump_a'`` or ``'pump_out'``.
+        vol : float
+            Volume for the single stroke (µl). Must not exceed the syringe
+            capacity — one stroke is never split into multiple syringe fills.
+        action : str, default: ``'pickup'``
+            ``'pickup'`` aspirates into the syringe; ``'dispense'`` expels.
+        port : str, default: ``'in'``
+            Which syringe valve side to move through (``'in'`` / ``'out'``).
+        velocity : float, optional
+            Flow velocity (µl/min). Defaults to the pump's own default.
+
+        Raises
+        ------
+        KeyError
+            No pump of that name exists on the fluid system.
+        ValueError
+            ``action`` is not ``'pickup'``/``'dispense'`` or ``vol`` exceeds
+            the syringe capacity.
+        """
+        self._require("fluid_system")
+        if action not in ("pickup", "dispense"):
+            raise ValueError(
+                "action must be 'pickup' or 'dispense', not {!r}".format(
+                    action
+                )
+            )
+        pump = getattr(self.fluid_system, pump_name, None)
+        if pump is None:
+            raise KeyError(
+                "no such pump on fluid_system: {!r}".format(pump_name)
+            )
+        capacity = float(getattr(pump, "syringe_volume", 0) or 0)
+        if capacity and vol > capacity:
+            raise ValueError(
+                "single stroke volume {} µl exceeds the syringe capacity "
+                "{} µl; a single stroke is one syringe movement and is "
+                "never split".format(vol, capacity)
+            )
+        pump.set_valve(port)
+        move = pump.pickup if action == "pickup" else pump.dispense
+        if velocity is None:
+            move(vol, waitForPump=True)
+        else:
+            move(vol, velocity, waitForPump=True)
 
     def full_fluid_move(
         self,

@@ -91,9 +91,73 @@ class TestExperimentDesignSchema(unittest.TestCase):
         # Wash buffers live only in the experiment block now.
         self.assertNotIn("wash_buffer_1", fields)
         self.assertNotIn("wash_buffer_2", fields)
-        # Reservoir tables first; volumes then cleaning above experiment.
+        # Reservoir tables first; volumes then the cleaning section above
+        # the experiment block.
         self.assertEqual(fields[:2], ["reservoir_names", "special_names"])
-        self.assertEqual(fields[-2:], ["cleaning_reservoirs", "experiment"])
+        self.assertEqual(fields[-2:], ["cleaning", "experiment"])
+
+    def test_cleaning_section_fields_and_metadata(self):
+        from PycroFlow.schemas.experiment_design import (
+            CleaningSettings,
+            field_meta,
+        )
+
+        fields = CleaningSettings.model_fields
+        # The rounds field is an add/remove dropdown-rows editor like imagers.
+        rounds_meta = field_meta(fields["cleaning_rounds"])
+        self.assertEqual(rounds_meta.get("choices_from"), "reservoir_names")
+        self.assertEqual(rounds_meta.get("title"), "cleaning rounds")
+        self.assertIn("{}", rounds_meta.get("row_label", ""))
+        # Reuse toggle defaults to reuse (chain mode).
+        self.assertTrue(CleaningSettings().reuse_cleaning_liquid)
+        self.assertEqual(CleaningSettings().extra_volume, 100)
+        self.assertEqual(CleaningSettings().flush_out_strokes, 1)
+        self.assertTrue(CleaningSettings().require_needles_confirmation)
+
+    def test_cleaning_section_round_trips(self):
+        from PycroFlow.schemas.experiment_design import FluidSettings
+
+        fs = FluidSettings.model_validate(
+            {
+                "vol_wash": 10,
+                "reservoir_names": {1: "R1", 2: "H2O"},
+                "cleaning": {
+                    "cleaning_rounds": ["H2O"],
+                    "reuse_cleaning_liquid": False,
+                    "pre_empty_volume": 200,
+                    "flush_out_strokes": 3,
+                },
+                "experiment": {
+                    "type": "Exchange",
+                    "wash_buffer": "R1",
+                    "imagers": ["R1"],
+                },
+            }
+        )
+        self.assertEqual(fs.cleaning.cleaning_rounds, ["H2O"])
+        self.assertFalse(fs.cleaning.reuse_cleaning_liquid)
+        self.assertEqual(fs.cleaning.pre_empty_volume, 200)
+        self.assertEqual(fs.cleaning.flush_out_strokes, 3)
+
+    def test_legacy_cleaning_reservoirs_migrates(self):
+        # A design predating the cleaning section still loads: the flat list
+        # becomes the cleaning section's rounds.
+        from PycroFlow.schemas.experiment_design import FluidSettings
+
+        fs = FluidSettings.model_validate(
+            {
+                "vol_wash": 10,
+                "reservoir_names": {1: "R1"},
+                "cleaning_reservoirs": ["h2o", 16],
+                "experiment": {
+                    "type": "Exchange",
+                    "wash_buffer": "R1",
+                    "imagers": ["R1"],
+                },
+            }
+        )
+        self.assertEqual(fs.cleaning.cleaning_rounds, ["h2o", 16])
+        self.assertNotIn("cleaning_reservoirs", fs.model_dump())
 
     def test_illu_section_has_no_parameters(self):
         from PycroFlow.schemas.experiment_design import IlluSection
@@ -251,6 +315,32 @@ class TestSetupConfigs(unittest.TestCase):
         self.assertEqual(ham["special_names"]["flushbuffer_a"], 7)
         self.assertEqual(ham["cleaning_reservoirs"], ["h2o"])
         self.assertIn("interface", ham)
+
+    def test_assemble_threads_cleaning_block(self):
+        setup = configs.load_setup("Emulator")
+        ham, _ = configs.assemble_hamilton_config(
+            setup,
+            {
+                "reservoir_names": {1: "A1", 7: "C+"},
+                "special_names": {"flushbuffer_a": 7, "h2o": 16},
+                "cleaning": {
+                    "cleaning_rounds": ["h2o"],
+                    "reuse_cleaning_liquid": False,
+                    "pre_empty_volume": 150,
+                    "extra_volume": 80,
+                    "flush_out_strokes": 2,
+                },
+            },
+        )
+        # Cleaning tank 'h2o' (16) is pulled into the wired reservoirs.
+        ids = sorted(r["id"] for r in ham["reservoir_a"])
+        self.assertEqual(ids, [1, 7, 16])
+        # The rounds mirror the legacy key, and the block carries the knobs.
+        self.assertEqual(ham["cleaning_reservoirs"], ["h2o"])
+        self.assertEqual(ham["cleaning"]["cleaning_rounds"], ["h2o"])
+        self.assertFalse(ham["cleaning"]["reuse_cleaning_liquid"])
+        self.assertEqual(ham["cleaning"]["pre_empty_volume"], 150)
+        self.assertEqual(ham["cleaning"]["flush_out_strokes"], 2)
 
     def test_assemble_unknown_reservoir_raises(self):
         setup = configs.load_setup("Emulator")
@@ -429,6 +519,73 @@ class TestEmulatedFluidOps(unittest.TestCase):
             side_effect=AssertionError("input() must not be called"),
         ):
             svc.clean_tubings()
+
+    def test_clean_expels_through_output_needle_not_input(self):
+        # Regression: on a flush-valve-less setup (the ibidi multiplexer; the
+        # Emulator likewise declares no valve_flush) the cleaning expel must
+        # leave pump_a at its OUTPUT port so liquid is pushed out the sample
+        # needle and pump_out can extract it. Previously the expel passed
+        # dispense_flushvalve=False, which drove _set_flush_valve to reset
+        # pump_a to its input position right before the dispense, so liquid
+        # was only shuffled between input reservoirs.
+        from unittest import mock
+
+        svc = self._connected()
+        fs = svc.fluid_system
+        # No real flush valve -> the expel must not touch the flush valve.
+        self.assertIsNone(fs._expel_flushvalve())
+        with (
+            mock.patch.object(
+                fs, "_set_flush_valve", wraps=fs._set_flush_valve
+            ) as flush_spy,
+            mock.patch.object(
+                fs.pump_out, "dispense", wraps=fs.pump_out.dispense
+            ) as pumpout_dispense,
+            mock.patch(
+                "builtins.input",
+                side_effect=AssertionError("input() must not be called"),
+            ),
+        ):
+            svc.clean_tubings()
+        # The pump's own valve is never yanked back to the input side mid-clean.
+        flush_spy.assert_not_called()
+        # And pump_out actually extracted the expelled liquid to waste.
+        self.assertTrue(pumpout_dispense.called)
+
+    def test_estimate_cleaning_volume_reuse_vs_discard(self):
+        # Discard (fresh liquid per reservoir) needs more than reuse (one
+        # fill shuttled through all reservoirs).
+        from PycroFlow.services import SystemService
+
+        def _svc(reuse):
+            s = SystemService()
+            s.load_setup("Emulator")
+            s.connect_fluid(
+                {
+                    "parameters": {"max_velocity": 200, "clean_velocity": 200},
+                    "settings": {
+                        "reservoir_names": {1: "R1", 2: "R2", 7: "C+"},
+                        "special_names": {"flushbuffer_a": 7, "h2o": 16},
+                        "cleaning": {
+                            "cleaning_rounds": ["h2o"],
+                            "reuse_cleaning_liquid": reuse,
+                            "extra_volume": 100,
+                        },
+                    },
+                }
+            )
+            return s
+
+        reuse_vol = _svc(True).estimate_cleaning_volume()
+        discard_vol = _svc(False).estimate_cleaning_volume()
+        self.assertIsNotNone(reuse_vol)
+        self.assertIsNotNone(discard_vol)
+        self.assertGreater(discard_vol, reuse_vol)
+
+    def test_estimate_cleaning_volume_none_without_system(self):
+        from PycroFlow.services import SystemService
+
+        self.assertIsNone(SystemService().estimate_cleaning_volume())
 
     def test_clean_tubings_without_reservoirs_raises(self):
         # An empty/unresolved cleaning_reservoirs would pump nothing — clean

@@ -324,6 +324,50 @@ class TestSystemService(unittest.TestCase):
         self.assertEqual(result, 42)
         fluid._pump.assert_called_once_with(fluid.pump_a, vol=100)
 
+    def test_single_stroke_pickup_does_one_movement(self):
+        # One syringe movement only: set the valve, then a single pickup —
+        # never a pickup+dispense cycle, and never the _pump round trip.
+        fluid = MagicMock()
+        fluid.pump_a = MagicMock()
+        fluid.pump_a.syringe_volume = 500
+        svc = SystemService(fluid_system=fluid)
+        svc.single_stroke("pump_a", 120.0, action="pickup", port="in")
+        fluid.pump_a.set_valve.assert_called_once_with("in")
+        fluid.pump_a.pickup.assert_called_once_with(120.0, waitForPump=True)
+        fluid.pump_a.dispense.assert_not_called()
+        fluid._pump.assert_not_called()
+
+    def test_single_stroke_dispense_passes_velocity(self):
+        fluid = MagicMock()
+        fluid.pump_out = MagicMock()
+        fluid.pump_out.syringe_volume = 500
+        svc = SystemService(fluid_system=fluid)
+        svc.single_stroke(
+            "pump_out", 80.0, action="dispense", port="out", velocity=300
+        )
+        fluid.pump_out.set_valve.assert_called_once_with("out")
+        fluid.pump_out.dispense.assert_called_once_with(
+            80.0, 300, waitForPump=True
+        )
+        fluid.pump_out.pickup.assert_not_called()
+
+    def test_single_stroke_rejects_oversized_volume(self):
+        fluid = MagicMock()
+        fluid.pump_a = MagicMock()
+        fluid.pump_a.syringe_volume = 100
+        svc = SystemService(fluid_system=fluid)
+        with self.assertRaises(ValueError):
+            svc.single_stroke("pump_a", 250.0, action="pickup", port="in")
+        fluid.pump_a.pickup.assert_not_called()
+
+    def test_single_stroke_rejects_bad_action(self):
+        fluid = MagicMock()
+        fluid.pump_a = MagicMock()
+        fluid.pump_a.syringe_volume = 500
+        svc = SystemService(fluid_system=fluid)
+        with self.assertRaises(ValueError):
+            svc.single_stroke("pump_a", 10.0, action="flush", port="in")
+
     def test_connection_states(self):
         svc = SystemService()
         self.assertEqual(
