@@ -543,6 +543,65 @@ class TestSystemService(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             svc.close_all_valves()
 
+    def test_open_all_valves_opens_every_channel(self):
+        svc = SystemService()
+        svc.load_setup("IbidiEmulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {1: "R1", 2: "R2"},
+                    "special_names": {"flushbuffer_a": 7},
+                },
+            }
+        )
+        mux = svc.fluid_system.multiplexer
+        mux.close_all()
+        self.assertFalse(any(mux.channel_states))
+        svc.open_all_valves()
+        self.assertTrue(all(mux.channel_states))
+
+    def test_open_all_valves_without_multiplexer_raises(self):
+        svc = SystemService()
+        svc.load_setup("Emulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {1: "R1"},
+                    "special_names": {"flushbuffer_a": 1},
+                },
+            }
+        )
+        with self.assertRaises(RuntimeError):
+            svc.open_all_valves()
+
+    def test_full_fluid_move_routes_then_injects(self):
+        # The manual equivalent of a protocol 'inject': route the valves to the
+        # reservoir, then drive pump_a (reservoir -> sample) and pump_out
+        # (sample -> waste) together via the architecture's ``_inject``.
+        from unittest.mock import MagicMock
+
+        svc = SystemService()
+        svc.fluid_system = MagicMock(name="fluid_system")
+        svc.set_valves = MagicMock(name="set_valves")
+        svc.full_fluid_move(3, 120.0, velocity=200.0, extractionfactor=1.5)
+        svc.set_valves.assert_called_once_with(3)
+        svc.fluid_system._inject.assert_called_once_with(
+            120.0, delay=0, velocity=200.0, extractionfactor=1.5
+        )
+
+    def test_full_fluid_move_defaults_optional_kwargs(self):
+        # Blank velocity / extraction factor are omitted so ``_inject`` falls
+        # back to the design's parameters.
+        from unittest.mock import MagicMock
+
+        svc = SystemService()
+        svc.fluid_system = MagicMock(name="fluid_system")
+        svc.set_valves = MagicMock(name="set_valves")
+        svc.full_fluid_move(5, 80.0)
+        svc.fluid_system._inject.assert_called_once_with(80.0, delay=0)
+
     def test_toggle_multiplexer_channel_flips_raw_state(self):
         # A raw manual override: toggling one channel does not disturb others
         # and ignores reservoir routing entirely.
