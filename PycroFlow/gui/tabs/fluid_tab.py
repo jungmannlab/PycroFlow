@@ -168,9 +168,30 @@ class FluidTab(QWidget):
                 "experiment design uses — not the full setup manifold."
             )
         )
+        # Advisory estimate of the cleaning liquid the design would need.
+        self.clean_volume_hint = self._hint("")
+        outer.addWidget(self.clean_volume_hint)
         self.fill_btn.clicked.connect(self._on_fill)
         self.clean_btn.clicked.connect(self._on_clean)
+        self._refresh_clean_estimate()
         return box
+
+    def _refresh_clean_estimate(self):
+        """Update the advisory 'cleaning liquid required' hint."""
+        hint = getattr(self, "clean_volume_hint", None)
+        if hint is None:
+            return
+        try:
+            vol = self._svc.estimate_cleaning_volume()
+        except Exception:  # pragma: no cover - estimate is best-effort
+            vol = None
+        if isinstance(vol, (int, float)) and not isinstance(vol, bool):
+            hint.setText(
+                "Estimated cleaning liquid required: ~{:.0f} µl "
+                "(per cleaning tank, advisory).".format(vol)
+            )
+        else:
+            hint.setText("")
 
     def _build_manual_group(self):
         box = QGroupBox("Manual control")
@@ -215,7 +236,8 @@ class FluidTab(QWidget):
         return box
 
     def _build_stroke_panel(self):
-        # Single pump stroke
+        # Single pump stroke — one syringe movement (draw OR expel), not a
+        # full pickup+dispense cycle.
         stroke = QGroupBox("Single pump stroke")
         sform = QFormLayout(stroke)
         self.stroke_pump = QComboBox()
@@ -223,42 +245,46 @@ class FluidTab(QWidget):
         self.stroke_vol = QLineEdit("100")
         self.stroke_vel = QLineEdit()
         self.stroke_vel.setPlaceholderText("default")
-        self.stroke_pickup = QComboBox()
-        self.stroke_pickup.addItems(["in", "out"])
-        self.stroke_dispense = QComboBox()
-        self.stroke_dispense.addItems(["out", "in"])
+        # Action is the single movement; port is which syringe valve side it
+        # moves through. Stored (label -> action) so the handler stays terse.
+        self.stroke_action = QComboBox()
+        self.stroke_action.addItem("Draw (pickup)", "pickup")
+        self.stroke_action.addItem("Expel (dispense)", "dispense")
+        self.stroke_port = QComboBox()
+        self.stroke_port.addItems(["in", "out"])
         self.stroke_pump.setToolTip(
             "pump_a drives liquid from a reservoir to the sample; "
             "pump_out is the extraction (waste) pump."
         )
         self.stroke_vol.setToolTip(
-            "Total volume. Larger than the syringe is split into "
-            "back-to-back syringe strokes automatically."
+            "Volume for the single stroke. Must not exceed the syringe "
+            "capacity — one stroke is one syringe movement, never split."
         )
         self.stroke_vel.setToolTip(
             "Blank uses the design's max_velocity. The pump rejects values "
             "outside its own range — check errors.log if nothing moves."
         )
-        self.stroke_pickup.setToolTip(
-            "Which port the syringe draws from: 'in' = the reservoir side "
-            "(as currently routed), 'out' = the sample/waste side."
+        self.stroke_action.setToolTip(
+            "A single syringe movement: 'Draw' aspirates into the syringe, "
+            "'Expel' dispenses out of it. One stroke only — not a round trip."
         )
-        self.stroke_dispense.setToolTip(
-            "Which port the syringe pushes to. Any liquid already in the "
-            "syringe is dispensed here first."
+        self.stroke_port.setToolTip(
+            "Which syringe valve side the stroke moves through: 'in' = the "
+            "reservoir side (as currently routed), 'out' = the sample/waste "
+            "side."
         )
         sform.addRow("Pump", self.stroke_pump)
         sform.addRow("Volume (µL)", self.stroke_vol)
         sform.addRow("Velocity (µL/min)", self.stroke_vel)
-        sform.addRow("Pickup", self.stroke_pickup)
-        sform.addRow("Dispense", self.stroke_dispense)
+        sform.addRow("Action", self.stroke_action)
+        sform.addRow("Port", self.stroke_port)
         self.stroke_btn = QPushButton("Run stroke")
         sform.addRow(self.stroke_btn)
         sform.addRow(
             self._hint(
-                "Moves the syringe only — it does NOT change reservoir routing, "
-                "so it draws from wherever the valves currently point. Use "
-                '"Set valves to reservoir" below first.'
+                "One syringe movement only — it does NOT change reservoir "
+                "routing, so it draws from / pushes to wherever the valves "
+                'currently point. Use "Set valves to reservoir" below first.'
             )
         )
         self.stroke_btn.clicked.connect(self._on_stroke)
@@ -421,6 +447,8 @@ class FluidTab(QWidget):
         self._refresh_reservoirs()
         # The setup also fixes the schematic's wiring topology.
         self._reload_topology()
+        # The connected design's cleaning config drives the volume estimate.
+        self._refresh_clean_estimate()
 
     def _reload_topology(self):
         """Rebuild the schematic's static wiring from the loaded setup."""
@@ -506,16 +534,24 @@ class FluidTab(QWidget):
         self._run(self._svc.fill_tubings, "Fill tubings")
 
     def _on_clean(self):
-        reply = QMessageBox.question(
-            self,
-            "Clean tubings",
-            "Start the tubing cleaning procedure?\n\n"
-            "Make sure the input and output needles are in the same "
-            "container (fluidly connected) and cleaning reservoirs are "
-            "connected to their tanks.",
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self._run(self._svc.clean_tubings, "Clean tubings")
+        # The design's cleaning section may waive the needles-connected
+        # confirmation; respect it (default: ask).
+        try:
+            require_confirm = self._svc.cleaning_requires_confirmation()
+        except Exception:  # pragma: no cover - default to asking
+            require_confirm = True
+        if require_confirm:
+            reply = QMessageBox.question(
+                self,
+                "Clean tubings",
+                "Start the tubing cleaning procedure?\n\n"
+                "Make sure the input and output needles are in the same "
+                "container (fluidly connected) and cleaning reservoirs are "
+                "connected to their tanks.",
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        self._run(self._svc.clean_tubings, "Clean tubings")
 
     def _on_stroke(self):
         vol, ok = self._num(self.stroke_vol, "Volume", True, float)
@@ -526,13 +562,13 @@ class FluidTab(QWidget):
             return
         kwargs = dict(
             vol=vol,
-            pickup_dir=self.stroke_pickup.currentText(),
-            dispense_dir=self.stroke_dispense.currentText(),
+            action=self.stroke_action.currentData(),
+            port=self.stroke_port.currentText(),
         )
         if vel is not None:
             kwargs["velocity"] = vel
         self._run(
-            lambda: self._svc.manual_pump(
+            lambda: self._svc.single_stroke(
                 self.stroke_pump.currentText(), **kwargs
             ),
             "Pump stroke",

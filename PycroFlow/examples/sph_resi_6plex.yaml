@@ -38,7 +38,12 @@ fluid:
     special_names:
       flushbuffer_a: 7
       h2o: 16
-    cleaning_reservoirs: [h2o]
+    cleaning:
+      cleaning_rounds: [h2o]       # one cleaning-liquid reservoir per round
+      reuse_cleaning_liquid: true  # shuttle one fill through all reservoirs
+      pre_empty_volume: null       # extract from each reservoir first (µl)
+      extra_volume: 100            # overfill beyond tubing volume (µl)
+      flush_out_strokes: 1
     experiment:
       type: SPH-RESI
       wash_buffer_1: C+

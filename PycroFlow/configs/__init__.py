@@ -301,7 +301,8 @@ def assemble_hamilton_config(setup, fluid_settings):
         A setup config from :func:`load_setup` (with a ``fluid`` block).
     fluid_settings : dict
         The experiment design's ``fluid.settings`` (needs ``reservoir_names``;
-        optional ``special_names`` / ``cleaning_reservoirs``).
+        optional ``special_names`` and a ``cleaning`` block — or the legacy
+        flat ``cleaning_reservoirs`` list).
 
     Returns
     -------
@@ -315,7 +316,14 @@ def assemble_hamilton_config(setup, fluid_settings):
     by_id = {entry["id"]: entry for entry in manifold}
 
     special_names = dict(fluid_settings.get("special_names", {}))
-    cleaning = fluid_settings.get("cleaning_reservoirs", []) or []
+    # Cleaning config lives in the ``cleaning`` block (``cleaning_rounds`` =
+    # one reservoir per round). Fall back to the legacy flat
+    # ``cleaning_reservoirs`` list for designs predating the block.
+    cleaning_block = dict(fluid_settings.get("cleaning") or {})
+    if cleaning_block:
+        cleaning = list(cleaning_block.get("cleaning_rounds", []) or [])
+    else:
+        cleaning = fluid_settings.get("cleaning_reservoirs", []) or []
 
     used_ids = list(fluid_settings.get("reservoir_names", {}).keys())
     # Reservoirs named only in special_names (e.g. flushbuffer_a) are routed
@@ -352,6 +360,12 @@ def assemble_hamilton_config(setup, fluid_settings):
     hamilton["reservoir_a"] = reservoir_a
     hamilton["special_names"] = special_names
     hamilton["cleaning_reservoirs"] = cleaning
+    # Full cleaning config for clean_tubings() (the rounds plus the behaviour
+    # knobs); the rounds mirror ``cleaning_reservoirs`` so legacy readers that
+    # only know that key keep working.
+    if cleaning_block:
+        cleaning_block["cleaning_rounds"] = cleaning
+        hamilton["cleaning"] = cleaning_block
     return hamilton, fluid.get("tubing", {})
 
 

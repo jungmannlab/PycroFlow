@@ -342,6 +342,66 @@ class FluidParameters(BaseModel):
     )
 
 
+class CleaningSettings(BaseModel):
+    """Tubing-cleaning configuration for the manual clean procedure.
+
+    Cleaning is **not** part of the Run Sequence — these settings are threaded
+    into ``LegacyArchitecture`` (via ``configs.assemble_hamilton_config``) and
+    consumed by ``clean_tubings()``. Each cleaning round uses one
+    cleaning-liquid reservoir; rounds run in order. Whether the liquid is
+    reused across reservoirs (shuttled through them) or discarded (fresh liquid
+    per reservoir) is a single global choice.
+    """
+
+    model_config = _CFG
+    # One dropdown row per cleaning round (add/remove), chosen from the
+    # design's reservoir names; shown as a 'cleaning rounds' box with per-row
+    # labels — mirrors the Exchange ``imagers`` pattern.
+    cleaning_rounds: List[Union[int, str]] = _field(
+        default_factory=list,
+        choices_from="reservoir_names",
+        allow_none=True,
+        title="cleaning rounds",
+        row_label="clean round {}",
+        tooltip="Cleaning-liquid reservoirs, one per round, used in order "
+        "(e.g. an H2O round then an IPA round).",
+    )
+    reuse_cleaning_liquid: bool = _field(
+        True,
+        tooltip="Reuse the cleaning liquid by shuttling it through every "
+        "reservoir in turn (fewer µl), or discard it and draw fresh liquid for "
+        "each reservoir (more thorough, more liquid).",
+    )
+    pre_empty_volume: Optional[float] = _unit(
+        None,
+        "µl",
+        tooltip="Volume to extract from each reservoir before cleaning starts, "
+        "clearing leftover protocol liquid. Blank or 0 skips the pre-empty.",
+    )
+    extra_volume: float = _unit(
+        100,
+        "µl",
+        tooltip="Volume pushed through each path beyond its tubing volume, so "
+        "the whole path is flushed.",
+    )
+    clean_velocity: float = _unit(
+        10000, "µl/min", tooltip="Flow rate used during cleaning."
+    )
+    clean_delay: float = _unit(
+        0, "s", tooltip="Seconds to soak between cleaning strokes."
+    )
+    flush_out_strokes: int = _field(
+        1,
+        tooltip="Number of extraction strokes the output (waste) pump makes "
+        "when expelling each cleaned path to waste.",
+    )
+    require_needles_confirmation: bool = _field(
+        True,
+        tooltip="Ask the operator to confirm the input and output needles "
+        "share a container (fluidly connected) before cleaning starts.",
+    )
+
+
 class FluidSettings(BaseModel):
     """Experiment-level fluid settings + the experiment-type design block.
 
@@ -404,12 +464,26 @@ class FluidSettings(BaseModel):
         tooltip="Seconds to pause after the syringe draws liquid before it "
         "dispenses, letting the flow settle.",
     )
-    cleaning_reservoirs: List[Union[int, str]] = _field(
-        default_factory=list,
-        tooltip="Comma-separated reservoir ids or special names used for "
-        'cleaning, e.g. "h2o, ipa".',
-    )
+    cleaning: CleaningSettings = Field(default_factory=CleaningSettings)
     experiment: ExperimentBlock
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_cleaning_reservoirs(cls, data):
+        """Back-compat: fold a legacy flat ``cleaning_reservoirs`` list into the
+        cleaning section's ``cleaning_rounds`` so old designs still load."""
+        if isinstance(data, dict) and "cleaning_reservoirs" in data:
+            legacy = data.pop("cleaning_reservoirs")
+            cleaning = data.get("cleaning")
+            if cleaning is None:
+                cleaning = {}
+            if (
+                isinstance(cleaning, dict)
+                and "cleaning_rounds" not in cleaning
+            ):
+                cleaning["cleaning_rounds"] = list(legacy or [])
+            data["cleaning"] = cleaning
+        return data
 
 
 class FluidSection(BaseModel):

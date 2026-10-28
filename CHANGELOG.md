@@ -21,6 +21,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Experiment-design cleaning section.** The free-text `cleaning_reservoirs`
+  list is replaced by a structured `cleaning` block (`CleaningSettings` in
+  `schemas/experiment_design.py`): add/remove **cleaning-round** dropdown rows
+  (one cleaning-liquid reservoir per round, mirroring the exchange `imagers`
+  editor), a **reuse-vs-discard** toggle (`reuse_cleaning_liquid` → chain vs
+  individual mode), a **pre-empty** extract volume, an **extra overfill**
+  volume, clean velocity/delay, **flush-out strokes**, and a needles-connected
+  confirmation. The config threads through `configs.assemble_hamilton_config`
+  into `LegacyArchitecture.cleaning_config`, from which `clean_tubings()`
+  defaults every parameter. Legacy designs with a flat `cleaning_reservoirs`
+  list still load (migrated to `cleaning.cleaning_rounds`). The Fluid tab shows
+  an advisory **required-cleaning-liquid estimate**
+  (`SystemService.estimate_cleaning_volume`) and honours the confirmation flag.
+- **Fluid tab: true single pump stroke.** The "Single pump stroke" control now
+  performs one syringe movement — **Draw** (pickup) or **Expel** (dispense)
+  through a chosen port — instead of a full pickup-and-dispense cycle
+  (`SystemService.single_stroke`; volume is validated against the syringe
+  capacity and never split).
 - **Fluid tab: full fluid move + open-all-valves.** The Manual control section
   now picks one of three pump operations from a dropdown — single pump stroke,
   pump move, or a new **full fluid move** — showing only the selected
@@ -95,6 +113,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed / Changed
 
+- **Cleaning and tubing-fill now expel through the output needle (ibidi fix).**
+  On setups without a separate flush valve (the ibidi multiplexer — and in fact
+  every shipped setup, since none declares `valve_flush`), the push-out-to-needle
+  steps passed `dispense_flushvalve=False` / `pickup_flushvalve=False`, which
+  drove `_set_flush_valve` to reset pump_a to its input position right before the
+  move — so liquid was only shuffled between input reservoirs instead of being
+  pushed out the sample needle. A shared `_sample_side_flushvalve()` helper
+  (None on flush-valve-less setups) now governs these strokes so
+  `pickup_dir`/`dispense_dir` alone set the pump port; applied to the three
+  `clean_tubings` paths **and** the `fill_tubings` / `fill_tubings_reverse` /
+  `empty_tubings_to_flushbuffer` needle strokes. Each path is expelled through
+  the needle and extracted to waste by `pump_out`.
 - **Imager-reuse verification softened to a warning.** Reusing an imager
   (notably `initial_imager` re-listed in the exchange rounds) no longer raises a
   hard validation error — redundant imaging rounds are a legitimate thing to
