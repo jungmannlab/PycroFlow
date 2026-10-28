@@ -68,7 +68,9 @@ def localize_batch(
         Picasso info list-of-dicts (movie/camera metadata).
     params : dict
         Identification parameters — at least ``"Min. Net Gradient"`` and
-        ``"Box Size"``.
+        ``"Box Size"`` (picasso metadata keys). Converted to a picasso 1.0
+        :class:`picasso.localize.IdentificationParameters` at this boundary so
+        callers keep passing the plain dict they always have.
     start_frame : int
         Absolute index of the first frame.
     fitting_method : str
@@ -80,9 +82,37 @@ def localize_batch(
     return _localize.localize_frames(
         frames,
         info_list,
-        params,
+        identification_parameters=_identification_parameters(params),
         start_frame=start_frame,
         fitting_method=fitting_method,
+    )
+
+
+def _identification_parameters(params: dict):
+    """Build a picasso 1.0 ``IdentificationParameters`` from a param dict.
+
+    picasso 1.0 replaced the ``params`` dict argument of ``localize_frames``
+    with a typed :class:`picasso.localize.IdentificationParameters` whose
+    ``method`` carries the net-gradient threshold. We keep the dict interface
+    (``"Min. Net Gradient"``, ``"Box Size"``, and the optional pre-filters) at
+    this single seam and translate it here.
+    """
+    from picasso.localize import IdentificationParameters, NetGradient
+
+    min_ng = params.get("Min. Net Gradient", params.get("min_net_gradient"))
+    box = params.get("Box Size", params.get("box_size"))
+    if min_ng is None or box is None:
+        raise ValueError(
+            "identification params need 'Min. Net Gradient' and 'Box Size'; "
+            f"got keys {sorted(params)}"
+        )
+    extra = {}
+    if "Temporal Median Window" in params:
+        extra["temporal_median_window"] = int(params["Temporal Median Window"])
+    if "Gaussian Filter Sigma" in params:
+        extra["gaussian_filter_sigma"] = float(params["Gaussian Filter Sigma"])
+    return IdentificationParameters(
+        method=NetGradient(float(min_ng)), box=int(box), **extra
     )
 
 

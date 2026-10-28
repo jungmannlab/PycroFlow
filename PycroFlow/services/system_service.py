@@ -461,9 +461,73 @@ class SystemService:
 
     def clean_tubings(self) -> None:
         # confirm=False: no terminal prompt — GUI callers confirm via a
-        # dialog before calling, and there is no stdin to block on.
+        # dialog before calling, and there is no stdin to block on. All other
+        # cleaning parameters default from the design's cleaning section,
+        # stored on the architecture as ``cleaning_config``.
         self._require("fluid_system")
         self.fluid_system.clean_tubings(confirm=False)
+
+    def cleaning_requires_confirmation(self) -> bool:
+        """Whether the design's cleaning section asks for a needles-connected
+        confirmation before cleaning (default True; True when disconnected)."""
+        cfg = getattr(self.fluid_system, "cleaning_config", None) or {}
+        return bool(cfg.get("require_needles_confirmation", True))
+
+    def estimate_cleaning_volume(self):
+        """Estimate the cleaning liquid required (µl), or ``None``.
+
+        Advisory, like the other per-liquid volume estimates: reuses the
+        architecture's tubing model (``_calc_vol_to_inlet``) to sum the fill
+        volumes the clean procedure would pump, so the GUI can warn when a
+        cleaning tank is too small. ``None`` when no fluid system is connected
+        or the tubing model is unavailable.
+
+        Reuse mode (``chain``) shuttles one fill volume through every reservoir
+        per round; discard mode (``individual``) draws a fresh fill per
+        reservoir. A pre-empty step adds its volume per reservoir.
+
+        Returns
+        -------
+        float or None
+            Estimated total cleaning-liquid volume in µl.
+        """
+        fs = self.fluid_system
+        if fs is None:
+            return None
+        calc = getattr(fs, "_calc_vol_to_inlet", None)
+        if not callable(calc):
+            return None
+        cfg = getattr(fs, "cleaning_config", {}) or {}
+        rounds = cfg.get("cleaning_rounds") or getattr(
+            fs, "cleaning_reservoirs", []
+        )
+        n_rounds = len(rounds) if rounds else 0
+        if not n_rounds:
+            return None
+        # Reservoirs actually cleaned = all wired reservoirs minus the cleaning
+        # tanks themselves. Reuse the architecture's own resolution so the
+        # estimate can't drift from what clean_tubings actually does.
+        clean_ids = fs._resolve_cleaning_reservoir_ids(rounds)
+        res_to_clean = fs._reservoirs_to_clean(clean_ids)
+        if not res_to_clean:
+            return None
+        try:
+            inlets = [float(calc(rid)) for rid in res_to_clean]
+        except Exception:  # pragma: no cover - tubing model incomplete
+            return None
+        extra = float(cfg.get("extra_volume", 100) or 0)
+        reuse = cfg.get("reuse_cleaning_liquid", True)
+        if reuse:
+            # One fill shuttled through every reservoir: the largest path sets
+            # the fill volume for the round.
+            per_round = max(inlets) + extra
+        else:
+            per_round = sum(v + extra for v in inlets)
+        total = n_rounds * per_round
+        pre_empty = cfg.get("pre_empty_volume")
+        if pre_empty:
+            total += sum(inlets) + float(pre_empty) * len(res_to_clean)
+        return total
 
     def deliver_fluid(self, reservoir_id: int, volume: float) -> None:
         self._require("fluid_system")
@@ -735,6 +799,28 @@ class SystemService:
                 "close"
             )
         mux.close_all()
+
+    def open_all_valves(self) -> None:
+        """Open every ibidi multiplexer channel at once (manual).
+
+        The counterpart to :meth:`close_all_valves`: the multiplexer's
+        channels are independent bi-stable valves, so unlike a Hamilton MVP
+        rotary valve (always at exactly one port) they can all be opened
+        together. Only meaningful for setups using the ibidi multiplexer.
+
+        Raises
+        ------
+        RuntimeError
+            The connected fluid system has no ibidi multiplexer.
+        """
+        self._require("fluid_system")
+        mux = getattr(self.fluid_system, "multiplexer", None)
+        if mux is None:
+            raise RuntimeError(
+                "the connected fluid system has no ibidi multiplexer to "
+                "open"
+            )
+        mux.open_all()
 
     def toggle_multiplexer_channel(self, channel):
         """Flip one ibidi channel open<->closed, ignoring reservoir routing.
@@ -1101,6 +1187,120 @@ class SystemService:
                 "no such pump on fluid_system: {!r}".format(pump_name)
             )
         return pump_method(pump_obj, *args, **kwargs)
+
+    def single_stroke(
+        self,
+        pump_name: str,
+        vol: float,
+        action: str = "pickup",
+        port: str = "in",
+        velocity=None,
+    ) -> None:
+        """Run one syringe movement on a named pump — draw OR expel.
+
+        Unlike :meth:`manual_pump` (which does a full pickup-then-dispense
+        cycle via the architecture's ``_pump``), this is a single syringe
+        stroke: it sets the pump's integrated valve to ``port`` and then issues
+        exactly one ``pickup`` or ``dispense``. Reservoir routing is left
+        untouched, so the stroke moves liquid through wherever the valves
+        currently point.
+
+        Parameters
+        ----------
+        pump_name : str
+            ``'pump_a'`` or ``'pump_out'``.
+        vol : float
+            Volume for the single stroke (µl). Must not exceed the syringe
+            capacity — one stroke is never split into multiple syringe fills.
+        action : str, default: ``'pickup'``
+            ``'pickup'`` aspirates into the syringe; ``'dispense'`` expels.
+        port : str, default: ``'in'``
+            Which syringe valve side to move through (``'in'`` / ``'out'``).
+        velocity : float, optional
+            Flow velocity (µl/min). Defaults to the pump's own default.
+
+        Raises
+        ------
+        KeyError
+            No pump of that name exists on the fluid system.
+        ValueError
+            ``action`` is not ``'pickup'``/``'dispense'`` or ``vol`` exceeds
+            the syringe capacity.
+        """
+        self._require("fluid_system")
+        if action not in ("pickup", "dispense"):
+            raise ValueError(
+                "action must be 'pickup' or 'dispense', not {!r}".format(
+                    action
+                )
+            )
+        pump = getattr(self.fluid_system, pump_name, None)
+        if pump is None:
+            raise KeyError(
+                "no such pump on fluid_system: {!r}".format(pump_name)
+            )
+        capacity = float(getattr(pump, "syringe_volume", 0) or 0)
+        if capacity and vol > capacity:
+            raise ValueError(
+                "single stroke volume {} µl exceeds the syringe capacity "
+                "{} µl; a single stroke is one syringe movement and is "
+                "never split".format(vol, capacity)
+            )
+        pump.set_valve(port)
+        move = pump.pickup if action == "pickup" else pump.dispense
+        if velocity is None:
+            move(vol, waitForPump=True)
+        else:
+            move(vol, velocity, waitForPump=True)
+
+    def full_fluid_move(
+        self,
+        reservoir_id: int,
+        volume: float,
+        velocity=None,
+        extractionfactor=None,
+        delay: float = 0,
+    ):
+        """Inject from a reservoir to the sample while extracting to waste.
+
+        The protocol ``inject`` step done manually: route the manifold valves
+        to ``reservoir_id``, then run pump_a (reservoir → sample) and pump_out
+        (sample → waste) together over ``volume`` µl. Unlike
+        :meth:`manual_pump` (one pump at a time), this is the full two-pump
+        exchange a Run Sequence ``inject`` performs.
+
+        Parameters
+        ----------
+        reservoir_id : int
+            Reservoir to inject from. Routed via :meth:`set_valves`, so any id
+            wired in the setup manifold is allowed (not only design ids).
+        volume : float
+            Total volume to inject (µl); split into syringe strokes as needed.
+        velocity : float, optional
+            Injection velocity (µl/min). Defaults to the design's
+            ``max_velocity``.
+        extractionfactor : float, optional
+            Extraction-to-injection flow-rate ratio for pump_out. Defaults to
+            the design's ``extractionfactor``.
+        delay : float, default: 0
+            Seconds to settle between each stroke's pickup and dispense.
+
+        Raises
+        ------
+        KeyError
+            ``reservoir_id`` is not wired in the setup's manifold.
+        """
+        self._require("fluid_system")
+        inject = getattr(self.fluid_system, "_inject", None)
+        if inject is None:
+            raise RuntimeError("fluid_system has no _inject method")
+        self.set_valves(reservoir_id)
+        kwargs = {"delay": delay}
+        if velocity is not None:
+            kwargs["velocity"] = velocity
+        if extractionfactor is not None:
+            kwargs["extractionfactor"] = extractionfactor
+        inject(volume, **kwargs)
 
     # --- Imaging -------------------------------------------------------
 

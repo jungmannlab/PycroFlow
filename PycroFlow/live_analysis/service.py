@@ -45,6 +45,7 @@ from PycroFlow.live_analysis.compute_backend import (
 )
 from PycroFlow.live_analysis.laser_interlock import LaserInterlock
 from PycroFlow.live_analysis.metrics import RunningMetrics
+from PycroFlow.live_analysis.qc_gate import QcThresholds, qc_gate_mark_ready
 from PycroFlow.live_analysis.registry_payload import (
     build_fov_payload,
     post_fov_record,
@@ -131,6 +132,10 @@ class FovConfig:
     pixelsize_nm: float | None = None
     # Metric snapshot cadence pushed to clients (s).
     metrics_push_interval_s: float = 0.5
+    # WP-9 hand-off QC gate thresholds (from the setup/design config, not
+    # hard-coded). None uses permissive defaults; the gate marks the dataset
+    # ready for cluster hand-off iff the final metrics pass.
+    qc_thresholds: QcThresholds | None = None
 
 
 @dataclass
@@ -153,6 +158,9 @@ class FovResult:
     # orchestrated caller re-arm exactly the aborts this FOV consumed (see
     # clear_abort) without erasing a newer, not-yet-served request.
     abort_generation: int = 0
+    # WP-9 hand-off QC verdict (passed / reasons / metrics / readied), or None
+    # when the gate didn't run (no acquisition_run record was posted).
+    qc: dict | None = None
 
     @property
     def partial(self) -> bool:
@@ -308,6 +316,7 @@ class LiveAnalysisService:
         interlock_result = None
         archive_result = None
         registry_ids = None
+        qc_verdict = None
 
         def _on_result(res: LocalizeResult) -> None:
             # Drain-thread sink: fold locs into the running metrics and push.
@@ -471,6 +480,27 @@ class LiveAnalysisService:
             )
             registry_ids = self._post_record(run_id, payload)
 
+            # WP-9 hand-off QC gate. Runs ONLY after the acquisition_run record
+            # above exists (mark_ready's FK requires it): a posted record means
+            # the row is in the registry (synchronous mock) or durably buffered
+            # for replay (BufferedRegistryClient), so the run_id FK resolves.
+            # Best-effort + non-blocking: a registry outage / duplicate / fail
+            # is swallowed and NEVER breaks acquisition; registry unset is a
+            # no-op (registry_ids is None, so the gate is skipped).
+            if registry_ids is not None:
+                try:
+                    qc_verdict = qc_gate_mark_ready(
+                        self._registry,
+                        acquisition_run_id=registry_ids["acquisition_run_id"],
+                        analysis_run_id=registry_ids.get("analysis_run_id"),
+                        metrics=final_metrics,
+                        thresholds=cfg.qc_thresholds,
+                        coverage=coverage,
+                    )
+                    self.hub.push_kind("qc", run_id, qc=qc_verdict)
+                except Exception as exc:  # noqa: BLE001 - never fatal
+                    logger.warning("QC gate raised: {!r}".format(exc))
+
             state = (
                 "fov_aborted"
                 if aborted
@@ -490,6 +520,7 @@ class LiveAnalysisService:
             error=error,
             coverage=coverage,
             abort_generation=abort_generation,
+            qc=qc_verdict,
         )
 
     # -- internals ----------------------------------------------------------
@@ -516,4 +547,5 @@ __all__ = [
     "WRITE_TARGET_POOL",
     "DEFAULT_LOCALIZE_PARAMS",
     "surface_record",
+    "QcThresholds",
 ]

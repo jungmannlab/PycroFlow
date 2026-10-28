@@ -324,6 +324,50 @@ class TestSystemService(unittest.TestCase):
         self.assertEqual(result, 42)
         fluid._pump.assert_called_once_with(fluid.pump_a, vol=100)
 
+    def test_single_stroke_pickup_does_one_movement(self):
+        # One syringe movement only: set the valve, then a single pickup —
+        # never a pickup+dispense cycle, and never the _pump round trip.
+        fluid = MagicMock()
+        fluid.pump_a = MagicMock()
+        fluid.pump_a.syringe_volume = 500
+        svc = SystemService(fluid_system=fluid)
+        svc.single_stroke("pump_a", 120.0, action="pickup", port="in")
+        fluid.pump_a.set_valve.assert_called_once_with("in")
+        fluid.pump_a.pickup.assert_called_once_with(120.0, waitForPump=True)
+        fluid.pump_a.dispense.assert_not_called()
+        fluid._pump.assert_not_called()
+
+    def test_single_stroke_dispense_passes_velocity(self):
+        fluid = MagicMock()
+        fluid.pump_out = MagicMock()
+        fluid.pump_out.syringe_volume = 500
+        svc = SystemService(fluid_system=fluid)
+        svc.single_stroke(
+            "pump_out", 80.0, action="dispense", port="out", velocity=300
+        )
+        fluid.pump_out.set_valve.assert_called_once_with("out")
+        fluid.pump_out.dispense.assert_called_once_with(
+            80.0, 300, waitForPump=True
+        )
+        fluid.pump_out.pickup.assert_not_called()
+
+    def test_single_stroke_rejects_oversized_volume(self):
+        fluid = MagicMock()
+        fluid.pump_a = MagicMock()
+        fluid.pump_a.syringe_volume = 100
+        svc = SystemService(fluid_system=fluid)
+        with self.assertRaises(ValueError):
+            svc.single_stroke("pump_a", 250.0, action="pickup", port="in")
+        fluid.pump_a.pickup.assert_not_called()
+
+    def test_single_stroke_rejects_bad_action(self):
+        fluid = MagicMock()
+        fluid.pump_a = MagicMock()
+        fluid.pump_a.syringe_volume = 500
+        svc = SystemService(fluid_system=fluid)
+        with self.assertRaises(ValueError):
+            svc.single_stroke("pump_a", 10.0, action="flush", port="in")
+
     def test_connection_states(self):
         svc = SystemService()
         self.assertEqual(
@@ -542,6 +586,65 @@ class TestSystemService(unittest.TestCase):
         )
         with self.assertRaises(RuntimeError):
             svc.close_all_valves()
+
+    def test_open_all_valves_opens_every_channel(self):
+        svc = SystemService()
+        svc.load_setup("IbidiEmulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {1: "R1", 2: "R2"},
+                    "special_names": {"flushbuffer_a": 7},
+                },
+            }
+        )
+        mux = svc.fluid_system.multiplexer
+        mux.close_all()
+        self.assertFalse(any(mux.channel_states))
+        svc.open_all_valves()
+        self.assertTrue(all(mux.channel_states))
+
+    def test_open_all_valves_without_multiplexer_raises(self):
+        svc = SystemService()
+        svc.load_setup("Emulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 200},
+                "settings": {
+                    "reservoir_names": {1: "R1"},
+                    "special_names": {"flushbuffer_a": 1},
+                },
+            }
+        )
+        with self.assertRaises(RuntimeError):
+            svc.open_all_valves()
+
+    def test_full_fluid_move_routes_then_injects(self):
+        # The manual equivalent of a protocol 'inject': route the valves to the
+        # reservoir, then drive pump_a (reservoir -> sample) and pump_out
+        # (sample -> waste) together via the architecture's ``_inject``.
+        from unittest.mock import MagicMock
+
+        svc = SystemService()
+        svc.fluid_system = MagicMock(name="fluid_system")
+        svc.set_valves = MagicMock(name="set_valves")
+        svc.full_fluid_move(3, 120.0, velocity=200.0, extractionfactor=1.5)
+        svc.set_valves.assert_called_once_with(3)
+        svc.fluid_system._inject.assert_called_once_with(
+            120.0, delay=0, velocity=200.0, extractionfactor=1.5
+        )
+
+    def test_full_fluid_move_defaults_optional_kwargs(self):
+        # Blank velocity / extraction factor are omitted so ``_inject`` falls
+        # back to the design's parameters.
+        from unittest.mock import MagicMock
+
+        svc = SystemService()
+        svc.fluid_system = MagicMock(name="fluid_system")
+        svc.set_valves = MagicMock(name="set_valves")
+        svc.full_fluid_move(5, 80.0)
+        svc.fluid_system._inject.assert_called_once_with(80.0, delay=0)
 
     def test_toggle_multiplexer_channel_flips_raw_state(self):
         # A raw manual override: toggling one channel does not disturb others

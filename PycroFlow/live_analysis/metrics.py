@@ -150,14 +150,17 @@ class RunningMetrics:
             # (its result dict looks up Pixelsize from info, which rejects None).
             # Substitute {} when we have no metadata so the call never raises.
             info = self._info if self._info is not None else {}
-            _result, s_px = postprocess.nena(locs, info)
+            # picasso 1.0: nena returns the precision in nm (0.11 returned it
+            # in camera pixels). nm is now the authoritative value; derive px
+            # from the pixel size when we have it.
+            _result, s_nm = postprocess.nena(locs, info)
         except Exception:
             return
-        self._nena_px = float(s_px)
+        self._nena_nm = float(s_nm)
         if self._pixelsize_nm:
-            self._nena_nm = float(s_px) * float(self._pixelsize_nm)
+            self._nena_px = float(s_nm) / float(self._pixelsize_nm)
         else:
-            self._nena_nm = None
+            self._nena_px = None
         self._last_nena_at = time.monotonic()
         self._locs_at_last_nena = self._n_locs
 

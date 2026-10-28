@@ -2,8 +2,10 @@
 
 Sections:
 * **Tubing operations** — fill / clean tubings.
-* **Manual control** — a single pump stroke, a pump move between an input and
-  an output reservoir, and direct valve routing.
+* **Manual control** — a dropdown picks one of three pump operations (a single
+  pump stroke, a pump move between an input and an output reservoir, or a full
+  fluid move: the protocol's simultaneous inject + extract), with only the
+  selected operation's controls shown; plus direct valve routing.
 * **STOP ALL MOVES** — a standalone emergency button.
 
 All commands go through
@@ -25,6 +27,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QScrollArea,
     QSplitter,
+    QStackedWidget,
 )
 
 from PycroFlow.gui.widgets.worker import run_in_background
@@ -56,7 +59,9 @@ class FluidTab(QWidget):
             self.clean_btn,
             self.stroke_btn,
             self.move_btn,
+            self.full_btn,
             self.valve_btn,
+            self.open_valves_btn,
             self.close_valves_btn,
         ]
 
@@ -163,15 +168,76 @@ class FluidTab(QWidget):
                 "experiment design uses — not the full setup manifold."
             )
         )
+        # Advisory estimate of the cleaning liquid the design would need.
+        self.clean_volume_hint = self._hint("")
+        outer.addWidget(self.clean_volume_hint)
         self.fill_btn.clicked.connect(self._on_fill)
         self.clean_btn.clicked.connect(self._on_clean)
+        self._refresh_clean_estimate()
         return box
+
+    def _refresh_clean_estimate(self):
+        """Update the advisory 'cleaning liquid required' hint."""
+        hint = getattr(self, "clean_volume_hint", None)
+        if hint is None:
+            return
+        try:
+            vol = self._svc.estimate_cleaning_volume()
+        except Exception:  # pragma: no cover - estimate is best-effort
+            vol = None
+        if isinstance(vol, (int, float)) and not isinstance(vol, bool):
+            hint.setText(
+                "Estimated cleaning liquid required: ~{:.0f} µl "
+                "(per cleaning tank, advisory).".format(vol)
+            )
+        else:
+            hint.setText("")
 
     def _build_manual_group(self):
         box = QGroupBox("Manual control")
         outer = QVBoxLayout(box)
 
-        # Single pump stroke
+        # Operation selector: the three pump operations share one slot via a
+        # stack, so only the selected operation's controls show. Keeps the tab
+        # uncluttered — picking "Full fluid move" hides the stroke/move forms.
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Operation"))
+        self.mode_select = QComboBox()
+        self.mode_select.addItems(
+            [
+                "Single pump stroke",
+                "Pump move (input → output reservoir)",
+                "Full fluid move (inject + extract)",
+            ]
+        )
+        self.mode_select.setToolTip(
+            "Which manual pump operation to show: a single syringe stroke, a "
+            "pump move between two reservoirs, or a full fluid move (pump_a "
+            "injects from a reservoir while pump_out extracts to waste — the "
+            "same two-pump exchange a protocol 'inject' step performs)."
+        )
+        mode_row.addWidget(self.mode_select)
+        mode_row.addStretch()
+        outer.addLayout(mode_row)
+
+        self.mode_stack = QStackedWidget()
+        self.mode_stack.addWidget(self._build_stroke_panel())
+        self.mode_stack.addWidget(self._build_move_panel())
+        self.mode_stack.addWidget(self._build_full_move_panel())
+        self.mode_select.currentIndexChanged.connect(
+            self.mode_stack.setCurrentIndex
+        )
+        outer.addWidget(self.mode_stack)
+
+        # Valve routing stays visible for every mode: the pump operations
+        # above draw from / push to wherever the valves currently point.
+        outer.addWidget(self._build_valve_group())
+        self._refresh_reservoirs()
+        return box
+
+    def _build_stroke_panel(self):
+        # Single pump stroke — one syringe movement (draw OR expel), not a
+        # full pickup+dispense cycle.
         stroke = QGroupBox("Single pump stroke")
         sform = QFormLayout(stroke)
         self.stroke_pump = QComboBox()
@@ -179,47 +245,52 @@ class FluidTab(QWidget):
         self.stroke_vol = QLineEdit("100")
         self.stroke_vel = QLineEdit()
         self.stroke_vel.setPlaceholderText("default")
-        self.stroke_pickup = QComboBox()
-        self.stroke_pickup.addItems(["in", "out"])
-        self.stroke_dispense = QComboBox()
-        self.stroke_dispense.addItems(["out", "in"])
+        # Action is the single movement; port is which syringe valve side it
+        # moves through. Stored (label -> action) so the handler stays terse.
+        self.stroke_action = QComboBox()
+        self.stroke_action.addItem("Draw (pickup)", "pickup")
+        self.stroke_action.addItem("Expel (dispense)", "dispense")
+        self.stroke_port = QComboBox()
+        self.stroke_port.addItems(["in", "out"])
         self.stroke_pump.setToolTip(
             "pump_a drives liquid from a reservoir to the sample; "
             "pump_out is the extraction (waste) pump."
         )
         self.stroke_vol.setToolTip(
-            "Total volume. Larger than the syringe is split into "
-            "back-to-back syringe strokes automatically."
+            "Volume for the single stroke. Must not exceed the syringe "
+            "capacity — one stroke is one syringe movement, never split."
         )
         self.stroke_vel.setToolTip(
             "Blank uses the design's max_velocity. The pump rejects values "
             "outside its own range — check errors.log if nothing moves."
         )
-        self.stroke_pickup.setToolTip(
-            "Which port the syringe draws from: 'in' = the reservoir side "
-            "(as currently routed), 'out' = the sample/waste side."
+        self.stroke_action.setToolTip(
+            "A single syringe movement: 'Draw' aspirates into the syringe, "
+            "'Expel' dispenses out of it. One stroke only — not a round trip."
         )
-        self.stroke_dispense.setToolTip(
-            "Which port the syringe pushes to. Any liquid already in the "
-            "syringe is dispensed here first."
+        self.stroke_port.setToolTip(
+            "Which syringe valve side the stroke moves through: 'in' = the "
+            "reservoir side (as currently routed), 'out' = the sample/waste "
+            "side."
         )
         sform.addRow("Pump", self.stroke_pump)
         sform.addRow("Volume (µL)", self.stroke_vol)
         sform.addRow("Velocity (µL/min)", self.stroke_vel)
-        sform.addRow("Pickup", self.stroke_pickup)
-        sform.addRow("Dispense", self.stroke_dispense)
+        sform.addRow("Action", self.stroke_action)
+        sform.addRow("Port", self.stroke_port)
         self.stroke_btn = QPushButton("Run stroke")
         sform.addRow(self.stroke_btn)
         sform.addRow(
             self._hint(
-                "Moves the syringe only — it does NOT change reservoir routing, "
-                "so it draws from wherever the valves currently point. Use "
-                '"Set valves to reservoir" below first.'
+                "One syringe movement only — it does NOT change reservoir "
+                "routing, so it draws from / pushes to wherever the valves "
+                'currently point. Use "Set valves to reservoir" below first.'
             )
         )
         self.stroke_btn.clicked.connect(self._on_stroke)
-        outer.addWidget(stroke)
+        return stroke
 
+    def _build_move_panel(self):
         # Pump move between reservoirs
         move = QGroupBox("Pump move (input → output reservoir)")
         mform = QFormLayout(move)
@@ -269,8 +340,56 @@ class FluidTab(QWidget):
             )
         )
         self.move_btn.clicked.connect(self._on_move)
-        outer.addWidget(move)
+        return move
 
+    def _build_full_move_panel(self):
+        # Full fluid move: the protocol's inject done manually — pump_a drives
+        # liquid from a reservoir to the sample while pump_out simultaneously
+        # extracts from the sample to waste.
+        full = QGroupBox("Full fluid move (inject + extract)")
+        fform = QFormLayout(full)
+        # Reservoir to inject from — the setup's manifold, like the valve
+        # dropdown, so the plumbing can be exercised beyond the design's set.
+        self.full_res = QComboBox()
+        self.full_vol = QLineEdit("100")
+        self.full_vel = QLineEdit()
+        self.full_vel.setPlaceholderText("default")
+        self.full_ef = QLineEdit()
+        self.full_ef.setPlaceholderText("default")
+        self.full_res.setToolTip(
+            "Reservoir pump_a draws from, routed before the move. Every "
+            "reservoir wired in the selected setup's fluid.reservoirs."
+        )
+        self.full_vol.setToolTip(
+            "Total volume to inject into the sample; split into syringe "
+            "strokes automatically. pump_out extracts alongside it."
+        )
+        self.full_vel.setToolTip(
+            "Injection velocity. Blank uses the design's max_velocity."
+        )
+        self.full_ef.setToolTip(
+            "Extraction-to-injection flow-rate ratio for pump_out. Blank "
+            "uses the design's extractionfactor. Raise it above 1 to extract "
+            "faster than injecting and avoid spillage."
+        )
+        fform.addRow("Reservoir", self.full_res)
+        fform.addRow("Volume (µL)", self.full_vol)
+        fform.addRow("Velocity (µL/min)", self.full_vel)
+        fform.addRow("Extraction factor", self.full_ef)
+        self.full_btn = QPushButton("Run full move")
+        fform.addRow(self.full_btn)
+        fform.addRow(
+            self._hint(
+                "Routes the valves to the reservoir, then runs pump_a "
+                "(reservoir → sample) and pump_out (sample → waste) together "
+                "— the same two-pump exchange a Run Sequence 'inject' step "
+                "performs."
+            )
+        )
+        self.full_btn.clicked.connect(self._on_full_move)
+        return full
+
+    def _build_valve_group(self):
         # Direct valve setting. The reservoirs offered come from the *setup's*
         # manifold, not the loaded design — testing the plumbing means
         # reaching every wired reservoir, including ones no design names.
@@ -293,23 +412,30 @@ class FluidTab(QWidget):
                 "controls above will then use."
             )
         )
-        # Close every ibidi multiplexer channel (ibidi setups only). Unlike a
-        # Hamilton rotary valve, the multiplexer's 24 valves are independent
-        # and can all be closed, connecting no reservoir to the pump.
+        # Open / close every ibidi multiplexer channel at once (ibidi setups
+        # only). Unlike a Hamilton rotary valve — always at exactly one port —
+        # the multiplexer's 24 valves are independent, so they can all be
+        # closed (no reservoir feeds the pump) or all opened at once.
+        valve_all_row = QHBoxLayout()
+        self.open_valves_btn = QPushButton("Open all valves")
         self.close_valves_btn = QPushButton("Close all valves")
+        self.open_valves_btn.setToolTip(
+            "Open every ibidi multiplexer channel at once. Only available on "
+            "setups that use the ibidi multiplexer."
+        )
         self.close_valves_btn.setToolTip(
             "Close every ibidi multiplexer channel, so no reservoir is "
             "connected to the pump. Only available on setups that use the "
             "ibidi multiplexer."
         )
-        vform.addRow(self.close_valves_btn)
+        valve_all_row.addWidget(self.open_valves_btn)
+        valve_all_row.addWidget(self.close_valves_btn)
+        vform.addRow(valve_all_row)
+        self.open_valves_btn.clicked.connect(self._on_open_valves)
         self.close_valves_btn.clicked.connect(self._on_close_valves)
         self.valve_btn.clicked.connect(self._on_set_valves)
         self.valve_res.currentIndexChanged.connect(self._update_route_hint)
-        outer.addWidget(valve)
-        self._refresh_reservoirs()
-
-        return box
+        return valve
 
     def refresh(self):
         """Update the connection label and the setup's reservoir list."""
@@ -321,6 +447,8 @@ class FluidTab(QWidget):
         self._refresh_reservoirs()
         # The setup also fixes the schematic's wiring topology.
         self._reload_topology()
+        # The connected design's cleaning config drives the volume estimate.
+        self._refresh_clean_estimate()
 
     def _reload_topology(self):
         """Rebuild the schematic's static wiring from the loaded setup."""
@@ -406,16 +534,24 @@ class FluidTab(QWidget):
         self._run(self._svc.fill_tubings, "Fill tubings")
 
     def _on_clean(self):
-        reply = QMessageBox.question(
-            self,
-            "Clean tubings",
-            "Start the tubing cleaning procedure?\n\n"
-            "Make sure the input and output needles are in the same "
-            "container (fluidly connected) and cleaning reservoirs are "
-            "connected to their tanks.",
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self._run(self._svc.clean_tubings, "Clean tubings")
+        # The design's cleaning section may waive the needles-connected
+        # confirmation; respect it (default: ask).
+        try:
+            require_confirm = self._svc.cleaning_requires_confirmation()
+        except Exception:  # pragma: no cover - default to asking
+            require_confirm = True
+        if require_confirm:
+            reply = QMessageBox.question(
+                self,
+                "Clean tubings",
+                "Start the tubing cleaning procedure?\n\n"
+                "Make sure the input and output needles are in the same "
+                "container (fluidly connected) and cleaning reservoirs are "
+                "connected to their tanks.",
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        self._run(self._svc.clean_tubings, "Clean tubings")
 
     def _on_stroke(self):
         vol, ok = self._num(self.stroke_vol, "Volume", True, float)
@@ -426,13 +562,13 @@ class FluidTab(QWidget):
             return
         kwargs = dict(
             vol=vol,
-            pickup_dir=self.stroke_pickup.currentText(),
-            dispense_dir=self.stroke_dispense.currentText(),
+            action=self.stroke_action.currentData(),
+            port=self.stroke_port.currentText(),
         )
         if vel is not None:
             kwargs["velocity"] = vel
         self._run(
-            lambda: self._svc.manual_pump(
+            lambda: self._svc.single_stroke(
                 self.stroke_pump.currentText(), **kwargs
             ),
             "Pump stroke",
@@ -474,18 +610,25 @@ class FluidTab(QWidget):
         )
 
     def _refresh_reservoirs(self):
-        """Re-fill the reservoir dropdown from the loaded setup's manifold."""
-        current = self.valve_res.currentData()
-        self.valve_res.clear()
-        for rid in self._svc.reservoir_ids():
-            self.valve_res.addItem(str(rid), rid)
-        if current is not None:
-            index = self.valve_res.findData(current)
-            if index >= 0:
-                self.valve_res.setCurrentIndex(index)
+        """Re-fill the reservoir dropdowns from the loaded setup's manifold."""
+        ids = list(self._svc.reservoir_ids())
+        # Both the valve-routing and full-move dropdowns offer the setup's
+        # manifold; refill each while preserving its current selection.
+        for combo in (self.valve_res, self.full_res):
+            current = combo.currentData()
+            combo.clear()
+            for rid in ids:
+                combo.addItem(str(rid), rid)
+            if current is not None:
+                index = combo.findData(current)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
         self.valve_btn.setEnabled(self.valve_res.count() > 0)
-        # "Close all valves" is only meaningful for the ibidi multiplexer.
-        self.close_valves_btn.setVisible(self._svc.has_multiplexer())
+        self.full_btn.setEnabled(self.full_res.count() > 0)
+        # "Open/Close all valves" are only meaningful for the ibidi multiplexer.
+        has_mux = self._svc.has_multiplexer()
+        self.open_valves_btn.setVisible(has_mux)
+        self.close_valves_btn.setVisible(has_mux)
         self._update_route_hint()
 
     def _update_route_hint(self):
@@ -518,6 +661,37 @@ class FluidTab(QWidget):
             )
             return
         self._run(lambda: self._svc.set_valves(rid), "Set valves")
+
+    def _on_full_move(self):
+        rid = self.full_res.currentData()
+        if rid is None:
+            QMessageBox.warning(
+                self,
+                "No reservoir",
+                "The selected setup wires no reservoirs to inject from.",
+            )
+            return
+        vol, ok = self._num(self.full_vol, "Volume", True, float)
+        if not ok:
+            return
+        vel, ok = self._num(self.full_vel, "Velocity", False, float)
+        if not ok:
+            return
+        ef, ok = self._num(self.full_ef, "Extraction factor", False, float)
+        if not ok:
+            return
+        kwargs = {}
+        if vel is not None:
+            kwargs["velocity"] = vel
+        if ef is not None:
+            kwargs["extractionfactor"] = ef
+        self._run(
+            lambda: self._svc.full_fluid_move(rid, vol, **kwargs),
+            "Full fluid move",
+        )
+
+    def _on_open_valves(self):
+        self._run(self._svc.open_all_valves, "Open all valves")
 
     def _on_close_valves(self):
         self._run(self._svc.close_all_valves, "Close all valves")

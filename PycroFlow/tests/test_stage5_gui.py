@@ -1957,7 +1957,9 @@ class TestSchemaForm(unittest.TestCase):
         items = [key_w.itemText(i) for i in range(key_w.count())]
         self.assertEqual(set(items), {"1", "2", "3"})
 
-    def test_cleaning_reservoirs_tooltip(self):
+    def test_cleaning_section_renders(self):
+        # The flat cleaning_reservoirs field became a nested cleaning section;
+        # it must render its own editor in the fluid settings form.
         from PycroFlow.gui.widgets.schema_form import SchemaForm
         from PycroFlow.schemas.experiment_design import FluidSettings
 
@@ -1970,9 +1972,7 @@ class TestSchemaForm(unittest.TestCase):
             },
             context={"reservoir_names": ["R1"]},
         )
-        self.assertIn(
-            "omma", form.field_editor("cleaning_reservoirs").toolTip()
-        )
+        self.assertIsNotNone(form.field_editor("cleaning"))
 
     def test_units_shown_next_to_inputs(self):
         from PyQt6.QtWidgets import QLabel
@@ -2272,6 +2272,7 @@ class TestFluidTab(unittest.TestCase):
         from PycroFlow.gui.tabs import fluid_tab as ft
 
         tab, svc = self._tab()
+        svc.cleaning_requires_confirmation.return_value = True
         with patch.object(
             ft.QMessageBox,
             "question",
@@ -2280,20 +2281,60 @@ class TestFluidTab(unittest.TestCase):
             tab._on_clean()
         svc.clean_tubings.assert_not_called()
 
-    def test_stroke_calls_manual_pump(self):
+    def test_clean_skips_dialog_when_confirmation_waived(self):
+        from unittest.mock import patch
+        from PycroFlow.gui.tabs import fluid_tab as ft
+
+        tab, svc = self._tab()
+        svc.cleaning_requires_confirmation.return_value = False
+        with patch.object(
+            ft.QMessageBox,
+            "question",
+            side_effect=AssertionError("dialog must not be shown"),
+        ):
+            tab._on_clean()
+        svc.clean_tubings.assert_called_once()
+
+    def test_clean_estimate_hint_renders_number(self):
+        tab, svc = self._tab()
+        svc.estimate_cleaning_volume.return_value = 1234.0
+        tab._refresh_clean_estimate()
+        self.assertIn("1234", tab.clean_volume_hint.text())
+        # A non-numeric / unavailable estimate clears the hint.
+        svc.estimate_cleaning_volume.return_value = None
+        tab._refresh_clean_estimate()
+        self.assertEqual(tab.clean_volume_hint.text(), "")
+
+    def test_stroke_calls_single_stroke(self):
+        # The single stroke is one syringe movement (draw OR expel), driven by
+        # an action + port, not a full pickup+dispense cycle.
         tab, svc = self._tab()
         tab.stroke_pump.setCurrentText("pump_a")
         tab.stroke_vol.setText("150")
         tab.stroke_vel.setText("200")
-        tab.stroke_pickup.setCurrentText("in")
-        tab.stroke_dispense.setCurrentText("out")
+        tab.stroke_action.setCurrentIndex(
+            tab.stroke_action.findData("dispense")
+        )
+        tab.stroke_port.setCurrentText("out")
         tab._on_stroke()
-        svc.manual_pump.assert_called_once_with(
+        svc.single_stroke.assert_called_once_with(
             "pump_a",
             vol=150.0,
-            pickup_dir="in",
-            dispense_dir="out",
+            action="dispense",
+            port="out",
             velocity=200.0,
+        )
+        svc.manual_pump.assert_not_called()
+
+    def test_stroke_omits_velocity_when_blank(self):
+        tab, svc = self._tab()
+        tab.stroke_pump.setCurrentText("pump_out")
+        tab.stroke_vol.setText("50")
+        tab.stroke_action.setCurrentIndex(tab.stroke_action.findData("pickup"))
+        tab.stroke_port.setCurrentText("in")
+        tab._on_stroke()
+        svc.single_stroke.assert_called_once_with(
+            "pump_out", vol=50.0, action="pickup", port="in"
         )
 
     def test_move_includes_reservoirs(self):
@@ -2333,6 +2374,57 @@ class TestFluidTab(unittest.TestCase):
         tab, svc = self._tab()
         tab._on_close_valves()
         svc.close_all_valves.assert_called_once()
+
+    def test_open_all_valves_calls_service(self):
+        tab, svc = self._tab()
+        tab._on_open_valves()
+        svc.open_all_valves.assert_called_once()
+
+    def test_all_valves_buttons_only_for_multiplexer(self):
+        # The ibidi-only open/close controls show for multiplexer setups and
+        # hide for Hamilton-rotary-valve ones.
+        tab, svc = self._tab()
+        svc.has_multiplexer.return_value = True
+        tab._refresh_reservoirs()
+        self.assertFalse(tab.close_valves_btn.isHidden())
+        self.assertFalse(tab.open_valves_btn.isHidden())
+        svc.has_multiplexer.return_value = False
+        tab._refresh_reservoirs()
+        self.assertTrue(tab.close_valves_btn.isHidden())
+        self.assertTrue(tab.open_valves_btn.isHidden())
+
+    def test_operation_dropdown_switches_the_shown_controls(self):
+        # Picking an operation shows only that operation's panel.
+        tab, _ = self._tab()
+        self.assertEqual(tab.mode_select.count(), 3)
+        for i in range(3):
+            tab.mode_select.setCurrentIndex(i)
+            self.assertEqual(tab.mode_stack.currentIndex(), i)
+
+    def test_full_move_calls_service(self):
+        tab, svc = self._tab()
+        tab.full_res.setCurrentIndex(tab.full_res.findData(8))
+        tab.full_vol.setText("120")
+        tab.full_vel.setText("200")
+        tab.full_ef.setText("1.5")
+        tab._on_full_move()
+        svc.full_fluid_move.assert_called_once_with(
+            8, 120.0, velocity=200.0, extractionfactor=1.5
+        )
+
+    def test_full_move_omits_blank_optionals(self):
+        tab, svc = self._tab()
+        tab.full_res.setCurrentIndex(tab.full_res.findData(3))
+        tab.full_vol.setText("80")
+        tab._on_full_move()
+        svc.full_fluid_move.assert_called_once_with(3, 80.0)
+
+    def test_full_move_dropdown_offers_the_setups_manifold(self):
+        tab, _ = self._tab(reservoir_ids=(2, 3, 8, 20))
+        self.assertEqual(
+            [tab.full_res.itemData(i) for i in range(tab.full_res.count())],
+            [2, 3, 8, 20],
+        )
 
     def test_close_all_valves_button_only_for_multiplexer(self):
         # The ibidi-only control is shown for multiplexer setups and hidden

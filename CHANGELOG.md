@@ -7,8 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Migrate to picasso 1.0** (`picassosr>=1.0.0a1`). The live-analysis seam is
+  updated for the 1.0 API: `localize_batch` now converts the identification
+  param dict (`"Min. Net Gradient"`, `"Box Size"`) into a
+  `picasso.localize.IdentificationParameters` before calling the upstreamed
+  `localize.localize_frames` (which in 1.0 takes `identification_parameters=`
+  instead of a `params` dict, and `parallel` instead of `threaded`). The live
+  NeNA metric now reads `postprocess.nena`'s precision as **nm** (1.0 returns
+  nm; 0.11 returned camera pixels), deriving the px value from the pixel size.
+  `localize.identify_in_image` and `io.TiffMultiMap` are unchanged in 1.0.
+
 ### Added
 
+- **Experiment-design cleaning section.** The free-text `cleaning_reservoirs`
+  list is replaced by a structured `cleaning` block (`CleaningSettings` in
+  `schemas/experiment_design.py`): add/remove **cleaning-round** dropdown rows
+  (one cleaning-liquid reservoir per round, mirroring the exchange `imagers`
+  editor), a **reuse-vs-discard** toggle (`reuse_cleaning_liquid` → chain vs
+  individual mode), a **pre-empty** extract volume, an **extra overfill**
+  volume, clean velocity/delay, **flush-out strokes**, and a needles-connected
+  confirmation. The config threads through `configs.assemble_hamilton_config`
+  into `LegacyArchitecture.cleaning_config`, from which `clean_tubings()`
+  defaults every parameter. Legacy designs with a flat `cleaning_reservoirs`
+  list still load (migrated to `cleaning.cleaning_rounds`). The Fluid tab shows
+  an advisory **required-cleaning-liquid estimate**
+  (`SystemService.estimate_cleaning_volume`) and honours the confirmation flag.
+- **Fluid tab: true single pump stroke.** The "Single pump stroke" control now
+  performs one syringe movement — **Draw** (pickup) or **Expel** (dispense)
+  through a chosen port — instead of a full pickup-and-dispense cycle
+  (`SystemService.single_stroke`; volume is validated against the syringe
+  capacity and never split).
+- **Fluid tab: full fluid move + open-all-valves.** The Manual control section
+  now picks one of three pump operations from a dropdown — single pump stroke,
+  pump move, or a new **full fluid move** — showing only the selected
+  operation's controls (`QStackedWidget`) to de-clutter the tab. The full fluid
+  move runs the protocol's `inject` manually: pump_a drives liquid from a
+  chosen reservoir to the sample while pump_out simultaneously extracts to
+  waste (`SystemService.full_fluid_move` → the architecture's `_inject`, with
+  optional velocity / extraction factor). The ibidi multiplexer's "Close all
+  valves" button gains an **"Open all valves"** companion
+  (`SystemService.open_all_valves` → `multiplexer.open_all()`); both appear only
+  on multiplexer setups.
+- **WP-9 hand-off QC gate (Phase B).** A rule-based, deterministic QC gate
+  (`live_analysis/qc_gate.py`) marks a QC-passed dataset **ready** for cluster
+  hand-off. `evaluate_qc(metrics, QcThresholds)` is a pure evaluator scoring a
+  `RunningMetrics` snapshot against **configurable thresholds** (carried on
+  `FovConfig.qc_thresholds`, not hard-coded): `min_n_locs` (default 1),
+  `max_nena_nm` (default off), `min_spots_per_frame` (default off) — a `None`
+  threshold disables its rule. It returns a structured verdict
+  (`{passed, reasons, metrics}`). In `LiveAnalysisService.run_fov`, after the
+  per-FOV `acquisition_run` record is posted (satisfying `mark_ready`'s FK), the
+  gate evaluates the final metrics and, **iff they pass** (and coverage is
+  complete), calls `registry.mark_ready(acquisition_run_id=...)` so the Phase-C
+  cluster worker can `claim` the dataset; a fail records the reasons and does
+  **not** ready it. The verdict rides on `FovResult.qc` and the `qc` seam
+  channel. Best-effort / non-blocking throughout: registry unset is a no-op (the
+  run is byte-identical to today), and a registry outage / duplicate-ready (409)
+  / any client error is swallowed and logged — the gate NEVER blocks or breaks
+  acquisition.
 - **Post-run replay (master scrubber).** A run's live streams are recorded to a
   `*_replay.jsonl` timeline (`live_analysis/replay_recorder.py`): the seam's
   thumbnail/metrics/state/log updates (thumbnails already carry image bytes +
@@ -55,6 +113,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed / Changed
 
+- **Cleaning and tubing-fill now expel through the output needle (ibidi fix).**
+  On setups without a separate flush valve (the ibidi multiplexer — and in fact
+  every shipped setup, since none declares `valve_flush`), the push-out-to-needle
+  steps passed `dispense_flushvalve=False` / `pickup_flushvalve=False`, which
+  drove `_set_flush_valve` to reset pump_a to its input position right before the
+  move — so liquid was only shuffled between input reservoirs instead of being
+  pushed out the sample needle. A shared `_sample_side_flushvalve()` helper
+  (None on flush-valve-less setups) now governs these strokes so
+  `pickup_dir`/`dispense_dir` alone set the pump port; applied to the three
+  `clean_tubings` paths **and** the `fill_tubings` / `fill_tubings_reverse` /
+  `empty_tubings_to_flushbuffer` needle strokes. Each path is expelled through
+  the needle and extracted to waste by `pump_out`.
 - **Imager-reuse verification softened to a warning.** Reusing an imager
   (notably `initial_imager` re-listed in the exchange rounds) no longer raises a
   hard validation error — redundant imaging rounds are a legitimate thing to
