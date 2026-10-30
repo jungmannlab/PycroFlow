@@ -54,6 +54,7 @@ atomic command once the hardware supports it.
 
 from __future__ import annotations
 
+import atexit
 import threading
 import time
 
@@ -170,7 +171,14 @@ class IbidiMultiplexer(_ValveABC):
         """Open the serial port and confirm the device identifies as ``MX``."""
         self._port = self._normalize_port(port)
         self._baud, self._timeout = baud, timeout
-        self._open_serial()
+        self._open_serial_with_retry()
+        # Release the port on interpreter shutdown even when the GUI's clean
+        # disconnect path (closeEvent -> SystemService.close -> close()) is
+        # bypassed — an unhandled exception / crash during a session still runs
+        # atexit, so the next PycroFlow start reconnects without a physical USB
+        # replug. Idempotent: close() unregisters this, and re-registering on a
+        # reconnect is harmless (close is a no-op once the handle is gone).
+        atexit.register(self.close)
         ident = self.identify()
         if DEVICE_ID not in ident:
             logger.warning(
@@ -204,6 +212,39 @@ class IbidiMultiplexer(_ValveABC):
             exclusive=True,
         )
 
+    def _open_serial_with_retry(self, attempts=4, delay=0.75):
+        """Open the port, retrying briefly when it is transiently held.
+
+        After an unclean PycroFlow exit the OS / USB-serial driver can take a
+        moment to release the previous handle; a fresh connect then races that
+        release and fails on the first open. Retry a few times before giving up
+        so a restart reconnects without a physical USB replug. A genuinely
+        stuck port (one that needs device re-enumeration) still raises — now
+        with a message that names the replug workaround.
+        """
+        last_exc = None
+        for attempt in range(attempts):
+            try:
+                self._open_serial()
+                return
+            except SerialException as exc:
+                last_exc = exc
+                if attempt + 1 < attempts:
+                    logger.warning(
+                        "ibidi port {} busy ({!r}); retry {}/{} in {}s".format(
+                            self._port, exc, attempt + 1, attempts - 1, delay
+                        )
+                    )
+                    time.sleep(delay)
+        raise SerialException(
+            "could not open the ibidi multiplexer on {} after {} attempts: "
+            "{!r}. If PycroFlow was not shut down cleanly the port can stay "
+            "held until the device is re-enumerated — unplug and replug the "
+            "ibidi USB cable, then reconnect.".format(
+                self._port, attempts, last_exc
+            )
+        ) from last_exc
+
     @staticmethod
     def _normalize_port(port):
         port = str(port)
@@ -222,6 +263,11 @@ class IbidiMultiplexer(_ValveABC):
         the whole shutdown. Takes ``self._lock`` so it can't swap the handle
         out from under an in-flight :meth:`_command` on another thread.
         """
+        # Drop the shutdown safety-net first: once closed deterministically
+        # there is nothing for atexit to release, and leaving it registered
+        # would pin this object alive until interpreter exit. No-op when never
+        # registered (direct hardware use without connect()).
+        atexit.unregister(self.close)
         with self._lock:
             if self._serial is not None:
                 try:
