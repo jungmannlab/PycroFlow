@@ -354,13 +354,44 @@ class ImagingSystem(AbstractSystem):
         events = multi_d_acquisition_events(
             num_time_points=10, time_interval_s=0, channel_exposures_ms=[100]
         )
+        # Count the frames that actually reach the pycromanager (Python)
+        # client. `acq.acquire(...)` returns without raising even when the
+        # MM->ZMQ image stream delivers nothing, so a bare test "passes" and
+        # the system reports "connected" while every real run and the live
+        # preview silently show no images. Teeing through an image_process_fn
+        # (the same hook record_movie uses) turns that silent failure into a
+        # loud, actionable log line at connect time.
+        streamed = {"n": 0}
+
+        def _count(img, meta, event_queue):
+            streamed["n"] += 1
+            return (img, meta)
+
         with Acquisition(
             directory=self.config["save_dir"],
             name="testacquisition",
             show_display=False,
+            image_process_fn=_count,
             debug=False,
         ) as acq:
             acq.acquire(events)
+        if streamed["n"] == 0:
+            logger.error(
+                "test acquisition completed but 0/10 frames reached the "
+                "pycromanager (Python) client. The MM connection and MM's own "
+                "native Live can still work in this state — this is the "
+                "signature of a pycromanager 1.0 <-> Micro-Manager nightly "
+                "version mismatch or a blocked ZMQ image stream. Until it is "
+                "resolved, both orchestrated runs and the Live preview will "
+                "show NO images even though fluidics run normally. Align the "
+                "MM 2.0 nightly with pycromanager 1.0 (see the Acquisition "
+                "import note in imaging.py)."
+            )
+        else:
+            logger.info(
+                "test acquisition streamed {}/10 frames to the Python "
+                "client.".format(streamed["n"])
+            )
 
     def record_movie(self, acq_name, acquisition_config):
         """Record a movie via pycromanager.
@@ -448,6 +479,27 @@ class ImagingSystem(AbstractSystem):
         ):
             viewer.close()
         self.acquiring = False
+        # curr_frame counts frames that reached image_process_fn (the Python
+        # client). Zero means the MDA ran but the camera streamed NO frames to
+        # pycromanager — the raw movie on disk is empty. Surface it loudly:
+        # with fluidics working this is otherwise a silent no-op run, and it
+        # is the same MM<->pycromanager streaming fault test_acquisition warns
+        # about. A nonzero count here with an empty dataset on disk instead
+        # points at the save path (pycromanager/ndstorage), not the stream.
+        # Skip the warning when the FOV was intentionally stopped before any
+        # frame (operator Abort, or a live-analysis early-FOV-end) — that is
+        # not a streaming fault and the scary message would misdiagnose it.
+        aborted = self.acq_abort.is_set() or (
+            tap is not None and tap.fov_end_requested()
+        )
+        if self.curr_frame == 0 and not aborted:
+            logger.error(
+                "acquisition {!r}: 0 frames reached the pycromanager client "
+                "(requested {} frames at {} ms exposure) — nothing was saved. "
+                "The fluidics ran but no images were acquired. Check the "
+                "pycromanager 1.0 <-> Micro-Manager nightly version handshake "
+                "and the ZMQ image stream.".format(acq_name, n_frames, t_exp)
+            )
         self.pfs_log.to_excel(os.path.join(acq_dir, acq_name + "_pfs.xlsx"))
         if self.protocol["parameters"].get("show_progress"):
             self.probar.end_progress()
@@ -513,22 +565,37 @@ class ImagingSystem(AbstractSystem):
                 self.probar.progress_increment()
             except Exception as e:
                 print(e)
-        # log PFS position
+        # log PFS position. These ZMQ property reads can hiccup on a busy
+        # Core mid-stream; a raise here would propagate into pycromanager's
+        # image-processor thread and silently stop EVERY subsequent frame from
+        # being saved. Guard it so a PFS read failure degrades logging only —
+        # the frame itself is always still returned for saving below.
+        pfs_status = None
         if self.curr_frame % 100 == 0:
-            pfs_state = self.core.get_property(
-                self.pfs_pars["tag_status"], self.pfs_pars["prop_state"]
-            )
-            pfs_status = self.core.get_property(
-                self.pfs_pars["tag_status"], self.pfs_pars["prop_status"]
-            )
-            self.pfs_log.loc[int(self.curr_frame / 100)] = {
-                "datetime": datetime.now(),
-                "frame": self.curr_frame,
-                # 'pfs': self.core.get_position(self.pfs_pars['tag_pfs']),
-                "zdrive": self.core.get_position(self.pfs_pars["tag_zdrive"]),
-                "state": pfs_state,
-                "status": pfs_status,
-            }
+            try:
+                pfs_state = self.core.get_property(
+                    self.pfs_pars["tag_status"], self.pfs_pars["prop_state"]
+                )
+                pfs_status = self.core.get_property(
+                    self.pfs_pars["tag_status"], self.pfs_pars["prop_status"]
+                )
+                self.pfs_log.loc[int(self.curr_frame / 100)] = {
+                    "datetime": datetime.now(),
+                    "frame": self.curr_frame,
+                    # 'pfs': self.core.get_position(self.pfs_pars['tag_pfs']),
+                    "zdrive": self.core.get_position(
+                        self.pfs_pars["tag_zdrive"]
+                    ),
+                    "state": pfs_state,
+                    "status": pfs_status,
+                }
+            except Exception as exc:  # noqa: BLE001 - must never kill the MDA
+                logger.error(
+                    "PFS logging raised on frame {} ({!r}); continuing the "
+                    "acquisition (frame still saved).".format(
+                        self.curr_frame, exc
+                    )
+                )
             if (
                 _pfs_is_unhealthy(pfs_status)
                 and (self.handler_ref is not None)
