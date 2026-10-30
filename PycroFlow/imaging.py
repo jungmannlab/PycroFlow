@@ -119,6 +119,15 @@ class ImagingSystem(AbstractSystem):
     def __init__(self, config):
         self.config = config
 
+        # Record which interpreter + acquisition-stack versions this process is
+        # actually running, as the first imaging log line. A GUI launched from
+        # a different conda env than the operator's console is the commonest
+        # rig confusion (the `[gui]` extra does NOT install pycromanager — it
+        # lives in `[hardware]`), and numpy 2.x vs pycromanager's image
+        # deserialization is the flagged ZMQ-stream risk; both are answered
+        # here instead of guessed at.
+        self._log_acquisition_env()
+
         # Acquire the single-process MM Core lock BEFORE touching Core/Studio.
         # If a separately-run monet GUI (or another PycroFlow instance) is
         # already attached, MmLockHeld is raised here with a clear message
@@ -346,6 +355,37 @@ class ImagingSystem(AbstractSystem):
         # if self.acq_lock:
         #     if self.acq_th.i == self.acq_th.n - 1:
         #         self.acq_th.join()
+
+    @staticmethod
+    def _log_acquisition_env():
+        """Log the interpreter + pycromanager/numpy versions once at connect.
+
+        Reaching this point already proves ``pycromanager`` imported (it is a
+        module-level import; a missing install fails earlier, at
+        ``import PycroFlow.imaging``), so this confirms *which* install the
+        running process uses — the answer to "the GUI logs frames but my
+        console has no pycromanager" (two different environments) — and the
+        numpy version, the suspect in the numpy-2 vs pycromanager image-stream
+        ABI. Best-effort: never raises.
+        """
+        import sys
+
+        try:
+            import pycromanager
+
+            pm_version = getattr(pycromanager, "__version__", "unknown")
+        except Exception as exc:  # pragma: no cover - import-order defensive
+            pm_version = "NOT IMPORTABLE ({!r})".format(exc)
+        try:
+            import numpy
+
+            np_version = numpy.__version__
+        except Exception:  # pragma: no cover - numpy is a hard dep
+            np_version = "unknown"
+        logger.info(
+            "imaging acquisition env: python={} | pycromanager={} | "
+            "numpy={}".format(sys.executable, pm_version, np_version)
+        )
 
     def test_acquisition(self):
         # test the possibility to acquire (fail early)
