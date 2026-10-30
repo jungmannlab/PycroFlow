@@ -2504,17 +2504,7 @@ class TestFluidTab(unittest.TestCase):
         svc.stop_all_moves.assert_called_once()
 
 
-# Driving a real QThread while spinning the Qt event loop with processEvents()
-# SIGSEGVs on the hosted GitHub runner's offscreen Qt (reproducible there, never
-# locally or on the lab box) — a Qt/native-lib interaction, not a defect in the
-# tiny `run_in_background` helper this covers. Skip on GitHub Actions only so
-# hosted CI is green; the test still runs for every developer locally. Tracked
-# as a separate CI-infra item (hosted offscreen-Qt segfault).
 @unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
-@unittest.skipIf(
-    os.environ.get("GITHUB_ACTIONS") == "true",
-    "QThread + Qt event-pump segfaults on hosted offscreen Qt; runs locally",
-)
 class TestWorker(unittest.TestCase):
 
     @classmethod
