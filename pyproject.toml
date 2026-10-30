@@ -103,7 +103,14 @@ hardware = [
 gui = [
     # C41 harmonization: match the anchor PyQt6 range (and monet's, so its
     # window embeds in-process).
-    "PyQt6>=6.10.2,<7",
+    #
+    # Capped below 6.12: the PyQt6-Qt6 6.12.0 native libraries (pulled by PyQt6
+    # 6.12.0) SIGSEGV on the offscreen Qt platform when the event loop is
+    # spun with processEvents() while a QThread runs — reproduced on the hosted
+    # CI runner the moment it picked up 6.12.0 (6.11.2 was fine). Stay on 6.11.x
+    # until a 6.12.x fixes it; re-check by bumping the cap and running the
+    # headless GUI suite (PycroFlow.tests.test_stage5_gui.TestWorker).
+    "PyQt6>=6.10.2,<6.12",
 ]
 
 # WP-FLUIDICS-CAM: real webcam capture for the fluidics monitoring subsystem.
