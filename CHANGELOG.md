@@ -7,7 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Imaging raw data is saved under the current run's `save_dir`.** The
+  acquisition folder is now resolved + created at **run start** from the live
+  experiment design (`ImagingSystem.prepare_savedir`, called from
+  `ExperimentService.start`), not bound once at imaging connect. A design
+  loaded/edited after connecting no longer writes raw NDTiff into the
+  previously-connected design's folder, images co-locate with
+  `<save_dir>/fluidics_cam`, the chosen path is logged (`imaging run data ->`),
+  and a mere reconnect no longer spawns an empty `_N` folder.
+- **ibidi multiplexer survives long idle gaps and unclean exits.** A keep-alive
+  thread issues a single bounded `ID` probe over idle periods so Windows USB
+  selective-suspend can't drop the port mid-run (observed: a ~2.3 h idle during
+  a 40k-frame acquire → "device not functioning"); the serial port is released
+  via `atexit` even when a crash bypasses the clean-disconnect path; and
+  `connect()` retries the open so a restart reconnects without a physical USB
+  replug. All overridable via the setup's `multiplexer:` block
+  (`keepalive_interval`, `0` disables).
+- **Imaging stream diagnostics.** `test_acquisition` counts frames reaching the
+  pycromanager (Python) client and logs the interpreter + pycromanager/numpy
+  versions at connect, so a dead MM↔Python ZMQ stream (or a `[gui]`-only env
+  missing the `[hardware]` pycromanager) is reported loudly instead of running
+  fluidics-only with no images.
+
 ### Changed
+
+- **Cap `PyQt6<6.12` in the `[gui]` extra.** The PyQt6-Qt6 6.12.0 native
+  libraries SIGSEGV on the offscreen Qt platform when the event loop is pumped
+  with a running `QThread`; stay on 6.11.x until a 6.12.x fixes it.
 
 - **Migrate to picasso 1.0** (`picassosr>=1.0.0a1`). The live-analysis seam is
   updated for the 1.0 API: `localize_batch` now converts the identification

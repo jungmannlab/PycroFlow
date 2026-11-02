@@ -195,8 +195,10 @@ class IbidiMultiplexer(_ValveABC):
         # disconnect path (closeEvent -> SystemService.close -> close()) is
         # bypassed — an unhandled exception / crash during a session still runs
         # atexit, so the next PycroFlow start reconnects without a physical USB
-        # replug. Idempotent: close() unregisters this, and re-registering on a
-        # reconnect is harmless (close is a no-op once the handle is gone).
+        # replug. Unregister first so a reconnect without an intervening close
+        # keeps exactly one registration (atexit does not dedupe) rather than
+        # accumulating stale entries that pin this object alive until exit.
+        atexit.unregister(self.close)
         atexit.register(self.close)
         ident = self.identify()
         if DEVICE_ID not in ident:
@@ -326,49 +328,55 @@ class IbidiMultiplexer(_ValveABC):
         self._ka_thread.start()
 
     def _stop_keepalive(self):
-        """Signal the keep-alive thread to exit and join it (best effort)."""
+        """Signal the keep-alive thread to exit and join it (best effort).
+
+        A single bounded probe (see :meth:`_keepalive_loop`) holds the lock for
+        at most one read timeout, so this join reliably completes rather than
+        racing an open-ended reopen storm.
+        """
         self._ka_stop.set()
         t, self._ka_thread = self._ka_thread, None
         if t is not None and t is not threading.current_thread():
-            t.join(timeout=2.0)
+            t.join(timeout=self._timeout + 1.0)
 
     def _keepalive_loop(self):  # pragma: no cover - timing/thread dependent
         """Ping the device whenever the link has been idle too long.
 
         Wakes every few seconds (promptly on stop) and, if no real command has
-        run within ``keepalive_interval``, issues one read-only ``ID`` query to
-        keep the USB link out of selective-suspend. Exception-proof: a failed
-        ping (dropped device) is logged, and because it routes through
-        ``_command`` it also *reopens* the port — a proactive reconnect so the
-        next real valve command may find the link already recovered.
+        run within ``keepalive_interval``, issues one read-only ``ID`` probe to
+        keep the USB link out of selective-suspend. The probe is SINGLE-shot
+        (``retries=0``): it must not run the full reopen storm, which on a dead
+        device would hold the lock for many seconds — blocking real valve
+        commands and defeating :meth:`close`'s join. Recovering a genuinely
+        dropped link is the next real command's job (it retries + reopens).
+        ``_last_activity`` is bumped every probe (success or failure) so a dead
+        link is probed at most once per interval, not every tick.
         """
         interval = self._keepalive_interval
+        # Capture the stop event locally: a reconnect may swap self._ka_stop,
+        # and this thread must keep waiting on the one it was started with.
+        stop = self._ka_stop
         # How often to check the idle clock. Stop is instant regardless (the
         # Event wakes wait() immediately), so this only bounds check latency;
         # cap at 5 s for the 30 s default, floor low so small intervals work.
         tick = max(0.05, min(interval, 5.0))
-        while not self._ka_stop.wait(tick):
+        while not stop.wait(tick):
             if time.monotonic() - self._last_activity < interval:
                 continue  # recent real traffic — no ping needed
             try:
-                status = self.get_status()  # read-only; "" on failure
+                self._command("ID", retries=0)  # single bounded probe
+                logger.debug("ibidi keep-alive ok")
             except Exception as exc:  # noqa: BLE001 - keep the thread alive
-                logger.warning("ibidi keep-alive ping error: {!r}".format(exc))
-                self._last_activity = time.monotonic()
-                continue
-            self._last_activity = time.monotonic()
-            if status:
-                logger.debug("ibidi keep-alive ok ({!r})".format(status))
-            else:
                 logger.warning(
-                    "ibidi keep-alive got no response on {}; the link may "
-                    "have dropped (USB suspend / device unplugged)".format(
-                        self._port
+                    "ibidi keep-alive got no response on {} ({!r}); the link "
+                    "may have dropped (USB suspend / unplug)".format(
+                        self._port, exc
                     )
                 )
+            self._last_activity = time.monotonic()
 
     # -- low-level command ----------------------------------------------------
-    def _command(self, cmd):
+    def _command(self, cmd, retries=None):
         """Send one ``;``-terminated command and return the stripped reply.
 
         Serial errors (notably the rig's intermittent write timeout) are
@@ -377,6 +385,11 @@ class IbidiMultiplexer(_ValveABC):
         hiccup doesn't abort a run. A fault that persists across all attempts
         re-raises the last :class:`~serial.SerialException` — the caller
         (orchestration) turns that into a loud run abort rather than a hang.
+
+        ``retries`` overrides :attr:`command_retries` for this one call. The
+        keep-alive probe passes ``retries=0`` so a dead link can't hold the
+        lock through a multi-second reopen storm (which would block real
+        commands and defeat :meth:`close`'s join).
         """
         if self._serial is None:
             raise RuntimeError("ibidi multiplexer is not connected")
@@ -384,12 +397,15 @@ class IbidiMultiplexer(_ValveABC):
             cmd = cmd + TERMINATOR
         payload = (cmd + self.line_ending).encode()
         last_exc = None
-        for attempt in range(self.command_retries + 1):
+        n_retries = (
+            self.command_retries if retries is None else max(0, retries)
+        )
+        for attempt in range(n_retries + 1):
             if attempt:
                 logger.warning(
                     "ibidi {!r} serial error ({!r}); retry {}/{} after "
                     "reopening the port".format(
-                        cmd, last_exc, attempt, self.command_retries
+                        cmd, last_exc, attempt, n_retries
                     )
                 )
                 time.sleep(self.retry_delay)

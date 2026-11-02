@@ -242,11 +242,15 @@ class ImagingSystem(AbstractSystem):
             self._base_save_dir = save_dir
         if base_name:
             self._base_name = base_name
-        base_dir = getattr(self, "_base_save_dir", None) or self.config.get(
-            "save_dir"
+        base_dir = (
+            getattr(self, "_base_save_dir", None)
+            or self.config.get("save_dir")
+            or "."
         )
-        base_nm = getattr(self, "_base_name", None) or self.config.get(
-            "base_name"
+        base_nm = (
+            getattr(self, "_base_name", None)
+            or self.config.get("base_name")
+            or "experiment"
         )
         base = os.path.join(base_dir, base_nm)
         sdir = base

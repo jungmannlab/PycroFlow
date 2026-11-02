@@ -238,7 +238,7 @@ class MonitoringController:
         free ``<experiment save_dir>/fluidics_cam`` / ``fluidics_cam_1`` / ... so
         clips travel with the run's outputs and multiple runs into one save_dir
         don't mix -- mirroring the acquisition folder's ``_N`` numbering
-        (``imaging.create_savedir``)."""
+        (``imaging.prepare_savedir``)."""
         if self._config.output_dir:
             return self._config.output_dir
         design = getattr(self._svc, "experiment_design", None) or {}
