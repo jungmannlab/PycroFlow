@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **QC hand-off degrades cleanly with an outdated registry client.** An older
+  `picasso-registry` `BufferedRegistryClient` has no `mark_ready()`, which made
+  `qc_gate_mark_ready` log a confusing `AttributeError` on **every** FOV. It now
+  detects the missing method, logs a single actionable warning per process
+  ("update picasso-registry"), and disables the cluster hand-off for the
+  session without touching the run.
+
 - **Laser fail-safe interlock is honest and escalates on failure.** On an
   abort where a dead beampath device (Thorlabs KDC101 `TL_NO_RESPONSE`)
   stopped monet from building, `IlluminationSystem.beampath_close` swallowed
