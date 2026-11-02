@@ -130,14 +130,26 @@ class IlluminationSystem(AbstractSystem):
             return
 
     def beampath_close(self):
-        """close shutter"""
+        """Close the shutter. Returns True on success, False if it could not
+        be actuated.
+
+        A fail-safe caller (``all_off`` / the T3 laser interlock) needs to
+        know whether the shutter ACTUALLY closed — previously this swallowed a
+        missing-``instrument`` ``AttributeError`` and returned ``None``, so the
+        interlock reported ``shutter_closed=True`` when the shutter was never
+        touched. Returning a bool (and catching the dead-device error too)
+        makes the safety report honest.
+        """
         try:
             self.instrument.beampath.positions = self.mprotocol["beampath"][
                 "end"
             ]
-        except (KeyError, AttributeError, TypeError) as exc:
+            return True
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - fail-safe: report, never hide
             logger.warning("beampath_close failed: {!r}".format(exc))
-            return
+            return False
 
     def all_off(self):
         """Fail-safe T3 primitive: disable EVERY laser and close the shutter.
@@ -186,17 +198,32 @@ class IlluminationSystem(AbstractSystem):
                     )
                 )
 
-        shutter_closed = True
+        # Read the REAL shutter outcome (beampath_close returns a bool and no
+        # longer hides a missing-instrument failure) instead of assuming it
+        # closed because nothing raised.
+        shutter_closed = False
         try:
-            self.beampath_close()
+            shutter_closed = bool(self.beampath_close())
         except Exception as exc:  # noqa: BLE001 - fail-safe
-            shutter_closed = False
             errors.append("beampath_close: {!r}".format(exc))
             logger.error("all_off: could not close shutter: {!r}".format(exc))
+        if not shutter_closed:
+            errors.append("all_off could not close the shutter")
 
         if not laser_ids:
             errors.append(
                 "all_off addressed zero lasers (no lasers enumerable)"
+            )
+        # Escalate UNMISSABLY when the fail-safe darkened no laser: the lasers
+        # may still be emitting and only a physical intervention is safe. This
+        # is the overnight-abort case where a dead beampath device (KDC101
+        # TL_NO_RESPONSE) prevented monet from building, so no laser was
+        # reachable.
+        if not disabled:
+            logger.critical(
+                "LASER SAFETY: the interlock disabled NO laser ({}). Lasers "
+                "may still be ON — physically switch them off / block the "
+                "beam.".format("; ".join(errors) or "no lasers enumerable")
             )
         return {
             "disabled": disabled,
@@ -319,11 +346,21 @@ class IlluminationSystem(AbstractSystem):
                 + "Monet Set only works with an existing calibration."
             ) from exc
 
-        # set the power set values
+        # Seed the per-laser power set values. Wrapped per-laser so a dead
+        # auxiliary device (attenuator / beampath KDC101) can't abort the whole
+        # build: the laser control stays usable, so the fail-safe interlock can
+        # still disable the lasers even when the beampath hardware is down.
         self.power_setvalues = {}
         for las in self.instrument.laser:
-            self.set_laser(las)
-            self.power_setvalues[las] = round(self.instrument.power)
+            try:
+                self.set_laser(las)
+                self.power_setvalues[las] = round(self.instrument.power)
+            except Exception as exc:  # noqa: BLE001 - keep the build usable
+                logger.warning(
+                    "could not seed power for laser {!r}: {!r}".format(
+                        las, exc
+                    )
+                )
 
         # # switch on autoshutter (is switched on in initialization because
         # # that is necessary for calibrate and adjust)

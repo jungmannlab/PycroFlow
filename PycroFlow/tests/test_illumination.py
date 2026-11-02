@@ -240,5 +240,55 @@ class PauseAbortTest(unittest.TestCase):
         self.assertFalse(isy._paused)
 
 
+class AllOffFailSafeTest(unittest.TestCase):
+    """The T3 fail-safe: honest shutter report + zero-laser escalation."""
+
+    def test_beampath_close_returns_true_on_success(self):
+        isy = _make_system()
+        self.assertTrue(isy.beampath_close())
+        self.assertEqual(isy.instrument.beampath.positions, ["closed"])
+
+    def test_beampath_close_returns_false_when_unactuatable(self):
+        isy = _make_system()
+        isy.mprotocol = {"beampath": {}}  # no "end" -> KeyError
+        self.assertFalse(isy.beampath_close())
+
+    def test_all_off_disables_all_and_reports_shutter_closed(self):
+        isy = _make_system()
+        for la in isy.instrument.lasers.values():
+            la.enabled = True
+        report = isy.all_off()
+        self.assertEqual(sorted(report["disabled"]), [488, 561])
+        self.assertEqual(report["failed"], [])
+        self.assertTrue(report["shutter_closed"])
+        self.assertTrue(
+            all(not la.enabled for la in isy.instrument.lasers.values())
+        )
+
+    def test_all_off_reports_shutter_not_closed_when_beampath_fails(self):
+        # The false-"shutter_closed=True" bug: the shutter can't actuate but
+        # lasers are reachable -> the report must say shutter_closed=False.
+        isy = _make_system()
+        isy.mprotocol = {"beampath": {}}  # beampath_close -> False
+        report = isy.all_off()
+        self.assertEqual(sorted(report["disabled"]), [488, 561])
+        self.assertFalse(report["shutter_closed"])
+        self.assertTrue(
+            any("shutter" in e for e in report["errors"]), report["errors"]
+        )
+
+    def test_all_off_with_no_instrument_darkens_nothing_and_flags_unsafe(self):
+        # The overnight-abort case: monet never built (dead beampath device),
+        # so no laser is reachable. all_off must NOT raise, must report zero
+        # disabled + shutter not closed, and record why.
+        isy = IlluminationSystem()  # no instrument, no monet setup
+        report = isy.all_off()
+        self.assertEqual(report["disabled"], [])
+        self.assertFalse(report["shutter_closed"])
+        self.assertTrue(
+            any("zero lasers" in e for e in report["errors"]), report["errors"]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

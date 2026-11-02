@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Laser fail-safe interlock is honest and escalates on failure.** On an
+  abort where a dead beampath device (Thorlabs KDC101 `TL_NO_RESPONSE`)
+  stopped monet from building, `IlluminationSystem.beampath_close` swallowed
+  the missing-`instrument` error and returned `None`, so `all_off` reported
+  `shutter_closed=True` when the shutter was never touched. `beampath_close`
+  now returns a bool and `all_off` reports the REAL shutter state; when the
+  interlock disables **zero** lasers it now logs `CRITICAL` ("lasers may still
+  be ON — physically switch them off") instead of a quiet error. The monet
+  build's per-laser power-seed loop is also wrapped so a dead attenuator /
+  beampath device no longer aborts the whole build, keeping the lasers
+  reachable for the fail-safe to disable.
+
 - **Imaging raw data is saved under the current run's `save_dir`.** The
   acquisition folder is now resolved + created at **run start** from the live
   experiment design (`ImagingSystem.prepare_savedir`, called from

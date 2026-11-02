@@ -112,6 +112,16 @@ class LaserInterlock:
                 "laser interlock: all lasers off, shutter closed "
                 "(disabled {})".format(result.lasers_disabled)
             )
+        elif not result.lasers_disabled:
+            # Nothing was darkened — the dangerous case. Escalate UNMISSABLY:
+            # the lasers may still be emitting and only a physical intervention
+            # is safe (e.g. a dead beampath device blocked monet entirely).
+            logger.critical(
+                "LASER SAFETY: interlock disabled NO laser — lasers may still "
+                "be ON. Physically switch them off / block the beam. {}".format(
+                    result
+                )
+            )
         else:
             logger.error(
                 "laser interlock did NOT fully succeed: {}".format(result)
