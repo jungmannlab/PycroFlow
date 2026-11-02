@@ -321,6 +321,27 @@ class ExperimentService:
             self._illumination_system,
         )
 
+    def _prepare_imaging_savedir(self) -> None:
+        """Point the imaging system's run folder at the live design's save_dir.
+
+        Mirrors the fluid reservoir re-sync and the webcam
+        ``_resolve_output_dir``: the save location follows the *current* design
+        at run start rather than whatever was bound when imaging connected.
+        Best-effort — a stub/emulated system without ``prepare_savedir`` is
+        skipped, and any failure is logged, never blocks the run.
+        """
+        img = self._imaging_system
+        prepare = getattr(img, "prepare_savedir", None)
+        if not callable(prepare):
+            return
+        design = self._experiment_design or {}
+        try:
+            prepare(design.get("save_dir"), design.get("base_name"))
+        except Exception as exc:  # noqa: BLE001 - never block the run on this
+            logger.warning(
+                "could not prepare imaging save dir: {!r}".format(exc)
+            )
+
     def load_protocol_from_yaml(self, path: str) -> None:
         """Load a protocol from a YAML file (the format produced by
         :meth:`PycroFlow.protocols.ProtocolBuilder.create_protocol`)."""
@@ -409,6 +430,12 @@ class ExperimentService:
                     "will finish immediately. Connect hardware (or the "
                     "Emulator setup) in the System tab first."
                 )
+            # Resolve the imaging run folder NOW, from the LIVE design, so raw
+            # data lands under the design's current save_dir (editing it
+            # redirects where images are written) — not the stale folder bound
+            # when imaging last connected. Logs the chosen path.
+            if "img" in (self._protocol or {}):
+                self._prepare_imaging_savedir()
             # WP-LIVE-INT: attach live analysis before the handlers start, so
             # the frame tap is in place for the first acquire step. Only when
             # the protocol has imaging steps — a fluid-only run has no frames.

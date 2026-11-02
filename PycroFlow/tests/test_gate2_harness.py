@@ -260,6 +260,8 @@ class TestWatchdog(unittest.TestCase):
         import PycroFlow.live_analysis.frame_source as fs_mod
         from PycroFlow.live_analysis.frame_source import MockFrameSource
 
+        created = []
+
         class _Hanging(MockFrameSource):
             def batches(self, batch_size):
                 # Never yields: models a tiff-tail source polling an empty
@@ -269,10 +271,26 @@ class TestWatchdog(unittest.TestCase):
                 return
                 yield  # pragma: no cover - unreachable, makes this a generator
 
+        def _make(kind, **kw):
+            src = _Hanging(n_frames=1000, height=16, width=16)
+            created.append(src)
+            return src
+
         orig = fs_mod.make_frame_source
-        fs_mod.make_frame_source = lambda kind, **kw: _Hanging(
-            n_frames=1000, height=16, width=16
-        )
+        fs_mod.make_frame_source = _make
+
+        # The watchdog deliberately ABANDONS the hung FOV daemon thread (see
+        # _handle_stall): its batches() spins on self._stop forever and the
+        # inline drain thread blocks behind it. Harmless under the CLI (the
+        # process exits), but under `unittest discover` the leaked threads
+        # survive into later tests — a spinning native thread alongside the
+        # PyQt6 GUI tests SIGSEGVs the whole run. Release every source we hand
+        # out when the test ends so those abandoned threads unwind.
+        def _release():
+            for src in created:
+                src._stop.set()
+
+        self.addCleanup(_release)
         return fs_mod, orig
 
     def test_stalled_fov_fires_interlock_and_returns_stalled(self):

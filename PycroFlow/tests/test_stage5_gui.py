@@ -30,6 +30,19 @@ try:
 except ImportError:
     _HAVE_PYQT6 = False
 
+# CI isolates the Qt GUI tests into their own process. Under one-process
+# `unittest discover`, the native worker threads the live-analysis process
+# backend leaks (spawn Processes + loguru's enqueue writer on a multiprocessing
+# queue) outlive their own tests, and a leftover native thread alongside
+# PyQt6's offscreen event loop SIGSEGVs the whole run on the hosted runner. The
+# CI's main pass sets this flag to skip the Qt modules, then runs them alone in
+# a fresh interpreter where no such threads exist.
+if os.environ.get("PYCROFLOW_ISOLATE_GUI_TESTS") == "1":
+    raise unittest.SkipTest(
+        "GUI tests run in a dedicated CI process "
+        "(PYCROFLOW_ISOLATE_GUI_TESTS=1)"
+    )
+
 
 def _import_safe_without_pyqt6():
     """import PycroFlow.gui must not import PyQt6 at package level."""

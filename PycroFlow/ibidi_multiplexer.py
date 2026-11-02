@@ -54,6 +54,7 @@ atomic command once the hardware supports it.
 
 from __future__ import annotations
 
+import atexit
 import threading
 import time
 
@@ -86,6 +87,15 @@ DEFAULT_SWITCH_DELAY = 0.01
 # setup's ``multiplexer:`` block.
 DEFAULT_COMMAND_RETRIES = 3
 DEFAULT_RETRY_DELAY = 0.3
+
+# Keep-alive: a background read-only ping (``ID``) sent when the link has been
+# idle this many seconds, so the USB-serial port never idles long enough for
+# Windows USB selective-suspend (or the device's own sleep) to drop it mid-run.
+# This is the fix for an overnight abort where the ibidi sat idle ~2.3 h during
+# a 40k-frame acquire and came back "A device attached to the system is not
+# functioning." 0 disables it. Overridable via the setup's ``multiplexer:``
+# block (``keepalive_interval``).
+DEFAULT_KEEPALIVE_INTERVAL = 30.0
 
 
 class IbidiMultiplexer(_ValveABC):
@@ -134,6 +144,7 @@ class IbidiMultiplexer(_ValveABC):
         switch_delay=DEFAULT_SWITCH_DELAY,
         command_retries=DEFAULT_COMMAND_RETRIES,
         retry_delay=DEFAULT_RETRY_DELAY,
+        keepalive_interval=DEFAULT_KEEPALIVE_INTERVAL,
         **kwargs,
     ):
         self.address = address
@@ -150,6 +161,15 @@ class IbidiMultiplexer(_ValveABC):
         self._port = None
         self._baud = baud
         self._timeout = timeout
+
+        # Keep-alive (see DEFAULT_KEEPALIVE_INTERVAL): a daemon thread pings the
+        # device over idle gaps so the USB link can't be suspended out from
+        # under a long acquisition. ``_last_activity`` is bumped by every real
+        # command, so the ping only fires during genuine idle.
+        self._keepalive_interval = float(keepalive_interval or 0)
+        self._ka_stop = threading.Event()
+        self._ka_thread = None
+        self._last_activity = time.monotonic()
 
         # Default to private, never-set events so direct hardware use before
         # orchestration starts does not dereference a None flag. The
@@ -170,7 +190,16 @@ class IbidiMultiplexer(_ValveABC):
         """Open the serial port and confirm the device identifies as ``MX``."""
         self._port = self._normalize_port(port)
         self._baud, self._timeout = baud, timeout
-        self._open_serial()
+        self._open_serial_with_retry()
+        # Release the port on interpreter shutdown even when the GUI's clean
+        # disconnect path (closeEvent -> SystemService.close -> close()) is
+        # bypassed — an unhandled exception / crash during a session still runs
+        # atexit, so the next PycroFlow start reconnects without a physical USB
+        # replug. Unregister first so a reconnect without an intervening close
+        # keeps exactly one registration (atexit does not dedupe) rather than
+        # accumulating stale entries that pin this object alive until exit.
+        atexit.unregister(self.close)
+        atexit.register(self.close)
         ident = self.identify()
         if DEVICE_ID not in ident:
             logger.warning(
@@ -185,6 +214,7 @@ class IbidiMultiplexer(_ValveABC):
                     self._port, self.channels
                 )
             )
+        self._start_keepalive()
 
     def _open_serial(self):
         """Open the serial port from the remembered connection parameters.
@@ -204,6 +234,39 @@ class IbidiMultiplexer(_ValveABC):
             exclusive=True,
         )
 
+    def _open_serial_with_retry(self, attempts=4, delay=0.75):
+        """Open the port, retrying briefly when it is transiently held.
+
+        After an unclean PycroFlow exit the OS / USB-serial driver can take a
+        moment to release the previous handle; a fresh connect then races that
+        release and fails on the first open. Retry a few times before giving up
+        so a restart reconnects without a physical USB replug. A genuinely
+        stuck port (one that needs device re-enumeration) still raises — now
+        with a message that names the replug workaround.
+        """
+        last_exc = None
+        for attempt in range(attempts):
+            try:
+                self._open_serial()
+                return
+            except SerialException as exc:
+                last_exc = exc
+                if attempt + 1 < attempts:
+                    logger.warning(
+                        "ibidi port {} busy ({!r}); retry {}/{} in {}s".format(
+                            self._port, exc, attempt + 1, attempts - 1, delay
+                        )
+                    )
+                    time.sleep(delay)
+        raise SerialException(
+            "could not open the ibidi multiplexer on {} after {} attempts: "
+            "{!r}. If PycroFlow was not shut down cleanly the port can stay "
+            "held until the device is re-enumerated — unplug and replug the "
+            "ibidi USB cable, then reconnect.".format(
+                self._port, attempts, last_exc
+            )
+        ) from last_exc
+
     @staticmethod
     def _normalize_port(port):
         port = str(port)
@@ -222,6 +285,14 @@ class IbidiMultiplexer(_ValveABC):
         the whole shutdown. Takes ``self._lock`` so it can't swap the handle
         out from under an in-flight :meth:`_command` on another thread.
         """
+        # Stop the keep-alive before touching the handle so its ping can't race
+        # the close (it goes through _command, which takes _lock).
+        self._stop_keepalive()
+        # Drop the shutdown safety-net first: once closed deterministically
+        # there is nothing for atexit to release, and leaving it registered
+        # would pin this object alive until interpreter exit. No-op when never
+        # registered (direct hardware use without connect()).
+        atexit.unregister(self.close)
         with self._lock:
             if self._serial is not None:
                 try:
@@ -241,8 +312,73 @@ class IbidiMultiplexer(_ValveABC):
     def __del__(self):  # pragma: no cover - GC timing dependent
         self.close()
 
+    # -- keep-alive -----------------------------------------------------------
+    def _start_keepalive(self):
+        """Launch the idle-ping thread (no-op when disabled or already up)."""
+        if self._keepalive_interval <= 0:
+            return
+        self._stop_keepalive()
+        self._ka_stop = threading.Event()
+        self._last_activity = time.monotonic()
+        self._ka_thread = threading.Thread(
+            target=self._keepalive_loop,
+            name="ibidi-keepalive",
+            daemon=True,
+        )
+        self._ka_thread.start()
+
+    def _stop_keepalive(self):
+        """Signal the keep-alive thread to exit and join it (best effort).
+
+        A single bounded probe (see :meth:`_keepalive_loop`) holds the lock for
+        at most one read timeout, so this join reliably completes rather than
+        racing an open-ended reopen storm.
+        """
+        self._ka_stop.set()
+        t, self._ka_thread = self._ka_thread, None
+        if t is not None and t is not threading.current_thread():
+            # Bound the join by the read timeout + margin; tolerate a None
+            # timeout (serial's "block forever") without a TypeError.
+            t.join(timeout=(self._timeout or 2.0) + 1.0)
+
+    def _keepalive_loop(self):  # pragma: no cover - timing/thread dependent
+        """Ping the device whenever the link has been idle too long.
+
+        Wakes every few seconds (promptly on stop) and, if no real command has
+        run within ``keepalive_interval``, issues one read-only ``ID`` probe to
+        keep the USB link out of selective-suspend. The probe is SINGLE-shot
+        (``retries=0``): it must not run the full reopen storm, which on a dead
+        device would hold the lock for many seconds — blocking real valve
+        commands and defeating :meth:`close`'s join. Recovering a genuinely
+        dropped link is the next real command's job (it retries + reopens).
+        ``_last_activity`` is bumped every probe (success or failure) so a dead
+        link is probed at most once per interval, not every tick.
+        """
+        interval = self._keepalive_interval
+        # Capture the stop event locally: a reconnect may swap self._ka_stop,
+        # and this thread must keep waiting on the one it was started with.
+        stop = self._ka_stop
+        # How often to check the idle clock. Stop is instant regardless (the
+        # Event wakes wait() immediately), so this only bounds check latency;
+        # cap at 5 s for the 30 s default, floor low so small intervals work.
+        tick = max(0.05, min(interval, 5.0))
+        while not stop.wait(tick):
+            if time.monotonic() - self._last_activity < interval:
+                continue  # recent real traffic — no ping needed
+            try:
+                self._command("ID", retries=0)  # single bounded probe
+                logger.debug("ibidi keep-alive ok")
+            except Exception as exc:  # noqa: BLE001 - keep the thread alive
+                logger.warning(
+                    "ibidi keep-alive got no response on {} ({!r}); the link "
+                    "may have dropped (USB suspend / unplug)".format(
+                        self._port, exc
+                    )
+                )
+            self._last_activity = time.monotonic()
+
     # -- low-level command ----------------------------------------------------
-    def _command(self, cmd):
+    def _command(self, cmd, retries=None):
         """Send one ``;``-terminated command and return the stripped reply.
 
         Serial errors (notably the rig's intermittent write timeout) are
@@ -251,6 +387,11 @@ class IbidiMultiplexer(_ValveABC):
         hiccup doesn't abort a run. A fault that persists across all attempts
         re-raises the last :class:`~serial.SerialException` — the caller
         (orchestration) turns that into a loud run abort rather than a hang.
+
+        ``retries`` overrides :attr:`command_retries` for this one call. The
+        keep-alive probe passes ``retries=0`` so a dead link can't hold the
+        lock through a multi-second reopen storm (which would block real
+        commands and defeat :meth:`close`'s join).
         """
         if self._serial is None:
             raise RuntimeError("ibidi multiplexer is not connected")
@@ -258,12 +399,15 @@ class IbidiMultiplexer(_ValveABC):
             cmd = cmd + TERMINATOR
         payload = (cmd + self.line_ending).encode()
         last_exc = None
-        for attempt in range(self.command_retries + 1):
+        n_retries = (
+            self.command_retries if retries is None else max(0, retries)
+        )
+        for attempt in range(n_retries + 1):
             if attempt:
                 logger.warning(
                     "ibidi {!r} serial error ({!r}); retry {}/{} after "
                     "reopening the port".format(
-                        cmd, last_exc, attempt, self.command_retries
+                        cmd, last_exc, attempt, n_retries
                     )
                 )
                 time.sleep(self.retry_delay)
@@ -279,12 +423,15 @@ class IbidiMultiplexer(_ValveABC):
                     raw = self._serial.read_until(TERMINATOR.encode())
                 reply = raw.decode(errors="replace").strip()
                 logger.debug("ibidi {!r} -> {!r}".format(cmd, reply))
+                # Real traffic resets the idle clock so the keep-alive only
+                # pings over genuine gaps.
+                self._last_activity = time.monotonic()
                 return reply
             except SerialException as exc:
                 last_exc = exc
         raise SerialException(
             "ibidi command {!r} failed after {} attempts: {!r}".format(
-                cmd, self.command_retries + 1, last_exc
+                cmd, n_retries + 1, last_exc
             )
         ) from last_exc
 

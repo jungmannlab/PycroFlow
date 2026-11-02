@@ -119,6 +119,15 @@ class ImagingSystem(AbstractSystem):
     def __init__(self, config):
         self.config = config
 
+        # Record which interpreter + acquisition-stack versions this process is
+        # actually running, as the first imaging log line. A GUI launched from
+        # a different conda env than the operator's console is the commonest
+        # rig confusion (the `[gui]` extra does NOT install pycromanager — it
+        # lives in `[hardware]`), and numpy 2.x vs pycromanager's image
+        # deserialization is the flagged ZMQ-stream risk; both are answered
+        # here instead of guessed at.
+        self._log_acquisition_env()
+
         # Acquire the single-process MM Core lock BEFORE touching Core/Studio.
         # If a separately-run monet GUI (or another PycroFlow instance) is
         # already attached, MmLockHeld is raised here with a clear message
@@ -197,7 +206,16 @@ class ImagingSystem(AbstractSystem):
             }
         )
 
-        self.create_savedir()
+        # The run folder is resolved + created at RUN START (prepare_savedir),
+        # NOT here at connect. Binding it at connect made the save location
+        # stale — a design loaded/edited after connect wrote raw data to the
+        # previously-connected design's folder — and spawned an empty folder on
+        # every reconnect. These keep the *design* values to resolve from; the
+        # resolved run dir and "ready" flag are set per run.
+        self._base_save_dir = self.config.get("save_dir")
+        self._base_name = self.config.get("base_name")
+        self._acq_dir = None
+        self._savedir_ready = False
         self.create_starttime()
 
         # test whether all is set up correctly
@@ -209,26 +227,55 @@ class ImagingSystem(AbstractSystem):
 
         logger.debug("Imaging system is set up and ready.")
 
-    def create_savedir(self):
-        # Target folder = save_dir / base_name. If it already exists, append
-        # the first free "_1", "_2", … suffix so a re-run never collides with
-        # (or writes into) a previous run's folder, and never raises.
-        base = os.path.join(self.config["save_dir"], self.config["base_name"])
+    def prepare_savedir(self, save_dir=None, base_name=None):
+        """Resolve + create this run's acquisition folder; return its path.
+
+        Called at RUN START from the LIVE experiment design (so editing the
+        design's ``save_dir`` / ``base_name`` redirects where raw data lands),
+        falling back to the connect-time values. Target folder is
+        ``save_dir / base_name``; an existing one gets the first free
+        ``_1`` / ``_2`` … suffix so a re-run never collides with an earlier
+        run. The chosen path is logged so the operator never has to hunt for
+        it, and stored on ``config['save_dir']`` (the acquisition contract).
+        """
+        if save_dir:
+            self._base_save_dir = save_dir
+        if base_name:
+            self._base_name = base_name
+        base_dir = (
+            getattr(self, "_base_save_dir", None)
+            or self.config.get("save_dir")
+            or "."
+        )
+        base_nm = (
+            getattr(self, "_base_name", None)
+            or self.config.get("base_name")
+            or "experiment"
+        )
+        base = os.path.join(base_dir, base_nm)
         sdir = base
         n = 0
         while os.path.exists(sdir):
             n += 1
             sdir = "{}_{:d}".format(base, n)
         os.makedirs(sdir)
+        self._acq_dir = sdir
         self.config["save_dir"] = sdir
+        self._savedir_ready = True
+        logger.info("imaging run data -> {}".format(sdir))
+        return sdir
 
     def create_starttime(self):
         self.starttime_str = datetime.now().strftime("_%y-%m-%d_%H%M")
 
     def _assign_protocol(self, protocol):
         self.protocol = protocol
-        # New run: re-read MM's position list on the next position_count().
+        # New run: re-read MM's position list on the next position_count(), and
+        # re-resolve the save folder on the next acquire (a fresh run folder,
+        # from the current design). Assigned at both load and run start, so the
+        # folder itself is only created lazily at the first acquire.
         self._position_count = None
+        self._savedir_ready = False
 
     def execute_protocol_entry(self, i):
         """execute protocol entry i"""
@@ -237,6 +284,11 @@ class ImagingSystem(AbstractSystem):
             logger.debug(
                 "executing protocol entry {:d}: {:s}".format(i, str(pentry))
             )
+            # Resolve + create this run's folder on the first acquire (if the
+            # run-start hook didn't already), so config['save_dir'] below is the
+            # real run folder. Idempotent within a run via _savedir_ready.
+            if not self._savedir_ready:
+                self.prepare_savedir()
             acquisition_config = self.config.copy()
             if pentry.get("frames"):
                 acquisition_config["frames"] = pentry["frames"]
@@ -347,6 +399,37 @@ class ImagingSystem(AbstractSystem):
         #     if self.acq_th.i == self.acq_th.n - 1:
         #         self.acq_th.join()
 
+    @staticmethod
+    def _log_acquisition_env():
+        """Log the interpreter + pycromanager/numpy versions once at connect.
+
+        Reaching this point already proves ``pycromanager`` imported (it is a
+        module-level import; a missing install fails earlier, at
+        ``import PycroFlow.imaging``), so this confirms *which* install the
+        running process uses — the answer to "the GUI logs frames but my
+        console has no pycromanager" (two different environments) — and the
+        numpy version, the suspect in the numpy-2 vs pycromanager image-stream
+        ABI. Best-effort: never raises.
+        """
+        import sys
+
+        try:
+            import pycromanager
+
+            pm_version = getattr(pycromanager, "__version__", "unknown")
+        except Exception as exc:  # pragma: no cover - import-order defensive
+            pm_version = "NOT IMPORTABLE ({!r})".format(exc)
+        try:
+            import numpy
+
+            np_version = numpy.__version__
+        except Exception:  # pragma: no cover - numpy is a hard dep
+            np_version = "unknown"
+        logger.info(
+            "imaging acquisition env: python={} | pycromanager={} | "
+            "numpy={}".format(sys.executable, pm_version, np_version)
+        )
+
     def test_acquisition(self):
         # test the possibility to acquire (fail early)
         if self.studio.live().is_live_mode_on():
@@ -354,13 +437,55 @@ class ImagingSystem(AbstractSystem):
         events = multi_d_acquisition_events(
             num_time_points=10, time_interval_s=0, channel_exposures_ms=[100]
         )
-        with Acquisition(
-            directory=self.config["save_dir"],
-            name="testacquisition",
-            show_display=False,
-            debug=False,
-        ) as acq:
-            acq.acquire(events)
+        # Count the frames that actually reach the pycromanager (Python)
+        # client. `acq.acquire(...)` returns without raising even when the
+        # MM->ZMQ image stream delivers nothing, so a bare test "passes" and
+        # the system reports "connected" while every real run and the live
+        # preview silently show no images. Teeing through an image_process_fn
+        # (the same hook record_movie uses) turns that silent failure into a
+        # loud, actionable log line at connect time.
+        streamed = {"n": 0}
+
+        def _count(img, meta, event_queue):
+            streamed["n"] += 1
+            return (img, meta)
+
+        # The self-test writes to a throwaway temp dir, NOT the run folder:
+        # the real run folder is resolved later, at run start, from the live
+        # design (prepare_savedir). Writing here would create it at connect —
+        # the stale-path / empty-folder bug this split fixes.
+        import shutil
+        import tempfile
+
+        tmp = tempfile.mkdtemp(prefix="pycroflow_testacq_")
+        try:
+            with Acquisition(
+                directory=tmp,
+                name="testacquisition",
+                show_display=False,
+                image_process_fn=_count,
+                debug=False,
+            ) as acq:
+                acq.acquire(events)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        if streamed["n"] == 0:
+            logger.error(
+                "test acquisition completed but 0/10 frames reached the "
+                "pycromanager (Python) client. The MM connection and MM's own "
+                "native Live can still work in this state — this is the "
+                "signature of a pycromanager 1.0 <-> Micro-Manager nightly "
+                "version mismatch or a blocked ZMQ image stream. Until it is "
+                "resolved, both orchestrated runs and the Live preview will "
+                "show NO images even though fluidics run normally. Align the "
+                "MM 2.0 nightly with pycromanager 1.0 (see the Acquisition "
+                "import note in imaging.py)."
+            )
+        else:
+            logger.info(
+                "test acquisition streamed {}/10 frames to the Python "
+                "client.".format(streamed["n"])
+            )
 
     def record_movie(self, acq_name, acquisition_config):
         """Record a movie via pycromanager.
@@ -448,6 +573,27 @@ class ImagingSystem(AbstractSystem):
         ):
             viewer.close()
         self.acquiring = False
+        # curr_frame counts frames that reached image_process_fn (the Python
+        # client). Zero means the MDA ran but the camera streamed NO frames to
+        # pycromanager — the raw movie on disk is empty. Surface it loudly:
+        # with fluidics working this is otherwise a silent no-op run, and it
+        # is the same MM<->pycromanager streaming fault test_acquisition warns
+        # about. A nonzero count here with an empty dataset on disk instead
+        # points at the save path (pycromanager/ndstorage), not the stream.
+        # Skip the warning when the FOV was intentionally stopped before any
+        # frame (operator Abort, or a live-analysis early-FOV-end) — that is
+        # not a streaming fault and the scary message would misdiagnose it.
+        aborted = self.acq_abort.is_set() or (
+            tap is not None and tap.fov_end_requested()
+        )
+        if self.curr_frame == 0 and not aborted:
+            logger.error(
+                "acquisition {!r}: 0 frames reached the pycromanager client "
+                "(requested {} frames at {} ms exposure) — nothing was saved. "
+                "The fluidics ran but no images were acquired. Check the "
+                "pycromanager 1.0 <-> Micro-Manager nightly version handshake "
+                "and the ZMQ image stream.".format(acq_name, n_frames, t_exp)
+            )
         self.pfs_log.to_excel(os.path.join(acq_dir, acq_name + "_pfs.xlsx"))
         if self.protocol["parameters"].get("show_progress"):
             self.probar.end_progress()
@@ -513,22 +659,37 @@ class ImagingSystem(AbstractSystem):
                 self.probar.progress_increment()
             except Exception as e:
                 print(e)
-        # log PFS position
+        # log PFS position. These ZMQ property reads can hiccup on a busy
+        # Core mid-stream; a raise here would propagate into pycromanager's
+        # image-processor thread and silently stop EVERY subsequent frame from
+        # being saved. Guard it so a PFS read failure degrades logging only —
+        # the frame itself is always still returned for saving below.
+        pfs_status = None
         if self.curr_frame % 100 == 0:
-            pfs_state = self.core.get_property(
-                self.pfs_pars["tag_status"], self.pfs_pars["prop_state"]
-            )
-            pfs_status = self.core.get_property(
-                self.pfs_pars["tag_status"], self.pfs_pars["prop_status"]
-            )
-            self.pfs_log.loc[int(self.curr_frame / 100)] = {
-                "datetime": datetime.now(),
-                "frame": self.curr_frame,
-                # 'pfs': self.core.get_position(self.pfs_pars['tag_pfs']),
-                "zdrive": self.core.get_position(self.pfs_pars["tag_zdrive"]),
-                "state": pfs_state,
-                "status": pfs_status,
-            }
+            try:
+                pfs_state = self.core.get_property(
+                    self.pfs_pars["tag_status"], self.pfs_pars["prop_state"]
+                )
+                pfs_status = self.core.get_property(
+                    self.pfs_pars["tag_status"], self.pfs_pars["prop_status"]
+                )
+                self.pfs_log.loc[int(self.curr_frame / 100)] = {
+                    "datetime": datetime.now(),
+                    "frame": self.curr_frame,
+                    # 'pfs': self.core.get_position(self.pfs_pars['tag_pfs']),
+                    "zdrive": self.core.get_position(
+                        self.pfs_pars["tag_zdrive"]
+                    ),
+                    "state": pfs_state,
+                    "status": pfs_status,
+                }
+            except Exception as exc:  # noqa: BLE001 - must never kill the MDA
+                logger.error(
+                    "PFS logging raised on frame {} ({!r}); continuing the "
+                    "acquisition (frame still saved).".format(
+                        self.curr_frame, exc
+                    )
+                )
             if (
                 _pfs_is_unhealthy(pfs_status)
                 and (self.handler_ref is not None)

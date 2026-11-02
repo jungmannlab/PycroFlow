@@ -112,6 +112,17 @@ class LaserInterlock:
                 "laser interlock: all lasers off, shutter closed "
                 "(disabled {})".format(result.lasers_disabled)
             )
+        elif not result.lasers_disabled or result.lasers_failed:
+            # A laser may still be emitting — either none were reached (a dead
+            # beampath device blocked monet entirely) or one FAILED to disable.
+            # Escalate UNMISSABLY: only a physical intervention is safe.
+            logger.critical(
+                "LASER SAFETY: interlock could not disable all lasers "
+                "(disabled={}, failed={}) — lasers may still be ON. Physically "
+                "switch them off / block the beam. {}".format(
+                    result.lasers_disabled, result.lasers_failed, result
+                )
+            )
         else:
             logger.error(
                 "laser interlock did NOT fully succeed: {}".format(result)
@@ -226,7 +237,14 @@ class LaserInterlock:
             errors.append("illumination system has no beampath_close()")
             return False
         try:
-            closer()
+            # Honour an explicit False (the real beampath_close returns a bool
+            # now); only a non-False/non-raising return counts as closed. A
+            # legacy stub returning None still reads as success.
+            if closer() is False:
+                errors.append(
+                    "beampath_close() reported the shutter not closed"
+                )
+                return False
             return True
         except Exception as exc:  # noqa: BLE001 - fail-safe
             errors.append("closing shutter: {!r}".format(exc))

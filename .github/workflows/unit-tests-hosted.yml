@@ -69,5 +69,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,gui]"
 
-      - name: Run unit tests
+      # The Qt GUI tests run in their OWN interpreter. Under one-process
+      # `unittest discover` the native worker threads the live-analysis process
+      # backend leaks (spawn Processes + loguru's enqueue writer) outlive their
+      # tests, and a leftover native thread beside PyQt6's offscreen event loop
+      # SIGSEGVs the whole run on the hosted runner. Splitting keeps the Qt
+      # tests covered without that cross-module thread collision.
+      - name: Run unit tests (Qt GUI isolated out)
+        env:
+          PYCROFLOW_ISOLATE_GUI_TESTS: "1"
         run: python -m unittest discover -v
+
+      - name: Run Qt GUI tests in a dedicated process
+        run: >
+          python -m unittest -v
+          PycroFlow.tests.test_stage5_gui
+          PycroFlow.tests.test_live_gui
