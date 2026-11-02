@@ -206,7 +206,16 @@ class ImagingSystem(AbstractSystem):
             }
         )
 
-        self.create_savedir()
+        # The run folder is resolved + created at RUN START (prepare_savedir),
+        # NOT here at connect. Binding it at connect made the save location
+        # stale — a design loaded/edited after connect wrote raw data to the
+        # previously-connected design's folder — and spawned an empty folder on
+        # every reconnect. These keep the *design* values to resolve from; the
+        # resolved run dir and "ready" flag are set per run.
+        self._base_save_dir = self.config.get("save_dir")
+        self._base_name = self.config.get("base_name")
+        self._acq_dir = None
+        self._savedir_ready = False
         self.create_starttime()
 
         # test whether all is set up correctly
@@ -218,26 +227,51 @@ class ImagingSystem(AbstractSystem):
 
         logger.debug("Imaging system is set up and ready.")
 
-    def create_savedir(self):
-        # Target folder = save_dir / base_name. If it already exists, append
-        # the first free "_1", "_2", … suffix so a re-run never collides with
-        # (or writes into) a previous run's folder, and never raises.
-        base = os.path.join(self.config["save_dir"], self.config["base_name"])
+    def prepare_savedir(self, save_dir=None, base_name=None):
+        """Resolve + create this run's acquisition folder; return its path.
+
+        Called at RUN START from the LIVE experiment design (so editing the
+        design's ``save_dir`` / ``base_name`` redirects where raw data lands),
+        falling back to the connect-time values. Target folder is
+        ``save_dir / base_name``; an existing one gets the first free
+        ``_1`` / ``_2`` … suffix so a re-run never collides with an earlier
+        run. The chosen path is logged so the operator never has to hunt for
+        it, and stored on ``config['save_dir']`` (the acquisition contract).
+        """
+        if save_dir:
+            self._base_save_dir = save_dir
+        if base_name:
+            self._base_name = base_name
+        base_dir = getattr(self, "_base_save_dir", None) or self.config.get(
+            "save_dir"
+        )
+        base_nm = getattr(self, "_base_name", None) or self.config.get(
+            "base_name"
+        )
+        base = os.path.join(base_dir, base_nm)
         sdir = base
         n = 0
         while os.path.exists(sdir):
             n += 1
             sdir = "{}_{:d}".format(base, n)
         os.makedirs(sdir)
+        self._acq_dir = sdir
         self.config["save_dir"] = sdir
+        self._savedir_ready = True
+        logger.info("imaging run data -> {}".format(sdir))
+        return sdir
 
     def create_starttime(self):
         self.starttime_str = datetime.now().strftime("_%y-%m-%d_%H%M")
 
     def _assign_protocol(self, protocol):
         self.protocol = protocol
-        # New run: re-read MM's position list on the next position_count().
+        # New run: re-read MM's position list on the next position_count(), and
+        # re-resolve the save folder on the next acquire (a fresh run folder,
+        # from the current design). Assigned at both load and run start, so the
+        # folder itself is only created lazily at the first acquire.
         self._position_count = None
+        self._savedir_ready = False
 
     def execute_protocol_entry(self, i):
         """execute protocol entry i"""
@@ -246,6 +280,11 @@ class ImagingSystem(AbstractSystem):
             logger.debug(
                 "executing protocol entry {:d}: {:s}".format(i, str(pentry))
             )
+            # Resolve + create this run's folder on the first acquire (if the
+            # run-start hook didn't already), so config['save_dir'] below is the
+            # real run folder. Idempotent within a run via _savedir_ready.
+            if not self._savedir_ready:
+                self.prepare_savedir()
             acquisition_config = self.config.copy()
             if pentry.get("frames"):
                 acquisition_config["frames"] = pentry["frames"]
@@ -407,14 +446,25 @@ class ImagingSystem(AbstractSystem):
             streamed["n"] += 1
             return (img, meta)
 
-        with Acquisition(
-            directory=self.config["save_dir"],
-            name="testacquisition",
-            show_display=False,
-            image_process_fn=_count,
-            debug=False,
-        ) as acq:
-            acq.acquire(events)
+        # The self-test writes to a throwaway temp dir, NOT the run folder:
+        # the real run folder is resolved later, at run start, from the live
+        # design (prepare_savedir). Writing here would create it at connect —
+        # the stale-path / empty-folder bug this split fixes.
+        import shutil
+        import tempfile
+
+        tmp = tempfile.mkdtemp(prefix="pycroflow_testacq_")
+        try:
+            with Acquisition(
+                directory=tmp,
+                name="testacquisition",
+                show_display=False,
+                image_process_fn=_count,
+                debug=False,
+            ) as acq:
+                acq.acquire(events)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
         if streamed["n"] == 0:
             logger.error(
                 "test acquisition completed but 0/10 frames reached the "

@@ -76,16 +76,24 @@ class TestImaging(unittest.TestCase):
         patch("PycroFlow.imaging.MmCoreLock").start()
 
     def test_01_construction(self):
-        """ImagingSystem constructs and runs its self-test acquisition."""
+        """ImagingSystem constructs + self-tests WITHOUT creating a run folder.
+
+        The run folder is resolved + created at run start (prepare_savedir),
+        not at connect, so a mere connect no longer writes into save_dir.
+        """
         isy = pim.ImagingSystem(_make_config())
         isy._assign_protocol(_make_protocol())
         # __init__ runs test_acquisition(), which opens one Acquisition.
         self.assertTrue(self.mock_acquisition.called)
-        self.assertTrue(os.path.isdir(isy.config["save_dir"]))
+        # Nothing created at connect; it resolves at run start.
+        self.assertFalse(isy._savedir_ready)
+        run_dir = isy.prepare_savedir()
+        self.assertTrue(os.path.isdir(run_dir))
+        self.assertEqual(isy.config["save_dir"], run_dir)
 
-    def test_create_savedir_appends_when_folder_exists(self):
+    def test_prepare_savedir_appends_when_folder_exists(self):
         """An existing target folder gets the first free _1/_2 suffix rather
-        than erroring — so loading a design twice never fails on the dir."""
+        than erroring — so running into one save_dir twice never collides."""
         import types
 
         name = "savedir_collision_test"
@@ -94,8 +102,7 @@ class TestImaging(unittest.TestCase):
             o = types.SimpleNamespace(
                 config={"save_dir": TEST_OUTPUT_DIR, "base_name": name}
             )
-            pim.ImagingSystem.create_savedir(o)
-            return o.config["save_dir"]
+            return pim.ImagingSystem.prepare_savedir(o)
 
         p0, p1, p2 = make(), make(), make()
         self.assertEqual(p0, os.path.join(TEST_OUTPUT_DIR, name))
@@ -103,6 +110,16 @@ class TestImaging(unittest.TestCase):
         self.assertEqual(p2, os.path.join(TEST_OUTPUT_DIR, name + "_2"))
         for p in (p0, p1, p2):
             self.assertTrue(os.path.isdir(p))
+
+    def test_prepare_savedir_redirects_to_the_live_design(self):
+        """prepare_savedir(save_dir, base_name) writes under the NEW location,
+        not the one bound at connect — the stale-save_dir fix."""
+        isy = pim.ImagingSystem(_make_config())
+        new_root = os.path.join(TEST_OUTPUT_DIR, "redirected_root")
+        run_dir = isy.prepare_savedir(new_root, "edited_name")
+        self.assertEqual(run_dir, os.path.join(new_root, "edited_name"))
+        self.assertTrue(os.path.isdir(run_dir))
+        self.assertEqual(isy.config["save_dir"], run_dir)
 
     def test_02(self):
         """Executing an 'acquire' entry drives a pycromanager Acquisition."""
