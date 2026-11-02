@@ -337,7 +337,9 @@ class IbidiMultiplexer(_ValveABC):
         self._ka_stop.set()
         t, self._ka_thread = self._ka_thread, None
         if t is not None and t is not threading.current_thread():
-            t.join(timeout=self._timeout + 1.0)
+            # Bound the join by the read timeout + margin; tolerate a None
+            # timeout (serial's "block forever") without a TypeError.
+            t.join(timeout=(self._timeout or 2.0) + 1.0)
 
     def _keepalive_loop(self):  # pragma: no cover - timing/thread dependent
         """Ping the device whenever the link has been idle too long.
@@ -429,7 +431,7 @@ class IbidiMultiplexer(_ValveABC):
                 last_exc = exc
         raise SerialException(
             "ibidi command {!r} failed after {} attempts: {!r}".format(
-                cmd, self.command_retries + 1, last_exc
+                cmd, n_retries + 1, last_exc
             )
         ) from last_exc
 

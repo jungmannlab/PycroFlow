@@ -214,16 +214,19 @@ class IlluminationSystem(AbstractSystem):
             errors.append(
                 "all_off addressed zero lasers (no lasers enumerable)"
             )
-        # Escalate UNMISSABLY when the fail-safe darkened no laser: the lasers
-        # may still be emitting and only a physical intervention is safe. This
-        # is the overnight-abort case where a dead beampath device (KDC101
-        # TL_NO_RESPONSE) prevented monet from building, so no laser was
-        # reachable.
-        if not disabled:
+        # Escalate UNMISSABLY when the fail-safe could not darken EVERY laser —
+        # either it reached none (the overnight-abort case where a dead beampath
+        # device prevented monet from building) OR one failed to disable and may
+        # still be emitting. Only a physical intervention is safe then.
+        if not disabled or failed:
             logger.critical(
-                "LASER SAFETY: the interlock disabled NO laser ({}). Lasers "
-                "may still be ON — physically switch them off / block the "
-                "beam.".format("; ".join(errors) or "no lasers enumerable")
+                "LASER SAFETY: the interlock could not disable all lasers "
+                "(disabled={}, failed={}; {}). Lasers may still be ON — "
+                "physically switch them off / block the beam.".format(
+                    disabled,
+                    failed,
+                    "; ".join(map(str, errors)) or "no lasers enumerable",
+                )
             )
         return {
             "disabled": disabled,
@@ -239,7 +242,7 @@ class IlluminationSystem(AbstractSystem):
                 enbl = "on"
             else:
                 enbl = "off"
-            pwr = self.power_setvalues[lsr]
+            pwr = self.power_setvalues.get(lsr, "?")
             logger.debug(f"Laser {lsr} is {enbl} and set to {pwr} mW.")
         logger.debug(f"Currently active laser: {self.instrument.curr_laser}")
         try:
@@ -361,6 +364,13 @@ class IlluminationSystem(AbstractSystem):
                         las, exc
                     )
                 )
+                # set_laser turns the laser ON before it can fail (e.g. a dead
+                # attenuator mid-seed); don't leave it emitting after a failed
+                # seed — the whole point of staying fail-safe.
+                try:
+                    self.set_laser_enabled(las, False)
+                except Exception:  # noqa: BLE001 - best-effort
+                    pass
 
         # # switch on autoshutter (is switched on in initialization because
         # # that is necessary for calibrate and adjust)

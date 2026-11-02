@@ -277,6 +277,28 @@ class AllOffFailSafeTest(unittest.TestCase):
             any("shutter" in e for e in report["errors"]), report["errors"]
         )
 
+    def test_all_off_flags_a_laser_that_fails_to_disable(self):
+        # A laser that raises on disable goes to `failed` (still potentially
+        # emitting) — the others are still disabled.
+        isy = _make_system()
+        for la in isy.instrument.lasers.values():
+            la.enabled = True
+
+        class _Unresponsive:
+            @property
+            def enabled(self):
+                return True
+
+            @enabled.setter
+            def enabled(self, value):
+                raise RuntimeError("laser unresponsive")
+
+        isy.instrument.lasers[561] = _Unresponsive()
+        report = isy.all_off()
+        self.assertIn(488, report["disabled"])
+        self.assertEqual(report["failed"], [561])
+        self.assertFalse(isy.instrument.lasers[488].enabled)
+
     def test_all_off_with_no_instrument_darkens_nothing_and_flags_unsafe(self):
         # The overnight-abort case: monet never built (dead beampath device),
         # so no laser is reachable. all_off must NOT raise, must report zero
