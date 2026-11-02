@@ -88,6 +88,15 @@ DEFAULT_SWITCH_DELAY = 0.01
 DEFAULT_COMMAND_RETRIES = 3
 DEFAULT_RETRY_DELAY = 0.3
 
+# Keep-alive: a background read-only ping (``ID``) sent when the link has been
+# idle this many seconds, so the USB-serial port never idles long enough for
+# Windows USB selective-suspend (or the device's own sleep) to drop it mid-run.
+# This is the fix for an overnight abort where the ibidi sat idle ~2.3 h during
+# a 40k-frame acquire and came back "A device attached to the system is not
+# functioning." 0 disables it. Overridable via the setup's ``multiplexer:``
+# block (``keepalive_interval``).
+DEFAULT_KEEPALIVE_INTERVAL = 30.0
+
 
 class IbidiMultiplexer(_ValveABC):
     """Driver for the ibidi MultiFlOW 24-channel valve actuator.
@@ -135,6 +144,7 @@ class IbidiMultiplexer(_ValveABC):
         switch_delay=DEFAULT_SWITCH_DELAY,
         command_retries=DEFAULT_COMMAND_RETRIES,
         retry_delay=DEFAULT_RETRY_DELAY,
+        keepalive_interval=DEFAULT_KEEPALIVE_INTERVAL,
         **kwargs,
     ):
         self.address = address
@@ -151,6 +161,15 @@ class IbidiMultiplexer(_ValveABC):
         self._port = None
         self._baud = baud
         self._timeout = timeout
+
+        # Keep-alive (see DEFAULT_KEEPALIVE_INTERVAL): a daemon thread pings the
+        # device over idle gaps so the USB link can't be suspended out from
+        # under a long acquisition. ``_last_activity`` is bumped by every real
+        # command, so the ping only fires during genuine idle.
+        self._keepalive_interval = float(keepalive_interval or 0)
+        self._ka_stop = threading.Event()
+        self._ka_thread = None
+        self._last_activity = time.monotonic()
 
         # Default to private, never-set events so direct hardware use before
         # orchestration starts does not dereference a None flag. The
@@ -193,6 +212,7 @@ class IbidiMultiplexer(_ValveABC):
                     self._port, self.channels
                 )
             )
+        self._start_keepalive()
 
     def _open_serial(self):
         """Open the serial port from the remembered connection parameters.
@@ -263,6 +283,9 @@ class IbidiMultiplexer(_ValveABC):
         the whole shutdown. Takes ``self._lock`` so it can't swap the handle
         out from under an in-flight :meth:`_command` on another thread.
         """
+        # Stop the keep-alive before touching the handle so its ping can't race
+        # the close (it goes through _command, which takes _lock).
+        self._stop_keepalive()
         # Drop the shutdown safety-net first: once closed deterministically
         # there is nothing for atexit to release, and leaving it registered
         # would pin this object alive until interpreter exit. No-op when never
@@ -286,6 +309,63 @@ class IbidiMultiplexer(_ValveABC):
 
     def __del__(self):  # pragma: no cover - GC timing dependent
         self.close()
+
+    # -- keep-alive -----------------------------------------------------------
+    def _start_keepalive(self):
+        """Launch the idle-ping thread (no-op when disabled or already up)."""
+        if self._keepalive_interval <= 0:
+            return
+        self._stop_keepalive()
+        self._ka_stop = threading.Event()
+        self._last_activity = time.monotonic()
+        self._ka_thread = threading.Thread(
+            target=self._keepalive_loop,
+            name="ibidi-keepalive",
+            daemon=True,
+        )
+        self._ka_thread.start()
+
+    def _stop_keepalive(self):
+        """Signal the keep-alive thread to exit and join it (best effort)."""
+        self._ka_stop.set()
+        t, self._ka_thread = self._ka_thread, None
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=2.0)
+
+    def _keepalive_loop(self):  # pragma: no cover - timing/thread dependent
+        """Ping the device whenever the link has been idle too long.
+
+        Wakes every few seconds (promptly on stop) and, if no real command has
+        run within ``keepalive_interval``, issues one read-only ``ID`` query to
+        keep the USB link out of selective-suspend. Exception-proof: a failed
+        ping (dropped device) is logged, and because it routes through
+        ``_command`` it also *reopens* the port — a proactive reconnect so the
+        next real valve command may find the link already recovered.
+        """
+        interval = self._keepalive_interval
+        # How often to check the idle clock. Stop is instant regardless (the
+        # Event wakes wait() immediately), so this only bounds check latency;
+        # cap at 5 s for the 30 s default, floor low so small intervals work.
+        tick = max(0.05, min(interval, 5.0))
+        while not self._ka_stop.wait(tick):
+            if time.monotonic() - self._last_activity < interval:
+                continue  # recent real traffic — no ping needed
+            try:
+                status = self.get_status()  # read-only; "" on failure
+            except Exception as exc:  # noqa: BLE001 - keep the thread alive
+                logger.warning("ibidi keep-alive ping error: {!r}".format(exc))
+                self._last_activity = time.monotonic()
+                continue
+            self._last_activity = time.monotonic()
+            if status:
+                logger.debug("ibidi keep-alive ok ({!r})".format(status))
+            else:
+                logger.warning(
+                    "ibidi keep-alive got no response on {}; the link may "
+                    "have dropped (USB suspend / device unplugged)".format(
+                        self._port
+                    )
+                )
 
     # -- low-level command ----------------------------------------------------
     def _command(self, cmd):
@@ -325,6 +405,9 @@ class IbidiMultiplexer(_ValveABC):
                     raw = self._serial.read_until(TERMINATOR.encode())
                 reply = raw.decode(errors="replace").strip()
                 logger.debug("ibidi {!r} -> {!r}".format(cmd, reply))
+                # Real traffic resets the idle clock so the keep-alive only
+                # pings over genuine gaps.
+                self._last_activity = time.monotonic()
                 return reply
             except SerialException as exc:
                 last_exc = exc

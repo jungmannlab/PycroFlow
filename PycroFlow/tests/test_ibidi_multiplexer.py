@@ -28,6 +28,54 @@ class IbidiMultiplexerDriverTest(unittest.TestCase):
             self.assertTrue(mx.get_status())
             mx.close()
 
+    def test_keepalive_pings_over_idle_and_stops_on_close(self):
+        import time
+
+        with emu.patch_ibidi_serial() as fake:
+            mx = IbidiMultiplexer("7", keepalive_interval=0.1)
+            connect_ids = sum(
+                1 for c, _ in fake.command_log if c.startswith("ID")
+            )
+            time.sleep(0.4)  # idle -> the keep-alive should ping a few times
+            idle_ids = sum(
+                1 for c, _ in fake.command_log if c.startswith("ID")
+            )
+            mx.close()
+        # extra ID queries appeared over the idle gap...
+        self.assertGreater(idle_ids, connect_ids)
+        # ...and the thread is gone after close()
+        self.assertFalse(
+            any(t.name == "ibidi-keepalive" for t in threading.enumerate())
+        )
+
+    def test_keepalive_disabled_when_interval_zero(self):
+        import time
+
+        with emu.patch_ibidi_serial() as fake:
+            mx = IbidiMultiplexer("7", keepalive_interval=0)
+            before = len(fake.command_log)
+            time.sleep(0.3)
+            self.assertEqual(len(fake.command_log), before)  # no pings
+            self.assertFalse(
+                any(t.name == "ibidi-keepalive" for t in threading.enumerate())
+            )
+            mx.close()
+
+    def test_real_traffic_defers_keepalive_ping(self):
+        # A command resets the idle clock, so the keep-alive does not ping on
+        # top of active traffic (only over genuine gaps).
+        import time
+
+        with emu.patch_ibidi_serial() as fake:
+            mx = IbidiMultiplexer("7", switch_delay=0, keepalive_interval=0.3)
+            for _ in range(5):
+                mx.select(3)  # steady real traffic, 50 ms apart
+                time.sleep(0.05)
+            ids = sum(1 for c, _ in fake.command_log if c.startswith("ID"))
+            mx.close()
+        # only the single connect-time ID; no keep-alive ping interleaved
+        self.assertEqual(ids, 1)
+
     def test_is_a_hal_valve(self):
         self.assertTrue(issubclass(IbidiMultiplexer, ValveABC))
 
