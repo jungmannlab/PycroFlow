@@ -185,6 +185,35 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
             self.work_queue()
             time.sleep(0.02)
 
+    def _consume_start_index(self, nsteps):
+        """Return the start index seeded by ``start_protocol``, else 0.
+
+        ``start_protocol(system_steps=...)`` appends a ``'start entry: N'``
+        marker to this subsystem's message list to begin a run partway through
+        (start-at-round / resume). Pop any such marker and return N, clamped to
+        ``[0, nsteps]``; the default 0 preserves a normal full run. Non-marker
+        messages on the list are left untouched.
+        """
+        idx = 0
+        key = self.target
+        with self.txchange[key + "_lock"]:
+            # Mutate the list in place (slice-assign below) — bind the real
+            # list, not an `or []` fallback that would alias a throwaway when
+            # the list is empty. The subsystem key always exists (created by
+            # ThreadExchange.create for every subsystem).
+            queue = self.txchange[key]
+            kept = []
+            for msg in queue:
+                if isinstance(msg, str) and msg.startswith("start entry:"):
+                    try:
+                        idx = int(msg.split(":", 1)[1])
+                    except (ValueError, IndexError):
+                        pass
+                else:
+                    kept.append(msg)
+            queue[:] = kept  # drop the consumed markers, keep the rest
+        return max(0, min(idx, nsteps))
+
     def run_protocol(self):
         logger.debug(
             "start running protocol: {:s}".format(
@@ -192,7 +221,11 @@ class AbstractSystemHandler(threading.Thread, abc.ABC):
             )
         )
         nsteps = len(self.protocol["protocol_entries"])
-        self.protocol_iter = 0
+        # Start-at-round / resume: begin at the index start_protocol seeded for
+        # this subsystem (default 0). The signals emitted by the skipped
+        # entries were pre-fired by the orchestrator, so a later subsystem's
+        # 'wait for signal' on a pre-start signal does not deadlock.
+        self.protocol_iter = self._consume_start_index(nsteps)
         while self.protocol_iter < len(self.protocol["protocol_entries"]):
             # Clear any sub-step progress from the previous step; the current
             # step's dispatcher/system sets it if it has any.
@@ -773,12 +806,52 @@ class ProtocolOrchestrator:
             are the integer start step for that system.
         """
         if system_steps != {}:
+            # Fire the signals the skipped entries would have emitted BEFORE
+            # seeding the start indices, so a subsystem that starts on a 'wait
+            # for signal' for a pre-start signal is already satisfied and the
+            # run can't deadlock at the resume boundary.
+            self._preseed_signals(system_steps)
             for syst, step in system_steps.items():
                 with self.threadexchange[syst + "_lock"]:
                     self.threadexchange[syst].append(f"start entry: {step}")
 
         logger.debug("setting start protocol flag")
         self.threadexchange["start_protocol_flag"].set()
+
+    def _preseed_signals(self, system_steps):
+        """Pre-fire the signals emitted by entries skipped on a partial start.
+
+        For each subsystem resuming at index N, fire every ``signal`` entry in
+        its ``[0, N)`` prefix into the shared SignalRegistry under its own
+        target — exactly as :meth:`AbstractSystemHandler.send_message` would at
+        run time — so a LATER subsystem's ``wait for signal`` on one of those
+        pre-start signals wakes immediately instead of waiting forever for an
+        emission that now never happens. No-op without a registry (hand-built
+        threadexchange in some tests).
+        """
+        registry = (
+            self.threadexchange.get("signal_registry")
+            if hasattr(self.threadexchange, "get")
+            else None
+        )
+        if registry is None:
+            return
+        handlers = {
+            "fluid": self.fluid_handler,
+            "img": self.imaging_handler,
+            "illu": self.illumination_handler,
+        }
+        for syst, step in system_steps.items():
+            handler = handlers.get(syst)
+            protocol = getattr(handler, "protocol", None) or {}
+            entries = protocol.get("protocol_entries", []) or []
+            for entry in entries[: max(0, int(step))]:
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("$type") == "signal"
+                    and entry.get("value") is not None
+                ):
+                    registry.fire(syst, entry["value"])
 
     def abort_protocol(self):
         logger.debug("setting abort protocol flag")
