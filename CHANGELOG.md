@@ -61,6 +61,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **User-local microscope setups (community-friendly configuration).** A real
+  setup describes one lab's specific rig, so setups are no longer committed to
+  the package. `configs.user_setups_dir()` resolves a per-user directory
+  (`PYCROFLOW_SETUPS_DIR` env override → `<PYCROFLOW_HOME>/setups` →
+  `%LOCALAPPDATA%\PycroFlow\setups` on Windows / `$XDG_CONFIG_HOME/PycroFlow/setups`
+  on POSIX); `configs.list_setups()` returns the **union** of the shipped
+  built-ins and the user-local setups; `configs.load_setup()` /
+  `configs.setup_path()` resolve **user-local-first** (a user setup shadows a
+  built-in of the same name); and new `configs.save_setup(name, data)` writes a
+  setup into the user dir atomically (with a `.bak` backup) — the write seam the
+  upcoming setup wizard will use. Only the emulated setups (`Emulator`,
+  `EmulatorCam`, `IbidiEmulator`) still ship; the former committed real rigs
+  `Mercury` / `Ibidi` moved to `tests/fixtures/setups/` (discovered via
+  `PYCROFLOW_SETUPS_DIR` in the test bootstrap) so the non-emulated path keeps
+  its coverage. First step toward the monet-style setup wizard. **Existing rigs:
+  copy your `<name>.yaml` into the new user setups dir (it is no longer shipped
+  in the wheel).**
 - **Tag-triggered Windows release pipeline (installer + portable exe).** A new
   `Release — Windows GUI installer` workflow (`.github/workflows/release-windows.yml`)
   fires on a `vX.Y.Z` tag push (or manual `workflow_dispatch` dry run): it
