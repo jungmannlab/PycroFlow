@@ -26,11 +26,14 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QWidget,
     QVBoxLayout,
+    QDialog,
+    QTextEdit,
+    QPushButton,
 )
 
 # Qt6 moved QAction out of QtWidgets into QtGui.
-from PyQt6.QtGui import QAction
-from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QAction, QFont
+from PyQt6.QtCore import QTimer, Qt
 
 from loguru import logger
 
@@ -57,6 +60,15 @@ _RUN_LOCK_STATES = {
     ExperimentState.PAUSED,
 }
 
+# Shown by Help ▸ License when LICENSE.md isn't beside the package (e.g. some
+# frozen builds); points at the canonical copy.
+_LICENSE_FALLBACK = (
+    "Copyright (c) 2022-2026, Heinrich Grabmayr — Jungmann Lab, MPI of "
+    "Biochemistry.\n\nPycroFlow is distributed under a BSD 2-clause license. "
+    "The full text ships as LICENSE.md with the source distribution:\n"
+    "https://github.com/jungmannlab/PycroFlow/blob/master/LICENSE.md"
+)
+
 
 class PycroFlowMainWindow(QMainWindow):
     def __init__(self, experiment_service, system_service, parent=None):
@@ -78,9 +90,12 @@ class PycroFlowMainWindow(QMainWindow):
         # + pumps) to show without the user having to widen the window first.
         self.resize(1280, 820)
         self._build_toolbar()
+        self._build_menu()
         self._build_tabs()
         self._build_statusbar()
         self._init_setup()
+        #: in-flight update-check worker (prevents concurrent checks).
+        self._update_worker = None
 
         # --- post-run replay recording (feature: scrub a finished run).
         # A recorder taps the live stream + polls progress/fluid state while a
@@ -174,6 +189,125 @@ class PycroFlowMainWindow(QMainWindow):
             self.setup_combo.setCurrentIndex(i)
         if self.setup_combo.currentText():
             self._on_setup_changed(self.setup_combo.currentText())
+
+    # --- Help menu ----------------------------------------------------
+
+    def _build_menu(self):
+        help_menu = self.menuBar().addMenu("&Help")
+        act_update = QAction("Check for Updates…", self)
+        act_update.triggered.connect(self._check_for_updates)
+        help_menu.addAction(act_update)
+        help_menu.addSeparator()
+        act_license = QAction("License", self)
+        act_license.triggered.connect(self._show_license)
+        help_menu.addAction(act_license)
+        act_about = QAction("About PycroFlow", self)
+        act_about.triggered.connect(self._show_about)
+        help_menu.addAction(act_about)
+
+    def _message_with_links(self, title, html, icon=None):
+        """A rich-text QMessageBox whose ``<a href>`` links open in a browser.
+
+        QMessageBox renders rich text but its labels don't follow external
+        links by default — enable it so a URL in the message is clickable.
+        """
+        box = QMessageBox(self)
+        box.setIcon(icon or QMessageBox.Icon.Information)
+        box.setWindowTitle(title)
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(html)
+        for label in box.findChildren(QLabel):
+            label.setOpenExternalLinks(True)
+        box.exec()
+
+    def _show_about(self):
+        from PycroFlow import __version__
+
+        self._message_with_links(
+            "About PycroFlow",
+            "<b>PycroFlow</b> — automated DNA-PAINT acquisition<br>"
+            "Version {}<br><br>"
+            "© Jungmann Lab, Max Planck Institute of Biochemistry.<br>"
+            "Author: Heinrich Grabmayr.<br><br>"
+            '<a href="https://github.com/jungmannlab/PycroFlow">'
+            "github.com/jungmannlab/PycroFlow</a>".format(__version__),
+        )
+
+    @staticmethod
+    def _license_text():
+        import PycroFlow
+
+        root = os.path.dirname(
+            os.path.dirname(os.path.abspath(PycroFlow.__file__))
+        )
+        try:
+            with open(os.path.join(root, "LICENSE.md")) as f:
+                return f.read().strip() or _LICENSE_FALLBACK
+        except OSError:
+            return _LICENSE_FALLBACK
+
+    def _show_license(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("PycroFlow — License")
+        dlg.resize(640, 480)
+        lay = QVBoxLayout(dlg)
+        view = QTextEdit()
+        view.setReadOnly(True)
+        view.setFont(QFont("Monospace"))
+        view.setPlainText(self._license_text())
+        lay.addWidget(view)
+        btn = QPushButton("Close")
+        btn.clicked.connect(dlg.accept)
+        lay.addWidget(btn)
+        dlg.exec()
+
+    def _check_for_updates(self):
+        """Query GitHub for the latest release (off-thread) and report back."""
+        from PycroFlow import updates
+
+        if self._update_worker:
+            return
+        self._update_worker = True
+        self.statusBar().showMessage("Checking for updates…")
+        run_in_background(
+            self,
+            updates.check_for_update,
+            on_done=self._on_update_result,
+            on_error=lambda exc: self._on_update_result({"error": str(exc)}),
+        )
+
+    def _on_update_result(self, result):
+        from PycroFlow import updates
+
+        self._update_worker = None
+        self.statusBar().showMessage("Update check complete", 4000)
+        url = result.get("url") or updates.RELEASES_URL
+        link = '<a href="{0}">{0}</a>'.format(url)
+        if result.get("error"):
+            self._message_with_links(
+                "Check for Updates",
+                "Could not check for updates:<br><br>{}<br><br>"
+                "See the releases page:<br>{}".format(result["error"], link),
+                icon=QMessageBox.Icon.Warning,
+            )
+            return
+        if result.get("update_available"):
+            self._message_with_links(
+                "Update available",
+                "A newer version of PycroFlow is available.<br><br>"
+                "Installed: <b>{}</b><br>Latest: <b>{}</b><br><br>"
+                "Download the new installer from:<br>{}".format(
+                    result["current"], result["latest"], link
+                ),
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Check for Updates",
+                "PycroFlow is up to date (version {}).".format(
+                    result["current"]
+                ),
+            )
 
     def _build_tabs(self):
         self.tabs = QTabWidget()

@@ -61,6 +61,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Help menu — About / License / Check for Updates (monet-style).** The GUI
+  main window gains a **Help** menu: *About PycroFlow* (version, © Jungmann Lab
+  MPI of Biochemistry, author, clickable GitHub link), *License* (the full
+  `LICENSE.md` in a scrollable dialog, with a pointer fallback for frozen
+  builds), and *Check for Updates…* — a new `PycroFlow.updates` module queries
+  the public GitHub Releases API for the latest `vX.Y.Z` tag and compares it to
+  the installed `__version__` (PEP 440 via `packaging`, numeric-tuple fallback).
+  The check runs off the GUI thread (`run_in_background`), never raises (offline
+  → a friendly warning with the Releases link), and never nags an untagged /
+  editable source build. Pairs with the new installer + release pipeline.
 - **First-run setup wizard (monet-style onboarding).** A Qt wizard
   (`gui/setup_wizard.py` over the headless, testable `setup_core.py`) guides a
   fresh install through cross-project **connectivity** (picasso-registry
