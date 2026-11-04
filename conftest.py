@@ -5,23 +5,10 @@ mocks are also installed from ``PycroFlow/tests/__init__.py`` so unittest
 discovery works too — keep both paths in sync.
 """
 
-import os
-
+# Importing this submodule runs PycroFlow/tests/__init__.py first, which (a)
+# installs the hardware mocks and (b) points PYCROFLOW_SETUPS_DIR at the
+# relocated real-rig fixtures — so both are already in effect here; the
+# install_hardware_mocks() call below is just the belt-and-braces repeat.
 from PycroFlow.tests._mock_hardware import install_hardware_mocks
 
 install_hardware_mocks()
-
-# Mirror tests/__init__.py: discover the relocated real-rig setups (now test
-# fixtures) so the pytest runner resolves `load_setup('Mercury'/'Ibidi')` too.
-os.environ.setdefault(
-    "PYCROFLOW_SETUPS_DIR",
-    os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "PycroFlow",
-            "tests",
-            "fixtures",
-            "setups",
-        )
-    ),
-)

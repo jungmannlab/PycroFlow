@@ -10,6 +10,7 @@ and the ``save_setup`` write/backup round-trip.
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -67,9 +68,7 @@ class TestSetupDiscovery(unittest.TestCase):
 
     def setUp(self):
         self._tmp = tempfile.mkdtemp(prefix="pf-setups-")
-        self.addCleanup(
-            __import__("shutil").rmtree, self._tmp, ignore_errors=True
-        )
+        self.addCleanup(shutil.rmtree, self._tmp, ignore_errors=True)
         patcher = mock.patch.dict(
             os.environ, {"PYCROFLOW_SETUPS_DIR": self._tmp}
         )
@@ -88,15 +87,41 @@ class TestSetupDiscovery(unittest.TestCase):
         self.assertIn("MyRig", names)  # user-local
         self.assertEqual(names, sorted(names))  # sorted, de-duped
 
-    def test_user_shadows_builtin_of_same_name(self):
-        # A user Emulator.yaml is loaded in preference to the built-in.
+    def test_list_builtins_only_when_user_dir_absent(self):
+        # Fresh install: the user dir does not exist yet -> built-ins only,
+        # no crash (list_setups guards on is_dir()).
+        missing = os.path.join(self._tmp, "does-not-exist")
+        with mock.patch.dict(os.environ, {"PYCROFLOW_SETUPS_DIR": missing}):
+            names = configs.list_setups()
+        self.assertIn("Emulator", names)
+        self.assertFalse(Path(missing).exists())
+
+    def test_user_shadows_builtin_at_load_level(self):
+        # A user Emulator.yaml wins over the built-in — verified by reading the
+        # raw content back (not just the resolved path), so a load-path
+        # regression can't pass silently.
         self._write("Emulator", {"setup": "Emulator", "marker": "user-copy"})
         self.assertEqual(
             configs._setup_file("Emulator"),
             Path(self._tmp) / "Emulator.yaml",
         )
+        self.assertEqual(
+            configs.load_setup_file("Emulator")["marker"], "user-copy"
+        )
         # And listed only once despite existing in both locations.
         self.assertEqual(configs.list_setups().count("Emulator"), 1)
+
+    def test_dotted_bare_name_resolves_to_yaml(self):
+        # A version-tagged name ('Mercury.v2') is a bare name, not a path —
+        # it must resolve to <user>/Mercury.v2.yaml, not be opened literally.
+        self._write("Mercury.v2", {"setup": "Mercury.v2"})
+        self.assertEqual(
+            configs._setup_file("Mercury.v2"),
+            Path(self._tmp) / "Mercury.v2.yaml",
+        )
+        self.assertEqual(
+            configs.load_setup_file("Mercury.v2")["setup"], "Mercury.v2"
+        )
 
     def test_explicit_path_bypasses_discovery(self):
         p = Path(self._tmp) / "elsewhere.yaml"
@@ -121,6 +146,21 @@ class TestSetupDiscovery(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PYCROFLOW_SETUPS_DIR": nested}):
             dest = configs.save_setup("X", {"setup": "X"})
             self.assertTrue(dest.is_file())
+
+    def test_clone_edit_save_roundtrip_with_tubing(self):
+        # The clone→edit→save path the wizard uses: load_setup_file (raw, with
+        # tubing as records) → edit → save_setup → load_setup (normalised,
+        # tubing as a tuple-keyed dict). Proves save_setup serialises a real
+        # setup shape and the saved file is loadable.
+        src = configs.load_setup_file("Emulator")  # a shipped built-in (raw)
+        src["setup"] = "ClonedRig"
+        dest = configs.save_setup("ClonedRig", src)
+        self.assertTrue(dest.is_file())
+        loaded = configs.load_setup("ClonedRig")  # normalised load
+        self.assertEqual(loaded["setup"], "ClonedRig")
+        tubing = loaded.get("fluid", {}).get("tubing")
+        if tubing:  # Emulator carries tubing -> must normalise to tuple keys
+            self.assertTrue(all(isinstance(k, tuple) for k in tubing))
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -76,14 +76,17 @@ def user_setups_dir():
 def _setup_file(name):
     """Resolve a setup *name* to its YAML path.
 
-    A bare name (no suffix) resolves to the user-local
+    A bare setup name resolves to the user-local
     ``<user_setups_dir>/<name>.yaml`` when that file exists, else the built-in
     ``configs/setups/<name>.yaml`` — so a user-local setup shadows a built-in
-    of the same name. A value that already carries a suffix is treated as an
-    explicit path and returned unchanged.
+    of the same name. A value is treated as an explicit path (returned
+    unchanged) only when it has a directory component or a YAML suffix, so a
+    dotted bare name like ``'Mercury.v2'`` still resolves to
+    ``Mercury.v2.yaml`` rather than being opened literally.
     """
-    if Path(name).suffix != "":
-        return Path(name)
+    p = Path(name)
+    if p.parent != Path(".") or p.suffix.lower() in (".yaml", ".yml"):
+        return p
     user = user_setups_dir() / f"{name}.yaml"
     if user.is_file():
         return user
@@ -154,7 +157,9 @@ def list_setups():
     Returns
     -------
     list of str
-        Sorted base names (e.g. ``['Emulator', 'Mercury', 'Template']``).
+        Sorted base names (e.g. the shipped
+        ``['Emulator', 'EmulatorCam', 'IbidiEmulator']`` plus any user-local
+        setups).
     """
     names = set()
     if _SETUP_DIR.is_dir():
@@ -175,13 +180,39 @@ def setup_path(name):
     return str(_setup_file(name))
 
 
+def load_setup_file(name):
+    """Return a setup's raw, on-disk YAML content (un-normalised).
+
+    Unlike :func:`load_setup` — which normalises to the role-based layout and
+    converts tubing to a tuple-keyed dict — this returns the dict exactly as
+    written on disk. It is the clone source that pairs with :func:`save_setup`:
+    ``save_setup(name, edit(load_setup_file(src)))`` round-trips safely, whereas
+    feeding :func:`load_setup`'s normalised result to :func:`save_setup` would
+    fail (tuple keys are not YAML-serialisable). Resolution is user-local-first,
+    see :func:`_setup_file`.
+
+    Parameters
+    ----------
+    name : str
+        Setup name (user-local-first, else built-in) or path.
+
+    Returns
+    -------
+    dict
+        The parsed YAML, unmodified.
+    """
+    with open(_setup_file(name)) as f:
+        return yaml.safe_load(f)
+
+
 def save_setup(name, data):
     """Write a setup to the per-user setups dir as ``<name>.yaml``.
 
     Creates :func:`user_setups_dir` if needed, backs up an existing file to
     ``<name>.yaml.bak``, and writes atomically. ``data`` must be the on-disk
     setup shape (tubing as ``{from, to, volume}`` records, not the tuple-keyed
-    dict :func:`load_setup` returns).
+    dict :func:`load_setup` returns) — use :func:`load_setup_file` as the clone
+    source, not :func:`load_setup`.
 
     Parameters
     ----------
