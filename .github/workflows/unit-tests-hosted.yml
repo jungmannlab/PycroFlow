@@ -1,10 +1,16 @@
 name: Unit Tests (hosted)
 
 # Hardware-independent unit tests on a cheap GitHub-hosted runner
-# (ubuntu-latest), meant to be the REQUIRED status check that gates merges into
-# develop/master. The deep Windows tier ("Python Unit Tests (Windows)",
-# run-unittests-windows.yml) needs the lab box with real instruments + USB
-# drivers and is unavailable on forks — so it must NOT be a required check.
+# (ubuntu-latest), across a Python version matrix (like the sibling monet /
+# picasso-registry repos). The REQUIRED status check that gates merges into
+# develop/master is the aggregator job below, named "Unit Tests (hosted)" — it
+# passes only if every matrix leg passes. Keeping that name stable means adding
+# or dropping a Python version needs NO change to the branch-protection ruleset
+# (which pins the context "Unit Tests (hosted)").
+#
+# The deep Windows tier ("Python Unit Tests (Windows)", run-unittests-windows.yml)
+# needs the lab box with real instruments + USB drivers and is unavailable on
+# forks — so it must NOT be a required check.
 #
 # The suite runs with no vendor SDKs: tests/__init__.py + the top-level
 # conftest.py install sys.modules mocks for pycromanager / monet / pycobolt /
@@ -38,9 +44,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  unit-tests:
-    name: Unit Tests (hosted)
+  tests:
+    name: tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      # Report every leg's result even if one fails (don't cancel the others).
+      fail-fast: false
+      matrix:
+        # Python 3.11 is the floor (requires-python>=3.11). 3.12 mirrors the
+        # picasso-registry matrix. Add 3.13/3.14 once picassosr + PyQt6 wheels
+        # for them are confirmed (monet, with lighter deps, already runs them).
+        python-version: ["3.11", "3.12"]
     env:
       QT_QPA_PLATFORM: offscreen
 
@@ -48,10 +62,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: pyproject.toml
 
@@ -85,3 +99,23 @@ jobs:
           python -m unittest -v
           PycroFlow.tests.test_stage5_gui
           PycroFlow.tests.test_live_gui
+
+  unit-tests-hosted:
+    # The stable REQUIRED status check (branch-protection ruleset pins the
+    # context "Unit Tests (hosted)"). Green only if every matrix leg passed —
+    # `if: always()` so it reports pass/fail rather than being skipped when a
+    # leg fails, and so the required check never sits forever "expected".
+    name: Unit Tests (hosted)
+    needs: tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all Python matrix legs to pass
+        run: |
+          result='${{ needs.tests.result }}'
+          echo "unit-test matrix result: $result"
+          if [ "$result" != "success" ]; then
+            echo "::error::one or more Python legs did not pass ($result)"
+            exit 1
+          fi
+          echo "All Python matrix legs passed."
