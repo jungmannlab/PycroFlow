@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-04
+
+Hotfix for the v0.3.0 Windows installer: the GUI crashed on first launch.
+
+### Fixed
+
+- **Installed GUI crashed on first launch** (`Cannot log to objects of type
+  'NoneType'`). A windowed (`console=False`) PyInstaller exe double-clicked with
+  no console has `sys.stderr is None`, and `setup_logging` tried to add it as a
+  loguru sink. The stderr sink is now skipped when there's no real stream (file
+  logs unaffected), and the frozen launcher (`packaging/pycroflow_gui.py`) also
+  redirects a `None` `sys.stdout`/`sys.stderr` to a file in the per-user dir so
+  `print()` can't crash startup either.
+- **Frozen GUI wrote `.env` / resolved setups to the wiped unpack dir.** The
+  launcher now sets `PYCROFLOW_HOME` (not just `chdir`), so `setup_core.env_path`
+  and `configs.user_setups_dir` both resolve to the persistent per-user dir —
+  the setup wizard's `.env` + setups now land where the app reads them.
+
+### Added
+
+- **`PYCROFLOW_SETUP` — default microscope on launch.** The GUI pre-selects the
+  setup named by `PYCROFLOW_SETUP` (the toolbar combo is the microscope
+  selector; there is no CLI arg), and the setup wizard records the setup it
+  creates there — so a fresh install connects to the right rig next launch
+  (like monet's `MONET_MICROSCOPE`). Documented in `.env.template`.
+
 ## [0.3.0] - 2026-11-04
 
 First release carrying the **Windows installer + release pipeline**, the

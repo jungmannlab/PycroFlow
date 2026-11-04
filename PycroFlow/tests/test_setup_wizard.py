@@ -70,6 +70,8 @@ class TestSetupWizardCommit(unittest.TestCase):
         env = setup_core.read_env()
         self.assertEqual(env["PAINT_REGISTRY_URL"], "http://reg:8000")
         self.assertEqual(env["PAINT_REGISTRY_TOKEN"], "tok")
+        # The created setup is recorded as the default microscope (.env).
+        self.assertEqual(env["PYCROFLOW_SETUP"], "MyScope")
         self.assertIn("MyScope", configs.list_setups())
         loaded = configs.load_setup("MyScope")
         self.assertEqual(loaded["setup"], "MyScope")
@@ -174,6 +176,14 @@ class TestMainWindowWizardWiring(unittest.TestCase):
         with mock.patch.object(sw, "run_setup_wizard", _fake_launch):
             w._run_setup_wizard()
         self.assertEqual(w.setup_combo.currentText(), "NewRig")
+
+    def test_pycroflow_setup_env_preselects_the_microscope(self):
+        # PYCROFLOW_SETUP picks the default rig on launch (not the first combo
+        # entry). "IbidiEmulator" is a shipped setup that sorts after "Emulator".
+        with mock.patch.dict(os.environ, {"PYCROFLOW_SETUP": "IbidiEmulator"}):
+            w = self._window()
+        self.addCleanup(w.deleteLater)
+        self.assertEqual(w.setup_combo.currentText(), "IbidiEmulator")
 
 
 if __name__ == "__main__":  # pragma: no cover
