@@ -104,6 +104,11 @@ class PycroFlowMainWindow(QMainWindow):
             self.replay_bar.set_controller(None, 0)
         )
 
+        # First-run onboarding: if nothing is configured yet (no .env, no user
+        # setups), offer the setup wizard once the window is up. Deferred via a
+        # 0-timer so the main window paints first (matches monet's pattern).
+        QTimer.singleShot(0, self._maybe_first_run_wizard)
+
     # --- toolbar ------------------------------------------------------
 
     def _build_toolbar(self):
@@ -120,10 +125,55 @@ class PycroFlowMainWindow(QMainWindow):
         tb.addAction(self.act_connect)
         self.act_disconnect = QAction("Disconnect", self)
         tb.addAction(self.act_disconnect)
+        tb.addSeparator()
+        self.act_setup_wizard = QAction("Setup Wizard…", self)
+        tb.addAction(self.act_setup_wizard)
 
         self.setup_combo.currentTextChanged.connect(self._on_setup_changed)
         self.act_connect.triggered.connect(self._reconnect_all)
         self.act_disconnect.triggered.connect(self._disconnect_all)
+        self.act_setup_wizard.triggered.connect(self._run_setup_wizard)
+
+    def _maybe_first_run_wizard(self):
+        """Offer the setup wizard once, on an unconfigured machine."""
+        try:
+            from PycroFlow import setup_core
+
+            if setup_core.first_run():
+                self._run_setup_wizard()
+        except Exception as exc:  # noqa: BLE001 - onboarding is best-effort
+            logger.debug("first-run wizard check skipped: {!r}", exc)
+
+    def _run_setup_wizard(self):
+        """Open the setup wizard; refresh + select a newly created setup.
+
+        Disabled while a run owns the instruments (same lock as the other
+        manual hardware controls) so a mid-run reconfigure can't race it.
+        """
+        if not self.setup_combo.isEnabled():
+            return
+        from PycroFlow.gui.setup_wizard import run_setup_wizard
+
+        created = run_setup_wizard(self)
+        if created:
+            self._refresh_setup_combo(select=created)
+
+    def _refresh_setup_combo(self, select=None):
+        """Re-read the available setups into the toolbar combo.
+
+        Blocks the change signal during the rebuild, then selects ``select``
+        (or keeps the current text), firing a single ``_on_setup_changed``.
+        """
+        current = select or self.setup_combo.currentText()
+        self.setup_combo.blockSignals(True)
+        self.setup_combo.clear()
+        self.setup_combo.addItems(configs.list_setups())
+        self.setup_combo.blockSignals(False)
+        i = self.setup_combo.findText(current)
+        if i >= 0:
+            self.setup_combo.setCurrentIndex(i)
+        if self.setup_combo.currentText():
+            self._on_setup_changed(self.setup_combo.currentText())
 
     def _build_tabs(self):
         self.tabs = QTabWidget()

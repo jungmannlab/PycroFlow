@@ -61,6 +61,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **First-run setup wizard (monet-style onboarding).** A Qt wizard
+  (`gui/setup_wizard.py` over the headless, testable `setup_core.py`) guides a
+  fresh install through cross-project **connectivity** (picasso-registry
+  URL/token with a "Test registry" probe, monet config paths, spill-sensor port
+  → written to a private, gitignored, `0600` `.env`) and creating a **microscope
+  setup** by cloning a shipped `Template.yaml` and naming it for the rig (saved
+  user-local via `configs.save_setup`). It auto-opens once on an unconfigured
+  machine (`setup_core.first_run()` — no `.env` and no user setups) and is
+  re-runnable from the toolbar's **"Setup Wizard…"** action; creating a setup
+  refreshes + selects it in the setup combo. The deeper hardware topology (full
+  reservoir manifold + tubing) is cloned from the template as-is for now — the
+  wizard says to review it in the saved YAML. Builds on the user-local setup
+  storage below.
 - **User-local microscope setups (community-friendly configuration).** A real
   setup describes one lab's specific rig, so setups are no longer committed to
   the package. `configs.user_setups_dir()` resolves a per-user directory
