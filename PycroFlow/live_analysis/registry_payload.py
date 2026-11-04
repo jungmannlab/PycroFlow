@@ -17,9 +17,48 @@ through a registry client (real or the in-memory mock).
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from PycroFlow.live_analysis.run_id import new_run_id
+
+
+def setup_acquisition_fields(setup_name: str | None) -> dict:
+    """Acquisition-run fields that reference the active microscope setup.
+
+    Reads the resolved on-disk setup YAML (user-local-first, via
+    :func:`PycroFlow.configs.setup_path`) and returns the fields that pin it to
+    the run — so a dataset's provenance records *which* rig config produced it,
+    content-addressed for later de-dup / a registry ``setup_config`` endpoint:
+
+    * ``microscope_id`` — the setup name;
+    * ``config_yaml`` — the full setup YAML text (stored verbatim);
+    * ``extra`` — ``{"setup_sha256": <hex>}``, the SHA-256 of that text (the
+      stable "version" of this local setup).
+
+    Best-effort: an empty/unknown/unreadable ``setup_name`` returns ``{}`` so
+    stamping never breaks a run or a registry post.
+    """
+    if not setup_name:
+        return {}
+    from PycroFlow import configs
+
+    try:
+        text = Path(configs.setup_path(setup_name)).read_text(encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 - stamping is best-effort
+        logger.debug(
+            "setup stamp: could not read setup {!r} ({!r})", setup_name, exc
+        )
+        return {}
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return {
+        "microscope_id": str(setup_name),
+        "config_yaml": text,
+        "extra": {"setup_sha256": digest},
+    }
 
 
 def _ensure_id(fields: dict) -> str:

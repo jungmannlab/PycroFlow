@@ -61,6 +61,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Registry setup stamping (dataset ↔ rig-config provenance).** On a run with
+  live analysis, each `acquisition_run` record now references the active
+  microscope setup: `microscope_id` (the setup name), `config_yaml` (the full
+  setup YAML, verbatim), and `extra.setup_sha256` (a SHA-256 "version" of that
+  YAML) — so a dataset in picasso-registry points at the exact, content-addressed
+  rig config that produced it, even though setups are now user-local and
+  uncommitted. Computed once per run (`registry_payload.setup_acquisition_fields`,
+  from `configs.setup_path`) and best-effort (unknown/unreadable setup ⇒ no
+  stamp, never blocks a run). A deduplicating `/setup_config` registry endpoint
+  (so many runs reference one versioned row instead of repeating the YAML) is a
+  planned follow-up in picasso-registry.
 - **Help menu — About / License / Check for Updates (monet-style).** The GUI
   main window gains a **Help** menu: *About PycroFlow* (version, © Jungmann Lab
   MPI of Biochemistry, author, clickable GitHub link), *License* (the full
