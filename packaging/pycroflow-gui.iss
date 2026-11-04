@@ -35,6 +35,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 DefaultDirName={autopf}\PycroFlow
 DefaultGroupName=PycroFlow
 DisableProgramGroupPage=yes
+LicenseFile=..\LICENSE.md
 OutputDir=..\dist
 OutputBaseFilename=PycroFlow-Setup-{#MyAppVersion}
 UninstallDisplayIcon={app}\pycroflow-gui.exe

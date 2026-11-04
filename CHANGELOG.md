@@ -73,7 +73,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   install, no admin), and attaches both to the GitHub Release for the tag. This
   converges PycroFlow onto monet's packaging route (the two are the Full-
   Automation Windows rig-control GUIs; PycroFlow embeds monet's window as a tab)
-  rather than picasso-workflow's cross-platform conda `constructor` route.
+  rather than picasso-workflow's cross-platform conda `constructor` route. The
+  installer shows the project licence on its first page.
+- **BSD 2-clause licence (`LICENSE.md`).** Adds the project licence file (the
+  same BSD 2-clause text as the sibling `monet` repo, © Heinrich Grabmayr) and
+  corrects the package metadata to match it — `pyproject.toml` previously
+  declared `license = {text = "MIT"}` with an MIT classifier but shipped no
+  licence file; it now points at `LICENSE.md` with the BSD classifier.
 - **Start a run at a chosen round (resume after an abort).** The Run Sequence
   tab has a new **"Start at round…"** button (offered from loaded / finished /
   aborted, when the sequence has more than one round): pick a round, confirm a
