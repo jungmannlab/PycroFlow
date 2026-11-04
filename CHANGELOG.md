@@ -61,6 +61,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tag-triggered Windows release pipeline (installer + portable exe).** A new
+  `Release — Windows GUI installer` workflow (`.github/workflows/release-windows.yml`)
+  fires on a `vX.Y.Z` tag push (or manual `workflow_dispatch` dry run): it
+  installs `.[gui,hardware,monitoring]`, freezes the GUI into a one-file
+  `pycroflow-gui.exe` with PyInstaller (`packaging/pycroflow-gui.spec` +
+  `packaging/pycroflow_gui.py` launcher — sets a persistent per-user dir for
+  `.env`/logs, bundles the embedded monet tab and the hardware SDKs, and exposes
+  `--selfcheck` so CI verifies the frozen bundle imports headlessly), wraps it
+  in an Inno Setup installer (`packaging/pycroflow-gui.iss` → per-user Start-menu
+  install, no admin), and attaches both to the GitHub Release for the tag. This
+  converges PycroFlow onto monet's packaging route (the two are the Full-
+  Automation Windows rig-control GUIs; PycroFlow embeds monet's window as a tab)
+  rather than picasso-workflow's cross-platform conda `constructor` route. The
+  installer shows the project licence on its first page.
+- **BSD 2-clause licence (`LICENSE.md`).** Adds the project licence file (the
+  same BSD 2-clause text as the sibling `monet` repo, © Heinrich Grabmayr) and
+  corrects the package metadata to match it — `pyproject.toml` previously
+  declared `license = {text = "MIT"}` with an MIT classifier but shipped no
+  licence file; it now points at `LICENSE.md` with the BSD classifier.
 - **Start a run at a chosen round (resume after an abort).** The Run Sequence
   tab has a new **"Start at round…"** button (offered from loaded / finished /
   aborted, when the sequence has more than one round): pick a round, confirm a
