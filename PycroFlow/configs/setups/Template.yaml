@@ -1,0 +1,81 @@
+# Template microscope setup — the starting point the setup wizard clones.
+#
+# A "setup" describes one microscope's FIXED hardware, grouped by ROLE: `fluid`
+# (pumps, reservoir multiplexer, reservoir manifold, tubing), `imaging` (PFS
+# autofocus tags) and `illumination` (the monet config naming this scope's
+# lasers). The experiment design supplies the per-run intent (which reservoirs,
+# lasers, powers); configs.assemble_hamilton_config() merges the two.
+#
+# Clone this (the wizard does it for you, or copy it into your user setups dir —
+# see configs.user_setups_dir()), rename `setup`, and replace the PLACEHOLDER
+# values (COM port, the reservoir manifold wiring, tubing volumes, and the
+# `illumination.config` monet key) with your rig's. This file is a generic
+# example, not a connectable rig — `emulated: false` + a placeholder COM means
+# connecting it as-is will fail until you fill it in.
+
+setup: Template
+emulated: false
+
+fluid:
+  system_type: legacy
+  pumps:
+    driver: hamilton-psd
+    interface:
+      COM: '0'          # PLACEHOLDER — your syringe-pump serial port (e.g. '3')
+      baud: 9600
+    pump_a:             # injection syringe pump
+      address: 1
+      instrument_type: '4'
+      valve_type: Y
+      syringe: 500u
+      input_pos: in
+      output_pos: out
+      motorsteps_per_step: 1
+      speed_factor: 2
+    pump_out:           # waste syringe pump
+      address: 0
+      instrument_type: '4'
+      valve_type: Y
+      syringe: 5.0m
+      input_pos: in
+      output_pos: out
+      motorsteps_per_step: 1
+      speed_factor: 2
+  multiplexer:
+    driver: hamilton-mvp   # or ibidi-multiflow (own serial `port`)
+    valves:
+      - {address: 3, instrument_type: MVP, valve_type: 8-5}
+      - {address: 5, instrument_type: MVP, valve_type: 8-5}
+  flush_pos:
+    inject: in
+    flush: out
+  reservoirs:           # PLACEHOLDER wiring — each reservoir id -> valve positions
+    - {id: 1, valve_pos: {3: 2, 1: in}}
+    - {id: 2, valve_pos: {3: 3, 1: in}}
+    - {id: 3, valve_pos: {3: 4, 1: in}}
+    - {id: 4, valve_pos: {3: 5, 1: in}}
+    - {id: 5, valve_pos: {3: 6, 1: in}}
+    - {id: 6, valve_pos: {3: 7, 1: in}}
+    - {id: 7, valve_pos: {3: 8, 1: in}}
+    - {id: 14, valve_pos: {3: 1, 5: 1, 1: in}}
+    - {id: 15, valve_pos: {3: 1, 5: 2, 1: in}}
+    - {id: 16, valve_pos: {3: 1, 5: 3, 1: in}}
+  tubing:               # PLACEHOLDER volumes (uL) between physical points
+    - {from: R7, to: V3, volume: 325}
+    - {from: R1, to: V3, volume: 325}
+    - {from: V3, to: pump_a, volume: 195}
+    - {from: pump_a, to: sample, volume: 325}
+    - {from: pump_a, to: flush_waste, volume: 650}
+
+imaging:
+  pfs_pars:
+    tag_pfs: TIPFSOffset
+    tag_zdrive: TIZDrive
+    tag_status: TIPFSStatus
+    prop_state: State
+    prop_status: Status
+    deltat: 10
+
+illumination:
+  backend: monet
+  config: Template      # PLACEHOLDER — your monet.CONFIGS microscope key

@@ -291,6 +291,10 @@ class TestLiveRunCoordinator(unittest.TestCase):
         for acq in registry.acquisitions:
             self.assertEqual(acq["id"], run_id)
             self.assertEqual(acq["experiment_id"], exp_id)
+            # Setup stamping: the active setup is referenced on the run.
+            self.assertEqual(acq["microscope_id"], "Emulator")
+            self.assertIn("setup: Emulator", acq["config_yaml"])
+            self.assertEqual(len(acq["extra"]["setup_sha256"]), 64)
         for fov in registry.fovs:
             self.assertEqual(fov["acquisition_run_id"], run_id)
         # Clean FOVs: coverage honest and complete.

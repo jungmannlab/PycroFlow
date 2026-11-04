@@ -23,6 +23,8 @@ The package data is included via ``[tool.setuptools.package-data]`` in
 """
 
 import copy
+import os
+import shutil
 from pathlib import Path
 
 import yaml
@@ -35,6 +37,60 @@ _SETUP_DIR = _CONFIG_DIR / "setups"
 HAMILTON_MVP = "hamilton-mvp"
 IBIDI_MULTIFLOW = "ibidi-multiflow"
 MULTIPLEXER_DRIVERS = (HAMILTON_MVP, IBIDI_MULTIFLOW)
+
+
+def user_setups_dir():
+    """Return the per-user directory for local (uncommitted) setup configs.
+
+    A microscope setup describes one lab's specific rig, so it does not belong
+    in the shipped package (that only carries the emulated setups + a template).
+    Real setups live in a per-user directory instead, discovered here.
+
+    Resolution order:
+
+    1. the ``PYCROFLOW_SETUPS_DIR`` environment variable, used verbatim;
+    2. ``<PYCROFLOW_HOME>/setups`` when the frozen-GUI launcher set
+       ``PYCROFLOW_HOME``;
+    3. the per-user config location otherwise —
+       ``%LOCALAPPDATA%\\PycroFlow\\setups`` on Windows,
+       ``$XDG_CONFIG_HOME/PycroFlow/setups`` (``~/.config`` default) elsewhere.
+
+    The directory is not created here; :func:`save_setup` creates it on write.
+    """
+    override = os.environ.get("PYCROFLOW_SETUPS_DIR")
+    if override:
+        return Path(override)
+    home = os.environ.get("PYCROFLOW_HOME")
+    if home:
+        base = Path(home)
+    elif os.name == "nt":
+        base = (
+            Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "PycroFlow"
+        )
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")
+        base = Path(xdg) / "PycroFlow"
+    return base / "setups"
+
+
+def _setup_file(name):
+    """Resolve a setup *name* to its YAML path.
+
+    A bare setup name resolves to the user-local
+    ``<user_setups_dir>/<name>.yaml`` when that file exists, else the built-in
+    ``configs/setups/<name>.yaml`` — so a user-local setup shadows a built-in
+    of the same name. A value is treated as an explicit path (returned
+    unchanged) only when it has a directory component or a YAML suffix, so a
+    dotted bare name like ``'Mercury.v2'`` still resolves to
+    ``Mercury.v2.yaml`` rather than being opened literally.
+    """
+    p = Path(name)
+    if p.parent != Path(".") or p.suffix.lower() in (".yaml", ".yml"):
+        return p
+    user = user_setups_dir() / f"{name}.yaml"
+    if user.is_file():
+        return user
+    return _SETUP_DIR / f"{name}.yaml"
 
 
 def _resolve(path_or_name, suffix, base=None):
@@ -93,24 +149,93 @@ def load_legacy_tubing(name="legacy_tubing"):
 def list_setups():
     """Return the names of the available setup configs.
 
+    The union of the shipped built-in setups (``configs/setups/*.yaml`` — the
+    emulated setups + the template) and the user-local setups
+    (:func:`user_setups_dir`), sorted and de-duplicated. A user-local setup
+    shadows a built-in of the same name when loaded.
+
     Returns
     -------
     list of str
-        Sorted base names of ``configs/setups/*.yaml`` (e.g.
-        ``['Emulator', 'Mercury']``).
+        Sorted base names (e.g. the shipped
+        ``['Emulator', 'EmulatorCam', 'IbidiEmulator']`` plus any user-local
+        setups).
     """
-    if not _SETUP_DIR.is_dir():
-        return []
-    return sorted(p.stem for p in _SETUP_DIR.glob("*.yaml"))
+    names = set()
+    if _SETUP_DIR.is_dir():
+        names.update(p.stem for p in _SETUP_DIR.glob("*.yaml"))
+    udir = user_setups_dir()
+    if udir.is_dir():
+        names.update(p.stem for p in udir.glob("*.yaml"))
+    return sorted(names)
 
 
 def setup_path(name):
     """Return the on-disk path to a setup's YAML file.
 
-    ``name`` is a setup basename in ``configs/setups`` or a path. Used by the
-    GUI to write edited values (e.g. camera device indices) back to the file.
+    ``name`` is a setup basename (resolved user-local-first, see
+    :func:`_setup_file`) or a path. Used by the GUI to write edited values
+    (e.g. camera device indices) back to the file.
     """
-    return str(_resolve(name, ".yaml", base=_SETUP_DIR))
+    return str(_setup_file(name))
+
+
+def load_setup_file(name):
+    """Return a setup's raw, on-disk YAML content (un-normalised).
+
+    Unlike :func:`load_setup` — which normalises to the role-based layout and
+    converts tubing to a tuple-keyed dict — this returns the dict exactly as
+    written on disk. It is the clone source that pairs with :func:`save_setup`:
+    ``save_setup(name, edit(load_setup_file(src)))`` round-trips safely, whereas
+    feeding :func:`load_setup`'s normalised result to :func:`save_setup` would
+    fail (tuple keys are not YAML-serialisable). Resolution is user-local-first,
+    see :func:`_setup_file`.
+
+    Parameters
+    ----------
+    name : str
+        Setup name (user-local-first, else built-in) or path.
+
+    Returns
+    -------
+    dict
+        The parsed YAML, unmodified.
+    """
+    with open(_setup_file(name)) as f:
+        return yaml.safe_load(f)
+
+
+def save_setup(name, data):
+    """Write a setup to the per-user setups dir as ``<name>.yaml``.
+
+    Creates :func:`user_setups_dir` if needed, backs up an existing file to
+    ``<name>.yaml.bak``, and writes atomically. ``data`` must be the on-disk
+    setup shape (tubing as ``{from, to, volume}`` records, not the tuple-keyed
+    dict :func:`load_setup` returns) — use :func:`load_setup_file` as the clone
+    source, not :func:`load_setup`.
+
+    Parameters
+    ----------
+    name : str
+        Setup basename (no extension).
+    data : dict
+        The setup content to serialise.
+
+    Returns
+    -------
+    pathlib.Path
+        The path written.
+    """
+    udir = user_setups_dir()
+    udir.mkdir(parents=True, exist_ok=True)
+    dest = udir / f"{name}.yaml"
+    if dest.is_file():
+        shutil.copy2(dest, dest.with_name(dest.name + ".bak"))
+    tmp = dest.with_name(dest.name + ".tmp")
+    with open(tmp, "w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+    os.replace(tmp, dest)
+    return dest
 
 
 def load_setup(name):
@@ -125,14 +250,14 @@ def load_setup(name):
     Parameters
     ----------
     name : str
-        Setup name or path.
+        Setup name (user-local-first, else built-in) or path.
 
     Returns
     -------
     dict
         The normalised setup.
     """
-    path = _resolve(name, ".yaml", base=_SETUP_DIR)
+    path = _setup_file(name)
     with open(path) as f:
         setup = yaml.safe_load(f)
     return _normalize_setup(setup, source=path)

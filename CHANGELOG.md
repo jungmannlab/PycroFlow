@@ -61,6 +61,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Registry setup stamping (dataset ↔ rig-config provenance).** On a run with
+  live analysis, each `acquisition_run` record now references the active
+  microscope setup: `microscope_id` (the setup name), `config_yaml` (the full
+  setup YAML, verbatim), and `extra.setup_sha256` (a SHA-256 "version" of that
+  YAML) — so a dataset in picasso-registry points at the exact, content-addressed
+  rig config that produced it, even though setups are now user-local and
+  uncommitted. Computed once per run (`registry_payload.setup_acquisition_fields`,
+  from `configs.setup_path`) and best-effort (unknown/unreadable setup ⇒ no
+  stamp, never blocks a run). A deduplicating `/setup_config` registry endpoint
+  (so many runs reference one versioned row instead of repeating the YAML) is a
+  planned follow-up in picasso-registry.
+- **Help menu — About / License / Check for Updates (monet-style).** The GUI
+  main window gains a **Help** menu: *About PycroFlow* (version, © Jungmann Lab
+  MPI of Biochemistry, author, clickable GitHub link), *License* (the full
+  `LICENSE.md` in a scrollable dialog, with a pointer fallback for frozen
+  builds), and *Check for Updates…* — a new `PycroFlow.updates` module queries
+  the public GitHub Releases API for the latest `vX.Y.Z` tag and compares it to
+  the installed `__version__` (PEP 440 via `packaging`, numeric-tuple fallback).
+  The check runs off the GUI thread (`run_in_background`), never raises (offline
+  → a friendly warning with the Releases link), and never nags an untagged /
+  editable source build. Pairs with the new installer + release pipeline.
+- **First-run setup wizard (monet-style onboarding).** A Qt wizard
+  (`gui/setup_wizard.py` over the headless, testable `setup_core.py`) guides a
+  fresh install through cross-project **connectivity** (picasso-registry
+  URL/token with a "Test registry" probe, monet config paths, spill-sensor port
+  → written to a private, gitignored, `0600` `.env`) and creating a **microscope
+  setup** by cloning a shipped `Template.yaml` and naming it for the rig (saved
+  user-local via `configs.save_setup`). It auto-opens once on an unconfigured
+  machine (`setup_core.first_run()` — no `.env` and no user setups) and is
+  re-runnable from the toolbar's **"Setup Wizard…"** action; creating a setup
+  refreshes + selects it in the setup combo. The deeper hardware topology (full
+  reservoir manifold + tubing) is cloned from the template as-is for now — the
+  wizard says to review it in the saved YAML. Builds on the user-local setup
+  storage below.
+- **User-local microscope setups (community-friendly configuration).** A real
+  setup describes one lab's specific rig, so setups are no longer committed to
+  the package. `configs.user_setups_dir()` resolves a per-user directory
+  (`PYCROFLOW_SETUPS_DIR` env override → `<PYCROFLOW_HOME>/setups` →
+  `%LOCALAPPDATA%\PycroFlow\setups` on Windows / `$XDG_CONFIG_HOME/PycroFlow/setups`
+  on POSIX); `configs.list_setups()` returns the **union** of the shipped
+  built-ins and the user-local setups; `configs.load_setup()` /
+  `configs.setup_path()` resolve **user-local-first** (a user setup shadows a
+  built-in of the same name); and new `configs.save_setup(name, data)` writes a
+  setup into the user dir atomically (with a `.bak` backup) — the write seam the
+  upcoming setup wizard will use. Only the emulated setups (`Emulator`,
+  `EmulatorCam`, `IbidiEmulator`) still ship; the former committed real rigs
+  `Mercury` / `Ibidi` moved to `tests/fixtures/setups/` (discovered via
+  `PYCROFLOW_SETUPS_DIR` in the test bootstrap) so the non-emulated path keeps
+  its coverage. First step toward the monet-style setup wizard. **Existing rigs:
+  copy your `<name>.yaml` into the new user setups dir (it is no longer shipped
+  in the wheel).**
 - **Tag-triggered Windows release pipeline (installer + portable exe).** A new
   `Release — Windows GUI installer` workflow (`.github/workflows/release-windows.yml`)
   fires on a `vX.Y.Z` tag push (or manual `workflow_dispatch` dry run): it
