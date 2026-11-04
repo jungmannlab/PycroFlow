@@ -17,11 +17,13 @@ from PycroFlow.schemas.protocol_schema import (
     SubsystemProtocol,
     SchemaValidationError,
     validate_protocol,
+    check_runnable,
 )
 from PycroFlow.schemas.experiment_design import (
     ExperimentDesign,
     ExperimentDesignValidationError,
     validate_experiment_design,
+    design_warnings,
 )
 
 __all__ = [
@@ -30,7 +32,9 @@ __all__ = [
     "SubsystemProtocol",
     "SchemaValidationError",
     "validate_protocol",
+    "check_runnable",
     "ExperimentDesign",
     "ExperimentDesignValidationError",
     "validate_experiment_design",
+    "design_warnings",
 ]

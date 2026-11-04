@@ -1,7 +1,7 @@
 """PycroFlowMainWindow — the top-level GUI window.
 
 A toolbar (setup selector + Connect) over a tab widget: Experiment
-Design, Run Sequence, Fluid, Imaging, Monet. The run controls (Load /
+Design, Run Sequence, Fluid, Imaging, Live, Monet. The run controls (Load /
 Start / Pause-Resume / Abort) live in the Run Sequence tab. The window also
 coordinates
 hardware connection: the microscope **setup** is chosen in the toolbar, and
@@ -15,6 +15,8 @@ Owns the :class:`QtBridge` that marshals ExperimentService observer callbacks
 onto the GUI thread.
 """
 
+import os
+
 from PyQt6.QtWidgets import (
     QMainWindow,
     QTabWidget,
@@ -22,10 +24,18 @@ from PyQt6.QtWidgets import (
     QLabel,
     QComboBox,
     QMessageBox,
+    QWidget,
+    QVBoxLayout,
+    QDialog,
+    QTextEdit,
+    QPushButton,
 )
 
 # Qt6 moved QAction out of QtWidgets into QtGui.
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QFont
+from PyQt6.QtCore import QTimer, Qt
+
+from loguru import logger
 
 from PycroFlow import configs
 from PycroFlow.services.experiment_service import ExperimentState
@@ -36,6 +46,11 @@ from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
 from PycroFlow.gui.tabs.fluid_tab import FluidTab
 from PycroFlow.gui.tabs.imaging_tab import ImagingTab
 from PycroFlow.gui.tabs.monet_tab import MonetTab
+from PycroFlow.gui.tabs.webcams_tab import WebcamsTab
+from PycroFlow.gui.tabs.live_tab import LiveTabHost
+from PycroFlow.gui.tabs.doctor_tab import DoctorTab
+from PycroFlow.gui.widgets.replay_bar import ReplayBar
+from PycroFlow.services.live_preview import LivePreviewSession
 
 # Experiment states during which hardware must not be touched manually (the
 # orchestrator owns the instruments).
@@ -44,6 +59,15 @@ _RUN_LOCK_STATES = {
     ExperimentState.RUNNING,
     ExperimentState.PAUSED,
 }
+
+# Shown by Help ▸ License when LICENSE.md isn't beside the package (e.g. some
+# frozen builds); points at the canonical copy.
+_LICENSE_FALLBACK = (
+    "Copyright (c) 2022-2026, Heinrich Grabmayr — Jungmann Lab, MPI of "
+    "Biochemistry.\n\nPycroFlow is distributed under a BSD 2-clause license. "
+    "The full text ships as LICENSE.md with the source distribution:\n"
+    "https://github.com/jungmannlab/PycroFlow/blob/master/LICENSE.md"
+)
 
 
 class PycroFlowMainWindow(QMainWindow):
@@ -54,14 +78,52 @@ class PycroFlowMainWindow(QMainWindow):
         self._bridge = QtBridge(experiment_service, parent=self)
         # Keys of subsystems whose connect is currently in flight.
         self._connecting = set()
+        # Fluidics monitoring controller for the current setup
+        # (WP-FLUIDICS-CAM). None when the setup declares no cameras;
+        # (re)built per setup change.
+        self._monitoring = None
+        # In-flight Help ▸ Check-for-Updates worker guard — set before
+        # _build_menu wires the action, so the handler can never read it unset.
+        self._update_worker = None
 
         from PycroFlow import __version__
 
         self.setWindowTitle("PycroFlow {}".format(__version__))
+        # Open wide enough for the Fluid tab's wiring schematic (24-port grid
+        # + pumps) to show without the user having to widen the window first.
+        self.resize(1280, 820)
         self._build_toolbar()
+        self._build_menu()
         self._build_tabs()
         self._build_statusbar()
         self._init_setup()
+
+        # --- post-run replay recording (feature: scrub a finished run).
+        # A recorder taps the live stream + polls progress/fluid state while a
+        # run is active; on finish, a controller built from the timeline is
+        # handed to the global ReplayBar above the tabs (so a run can be
+        # scrubbed from any tab). See replay_recorder / replay_player.
+        self._replay_recorder = None
+        self._replay_hub_client = None
+        self._webcam_replay = None
+        self._replay_poll_timer = QTimer(self)
+        self._replay_poll_timer.setInterval(500)
+        self._replay_poll_timer.timeout.connect(self._replay_poll)
+        self.replay_bar.on_mode = self._on_replay_mode
+        self.replay_bar.on_open_past_run = self.open_past_run
+        # Clicking a step / picking a round in the Run Sequence tab jumps the
+        # global scrubber; a structural edit drops the now-stale replay.
+        self.run_sequence_tab.on_replay_seek_step = (
+            self.replay_bar.seek_to_step
+        )
+        self.run_sequence_tab.on_sequence_edited = lambda: (
+            self.replay_bar.set_controller(None, 0)
+        )
+
+        # First-run onboarding: if nothing is configured yet (no .env, no user
+        # setups), offer the setup wizard once the window is up. Deferred via a
+        # 0-timer so the main window paints first (matches monet's pattern).
+        QTimer.singleShot(0, self._maybe_first_run_wizard)
 
     # --- toolbar ------------------------------------------------------
 
@@ -79,10 +141,174 @@ class PycroFlowMainWindow(QMainWindow):
         tb.addAction(self.act_connect)
         self.act_disconnect = QAction("Disconnect", self)
         tb.addAction(self.act_disconnect)
+        tb.addSeparator()
+        self.act_setup_wizard = QAction("Setup Wizard…", self)
+        tb.addAction(self.act_setup_wizard)
 
         self.setup_combo.currentTextChanged.connect(self._on_setup_changed)
         self.act_connect.triggered.connect(self._reconnect_all)
         self.act_disconnect.triggered.connect(self._disconnect_all)
+        self.act_setup_wizard.triggered.connect(self._run_setup_wizard)
+
+    def _maybe_first_run_wizard(self):
+        """Offer the setup wizard once, on an unconfigured machine."""
+        try:
+            from PycroFlow import setup_core
+
+            if setup_core.first_run():
+                self._run_setup_wizard()
+        except Exception as exc:  # noqa: BLE001 - onboarding is best-effort
+            logger.debug("first-run wizard check skipped: {!r}", exc)
+
+    def _run_setup_wizard(self):
+        """Open the setup wizard; refresh + select a newly created setup.
+
+        Disabled while a run owns the instruments (same lock as the other
+        manual hardware controls) so a mid-run reconfigure can't race it.
+        """
+        if not self.setup_combo.isEnabled():
+            return
+        from PycroFlow.gui.setup_wizard import run_setup_wizard
+
+        created = run_setup_wizard(self)
+        if created:
+            self._refresh_setup_combo(select=created)
+
+    def _refresh_setup_combo(self, select=None):
+        """Re-read the available setups into the toolbar combo.
+
+        Blocks the change signal during the rebuild, then selects ``select``
+        (or keeps the current text), firing a single ``_on_setup_changed``.
+        """
+        current = select or self.setup_combo.currentText()
+        self.setup_combo.blockSignals(True)
+        self.setup_combo.clear()
+        self.setup_combo.addItems(configs.list_setups())
+        self.setup_combo.blockSignals(False)
+        i = self.setup_combo.findText(current)
+        if i >= 0:
+            self.setup_combo.setCurrentIndex(i)
+        if self.setup_combo.currentText():
+            self._on_setup_changed(self.setup_combo.currentText())
+
+    # --- Help menu ----------------------------------------------------
+
+    def _build_menu(self):
+        help_menu = self.menuBar().addMenu("&Help")
+        act_update = QAction("Check for Updates…", self)
+        act_update.triggered.connect(self._check_for_updates)
+        help_menu.addAction(act_update)
+        help_menu.addSeparator()
+        act_license = QAction("License", self)
+        act_license.triggered.connect(self._show_license)
+        help_menu.addAction(act_license)
+        act_about = QAction("About PycroFlow", self)
+        act_about.triggered.connect(self._show_about)
+        help_menu.addAction(act_about)
+
+    def _message_with_links(self, title, html, icon=None):
+        """A rich-text QMessageBox whose ``<a href>`` links open in a browser.
+
+        QMessageBox renders rich text but its labels don't follow external
+        links by default — enable it so a URL in the message is clickable.
+        """
+        box = QMessageBox(self)
+        box.setIcon(icon or QMessageBox.Icon.Information)
+        box.setWindowTitle(title)
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(html)
+        for label in box.findChildren(QLabel):
+            label.setOpenExternalLinks(True)
+        box.exec()
+
+    def _show_about(self):
+        from PycroFlow import __version__
+
+        self._message_with_links(
+            "About PycroFlow",
+            "<b>PycroFlow</b> — automated DNA-PAINT acquisition<br>"
+            "Version {}<br><br>"
+            "© Jungmann Lab, Max Planck Institute of Biochemistry.<br>"
+            "Author: Heinrich Grabmayr.<br><br>"
+            '<a href="https://github.com/jungmannlab/PycroFlow">'
+            "github.com/jungmannlab/PycroFlow</a>".format(__version__),
+        )
+
+    @staticmethod
+    def _license_text():
+        import PycroFlow
+
+        root = os.path.dirname(
+            os.path.dirname(os.path.abspath(PycroFlow.__file__))
+        )
+        try:
+            with open(os.path.join(root, "LICENSE.md")) as f:
+                return f.read().strip() or _LICENSE_FALLBACK
+        except OSError:
+            return _LICENSE_FALLBACK
+
+    def _show_license(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("PycroFlow — License")
+        dlg.resize(640, 480)
+        lay = QVBoxLayout(dlg)
+        view = QTextEdit()
+        view.setReadOnly(True)
+        view.setFont(QFont("Monospace"))
+        view.setPlainText(self._license_text())
+        lay.addWidget(view)
+        btn = QPushButton("Close")
+        btn.clicked.connect(dlg.accept)
+        lay.addWidget(btn)
+        dlg.exec()
+
+    def _check_for_updates(self):
+        """Query GitHub for the latest release (off-thread) and report back."""
+        from PycroFlow import updates
+
+        if self._update_worker:
+            return
+        self._update_worker = True
+        self.statusBar().showMessage("Checking for updates…")
+        run_in_background(
+            self,
+            updates.check_for_update,
+            on_done=self._on_update_result,
+            on_error=lambda exc: self._on_update_result({"error": str(exc)}),
+        )
+
+    def _on_update_result(self, result):
+        from PycroFlow import updates
+
+        self._update_worker = None
+        self.statusBar().showMessage("Update check complete", 4000)
+        url = result.get("url") or updates.RELEASES_URL
+        link = '<a href="{0}">{0}</a>'.format(url)
+        if result.get("error"):
+            self._message_with_links(
+                "Check for Updates",
+                "Could not check for updates:<br><br>{}<br><br>"
+                "See the releases page:<br>{}".format(result["error"], link),
+                icon=QMessageBox.Icon.Warning,
+            )
+            return
+        if result.get("update_available"):
+            self._message_with_links(
+                "Update available",
+                "A newer version of PycroFlow is available.<br><br>"
+                "Installed: <b>{}</b><br>Latest: <b>{}</b><br><br>"
+                "Download the new installer from:<br>{}".format(
+                    result["current"], result["latest"], link
+                ),
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Check for Updates",
+                "PycroFlow is up to date (version {}).".format(
+                    result["current"]
+                ),
+            )
 
     def _build_tabs(self):
         self.tabs = QTabWidget()
@@ -104,14 +330,53 @@ class PycroFlowMainWindow(QMainWindow):
             self._system_service,
             on_connect=lambda: self._connect_system("imaging"),
         )
+        self.webcams_tab = WebcamsTab(
+            self._system_service, on_config_changed=self._attach_monitoring
+        )
         self.monet_tab = MonetTab()
+        # Diagnostics: verifies which subsystems + connectors (registry, monet)
+        # are actually working. Reads both services — SystemService for the live
+        # hardware, ExperimentService for the run state (so instrument pings are
+        # skipped while the orchestrator owns the bus).
+        self.doctor_tab = DoctorTab(
+            self._system_service, self._experiment_service
+        )
+        # WP-LIVE-INT: the WP-GUI operator shell as a tab, passive until a run
+        # creates a LiveAnalysisService (connected in _on_experiment_state) or
+        # the operator toggles the MM preview (LivePreviewSession — watch
+        # MM's own Live view through the pipeline, no protocol). The shell's
+        # manual run controls are inert by design (run control lives in the
+        # Run Sequence tab); the sidebar Early-abort stays usable and ends
+        # only the CURRENT FOV's acquisition — the protocol then continues —
+        # so it is deliberately NOT run-locked like the other tabs' controls.
+        self._preview = LivePreviewSession()
+        self.live_tab = LiveTabHost(
+            on_start_preview=self._start_preview,
+            on_stop_preview=self._preview.stop,
+            on_overlay_params=self._preview.set_overlay_params,
+        )
+        self._live_connected = None
 
         self.tabs.addTab(self.design_tab, "Experiment Design")
         self.tabs.addTab(self.run_sequence_tab, "Run Sequence")
         self.tabs.addTab(self.fluid_tab, "Fluid")
         self.tabs.addTab(self.imaging_tab, "Imaging")
+        self.tabs.addTab(self.webcams_tab, "Webcams")
+        self.tabs.addTab(self.live_tab, "Live")
         self.tabs.addTab(self.monet_tab, "Monet")
-        self.setCentralWidget(self.tabs)
+        self.tabs.addTab(self.doctor_tab, "Doctor")
+
+        # The replay scrubber lives ABOVE the tabs so a finished/opened run can
+        # be scrubbed while viewing ANY tab's data (the controller's sinks drive
+        # the live view / webcam / fluid schematic / step-highlight regardless
+        # of which tab is in front).
+        self.replay_bar = ReplayBar()
+        central = QWidget()
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.addWidget(self.replay_bar)
+        central_layout.addWidget(self.tabs, 1)
+        self.setCentralWidget(central)
 
         # Lock manual hardware access (setup/connect, fluid manual controls,
         # the embedded monet GUI) while the orchestrator owns the instruments.
@@ -147,6 +412,13 @@ class PycroFlowMainWindow(QMainWindow):
             self._refresh_status()
             return
         self.monet_tab.set_setup(self._system_service.get_monet_setup())
+        # The setup supplies the design editor's reservoir-id and laser
+        # dropdown options; refresh them for the setup just loaded.
+        self.design_tab.refresh_setup_options()
+        self._attach_monitoring()
+        self.webcams_tab.refresh()
+        # Provenance for the registry's experiment record (WP-LIVE-INT).
+        self._experiment_service.setup_name = name
         self._refresh_status()
         # If a design is already loaded, connect for the new setup.
         if self._experiment_service.experiment_design:
@@ -161,6 +433,247 @@ class PycroFlowMainWindow(QMainWindow):
     def _on_experiment_state(self, old, new):
         """Lock/unlock manual hardware access on experiment state changes."""
         self._lock_hardware(new in _RUN_LOCK_STATES)
+        self._sync_live_tab(new)
+        self._handle_replay_recording(old, new)
+
+    # --- post-run replay recording ------------------------------------
+
+    def _handle_replay_recording(self, old, new):
+        """Start recording on run start; finalize + offer replay on run end."""
+        started = new in _RUN_LOCK_STATES and old not in _RUN_LOCK_STATES
+        ended = old in _RUN_LOCK_STATES and new not in _RUN_LOCK_STATES
+        if started:
+            self._start_replay_recording()
+        elif ended:
+            self._stop_replay_recording()
+
+    def _replay_path(self):
+        design = self._experiment_service.experiment_design or {}
+        save_dir = design.get("save_dir") or "."
+        base = design.get("base_name") or "run"
+        rid = self._experiment_service.live_run_id or "last"
+        return os.path.join(save_dir, "{}_{}_replay.jsonl".format(base, rid))
+
+    def _start_replay_recording(self):
+        from PycroFlow.live_analysis.replay_recorder import ReplayRecorder
+        from PycroFlow.live_analysis.client_seam import CallbackClient
+
+        # A fresh run supersedes any previous run's replay.
+        self.replay_bar.set_controller(None, 0)
+        # Defensively finalize any still-open recording so a prior run (or a
+        # failed start) can never leak a hub client or a stale recorder.
+        self._replay_poll_timer.stop()
+        if self._replay_hub_client is not None:
+            hub, client = self._replay_hub_client
+            hub.remove(client)
+            self._replay_hub_client = None
+        if self._replay_recorder is not None:
+            self._replay_recorder.stop()
+            self._replay_recorder = None
+        if self._webcam_replay is not None:
+            self._webcam_replay.close()
+            self._webcam_replay = None
+        try:
+            rec = ReplayRecorder(self._replay_path())
+            rec.start(
+                self._experiment_service.live_run_id,
+                protocol=self._experiment_service.protocol,
+            )
+        except Exception as exc:  # noqa: BLE001 - recording never stops a run
+            logger.warning("replay recorder could not start: {!r}".format(exc))
+            return
+        # Tap the live stream (thumbnails/metrics/state) when present.
+        service = self._experiment_service.live_service
+        hub = getattr(service, "hub", None)
+        if hub is not None:
+            client = CallbackClient(rec.on_update)
+            hub.add(client)
+            self._replay_hub_client = (hub, client)
+        self._replay_recorder = rec
+        self._replay_poll_timer.start()
+
+    def _replay_poll(self):
+        rec = self._replay_recorder
+        if rec is None:
+            return
+        try:
+            rec.record_progress(self._experiment_service.progress())
+        except Exception:  # noqa: BLE001 - best-effort snapshot
+            pass
+        try:
+            rec.record_fluid_state(self._system_service.fluid_state())
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _stop_replay_recording(self):
+        self._replay_poll_timer.stop()
+        rec, self._replay_recorder = self._replay_recorder, None
+        if self._replay_hub_client is not None:
+            hub, client = self._replay_hub_client
+            hub.remove(client)
+            self._replay_hub_client = None
+        if rec is None:
+            return
+        # A final snapshot so the timeline ends on the run's terminal state.
+        rec.record_progress(self._safe_progress())
+        try:
+            rec.record_fluid_state(self._system_service.fluid_state())
+        except Exception:  # noqa: BLE001
+            pass
+        rec.stop()
+        self._build_replay_controller(rec.path)
+
+    def _safe_progress(self):
+        try:
+            return self._experiment_service.progress()
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def _load_controller(self, path):
+        """Load a replay timeline file into a controller wired to the live
+        view / step-highlight / fluid-schematic sinks (or None on failure)."""
+        from PycroFlow.live_analysis.replay_player import ReplayController
+
+        try:
+            return ReplayController.from_file(
+                path,
+                emit_update=self.live_tab.replay_emit,
+                set_progress=self.run_sequence_tab.replay_set_progress,
+                set_fluid_state=self.fluid_tab.set_schematic_state,
+            )
+        except Exception as exc:  # noqa: BLE001 - replay is best-effort
+            logger.warning("could not load replay timeline: {!r}".format(exc))
+            return None
+
+    def _wire_replay(self, ctrl, webcam_src, enter=False):
+        """Attach the webcam sink + hand the controller to the scrubber.
+
+        ``enter`` auto-opens replay mode (used when opening a past run, where
+        the user explicitly asked to review it)."""
+        self._webcam_replay = None
+        if webcam_src is not None and webcam_src.clip_count > 0:
+            self._webcam_replay = webcam_src
+            ctrl.set_webcam_sink(
+                lambda t: self.webcams_tab.show_replay_frame(
+                    webcam_src.frame_at(t)
+                )
+            )
+        if ctrl.duration_ms > 0:
+            self.replay_bar.set_controller(ctrl, ctrl.duration_ms)
+            if enter:
+                self.replay_bar.enter_replay()
+
+    def _build_replay_controller(self, path):
+        """Just-finished run: build the controller + this run's webcam source
+        (from the monitoring controller's output dir)."""
+        ctrl = self._load_controller(path)
+        if ctrl is None:
+            return
+        self._wire_replay(ctrl, self._webcam_source_from_monitoring(ctrl))
+
+    def _webcam_source_from_monitoring(self, ctrl):
+        mon = self._monitoring
+        clip_dir = (
+            getattr(mon, "output_dir", None) if mon is not None else None
+        )
+        if not clip_dir or not ctrl.t0_utc:
+            return None
+        try:
+            from PycroFlow.monitoring.webcam_replay import WebcamReplaySource
+
+            return WebcamReplaySource.from_dir(
+                clip_dir, ctrl.t0_utc, fps=getattr(mon, "fps", 5)
+            )
+        except Exception as exc:  # noqa: BLE001 - webcam replay is best-effort
+            logger.warning("could not index webcam clips: {!r}".format(exc))
+            return None
+
+    def open_past_run(self, path):
+        """Open a saved ``*_replay.jsonl`` and replay that run from disk.
+
+        Loads the embedded protocol into the view (so the step lists match),
+        finds the run's webcam clips under the file's folder by run id, wires
+        everything up and enters replay mode. Refused while a run is active.
+        """
+        if self._experiment_service.state in _RUN_LOCK_STATES:
+            QMessageBox.warning(
+                self,
+                "Run in progress",
+                "Finish or abort the current run before opening a past run.",
+            )
+            return
+        ctrl = self._load_controller(path)
+        if ctrl is None or ctrl.duration_ms <= 0:
+            QMessageBox.warning(
+                self,
+                "Could not open run",
+                "No replay timeline was found in that file.",
+            )
+            return
+        # Repopulate the step lists from the embedded protocol so the
+        # step-highlight is meaningful (best-effort; replay still shows the
+        # live view / webcam / fluid without it).
+        if ctrl.protocol:
+            try:
+                self._experiment_service.load_protocol(ctrl.protocol)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "could not load the past run's protocol: {!r}".format(exc)
+                )
+        webcam_src = None
+        if ctrl.t0_utc:
+            try:
+                from PycroFlow.monitoring.webcam_replay import (
+                    WebcamReplaySource,
+                )
+
+                webcam_src = WebcamReplaySource.from_run(
+                    os.path.dirname(os.path.abspath(path)),
+                    ctrl.run_id,
+                    ctrl.t0_utc,
+                )
+            except Exception as exc:  # noqa: BLE001 - webcam is best-effort
+                logger.warning(
+                    "could not index past-run webcam clips: {!r}".format(exc)
+                )
+        self._wire_replay(ctrl, webcam_src, enter=True)
+
+    def _on_replay_mode(self, on):
+        """Coordinate the tabs when replay is toggled in the global ReplayBar."""
+        # Freeze the schematic's live poll so replayed snapshots are not
+        # overwritten by the (idle) current hardware state.
+        self.fluid_tab.set_replay_mode(on)
+        # Stop the webcam live preview so replayed clip frames own the pane.
+        self.webcams_tab.set_replay_mode(on)
+        # Let the Run Sequence tab route step/round clicks as timeline jumps.
+        self.run_sequence_tab.set_replay_active(on)
+        self.live_tab.set_run_status("replaying run" if on else "")
+
+    def _sync_live_tab(self, state):
+        """Attach the Live tab to the run's live-analysis stream (and detach
+        after). The shell keeps showing the finished run's last metrics —
+        close_client only unsubscribes. The status line next to the preview
+        toggle says WHICH world the shell is in — silently-disabled live
+        analysis looked like a dead tab on the rig."""
+        if state in _RUN_LOCK_STATES:
+            service = self._experiment_service.live_service
+            if service is None:
+                self.live_tab.set_run_status(
+                    "live analysis off for this run (check camera_info / "
+                    "the log)"
+                )
+            elif service is not self._live_connected:
+                self.live_tab.connect_service(service)
+                self._live_connected = service
+                self.live_tab.set_run_status(
+                    "watching run {}".format(
+                        self._experiment_service.live_run_id or ""
+                    )
+                )
+        elif self._live_connected is not None:
+            self.live_tab.close_client()
+            self._live_connected = None
+            self.live_tab.set_run_status("")
 
     def _lock_hardware(self, locked):
         self.setup_combo.setEnabled(not locked)
@@ -168,7 +681,19 @@ class PycroFlowMainWindow(QMainWindow):
         self.act_disconnect.setEnabled(not locked)
         self.fluid_tab.set_run_lock(locked)
         self.imaging_tab.set_run_lock(locked)
+        # While locked (a run owns the cameras), feed the Webcams tab the live
+        # tile the capture process publishes so it can show a live view. Pass
+        # the resolver (not a snapshot): the capture process spawns just after
+        # this fires, so the path is None now and becomes valid a moment later.
+        live = (
+            self._monitoring.live_frame_path
+            if locked and self._monitoring is not None
+            else None
+        )
+        self.webcams_tab.set_run_lock(locked, live_path=live)
         self.monet_tab.set_run_lock(locked)
+        # A run owns the camera: any MM preview stops, the toggle disables.
+        self.live_tab.set_run_lock(locked)
         if not locked:
             # Restore real connection statuses after the run lock lifts.
             self._refresh_status()
@@ -331,18 +856,101 @@ class PycroFlowMainWindow(QMainWindow):
         except Exception:
             pass
 
+    # --- MM live preview ------------------------------------------------
+
+    def _start_preview(self):
+        """Live-tab Preview toggle: watch MM's Live view (no protocol)."""
+        imaging = self._system_service.imaging_system
+        if imaging is None:
+            QMessageBox.warning(
+                self,
+                "No imaging system",
+                "Connect the imaging system first (load a design or use "
+                "the Imaging tab), then start Micro-Manager's Live mode.",
+            )
+            return None
+        service = self._preview.start(imaging)
+        if service is None:
+            # The one enablement requirement beyond a connected imaging
+            # system is the picasso camera_info block — say so loudly, with
+            # the exact file to edit (the quiet status label was missed on
+            # the rig).
+            QMessageBox.warning(
+                self,
+                "Preview unavailable",
+                "Live localization needs the camera's picasso photon-"
+                "conversion info.\n\nAdd a `camera_info:` block (Baseline / "
+                "Sensitivity / Gain / Qe / Pixelsize) to the `imaging:` "
+                "section of configs/setups/{}.yaml — a commented template "
+                "is in the file — then reload the setup and reconnect "
+                "imaging.".format(self.setup_combo.currentText()),
+            )
+        return service
+
     # --- run-sequence helpers -----------------------------------------
 
     def _on_translated(self):
-        """After compiling: connect (if needed) + show the Run Sequence tab."""
+        """After compiling: connect (if needed) + show the Run Sequence tab.
+
+        Translating is the point where the edited design becomes the thing
+        that will run, so the connected fluid system's reservoirs are
+        re-synced from it — editing the reservoir table after connecting
+        would otherwise leave the hardware routing by the old list.
+        """
         self._autoconnect()
+        self._sync_fluid_design()
         self.tabs.setCurrentWidget(self.run_sequence_tab)
+
+    def _sync_fluid_design(self):
+        """Push the current design's reservoirs into the connected system."""
+        design = self._experiment_service.experiment_design or {}
+        fluid = design.get("fluid")
+        if not fluid:
+            return
+        try:
+            self._system_service.sync_fluid_reservoirs(fluid)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Reservoirs not applied",
+                "The design's reservoirs could not be applied to the "
+                "connected fluid system:\n\n{!r}\n\nReconnect the fluid "
+                "system before starting.".format(exc),
+            )
+
+    def _attach_monitoring(self):
+        """(Re)attach the fluidics monitoring controller for the current setup.
+
+        Best-effort: inert when the setup declares no cameras, and a failure
+        here must never block a setup change. Records one clip per exchange
+        round while an experiment runs (WP-FLUIDICS-CAM).
+        """
+        from PycroFlow.monitoring import attach_monitoring
+
+        if self._monitoring is not None:
+            self._monitoring.detach()
+            self._monitoring = None
+        try:
+            self._monitoring = attach_monitoring(
+                self._experiment_service, self._system_service.setup
+            )
+        except Exception as exc:
+            logger.warning("could not attach fluidics monitoring: {!r}", exc)
 
     def closeEvent(self, event):
         """Clean shutdown: abort any running experiment, run monet's cleanup,
         release hardware locks."""
         try:
             self._experiment_service.abort()
+        except Exception:
+            pass
+        if self._monitoring is not None:
+            self._monitoring.detach()
+            self._monitoring = None
+        self.webcams_tab.stop_preview()
+        try:
+            self._preview.stop()
+            self.live_tab.close_client()
         except Exception:
             pass
         self.monet_tab.shutdown()

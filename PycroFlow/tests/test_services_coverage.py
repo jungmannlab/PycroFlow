@@ -29,6 +29,37 @@ def _loaded_service_with_mock_orchestrator():
     return svc
 
 
+class ImagingSaveDirAtRunStartTest(unittest.TestCase):
+    """The imaging run folder is resolved from the LIVE design at run start."""
+
+    def _service(self, img):
+        svc = ExperimentService(imaging_system=img)
+        svc.load_protocol({"img": {"protocol_entries": []}})
+        svc._orchestrator = MagicMock(name="orchestrator")
+        svc._live = MagicMock(name="live")  # isolate from live-analysis wiring
+        return svc
+
+    def test_start_resolves_imaging_savedir_from_live_design(self):
+        img = MagicMock(name="imaging")
+        svc = self._service(img)
+        svc._experiment_design = {
+            "save_dir": "/data/run7",
+            "base_name": "exp",
+        }
+        svc.start()
+        img.prepare_savedir.assert_called_once_with("/data/run7", "exp")
+
+    def test_start_skips_stub_imaging_without_prepare_savedir(self):
+        class _Stub:  # emulated/stub imaging system: no prepare_savedir
+            def _assign_protocol(self, _p):
+                pass
+
+        svc = self._service(_Stub())
+        svc._experiment_design = {"save_dir": "/x", "base_name": "y"}
+        svc.start()  # must not raise
+        self.assertEqual(svc.state, ExperimentState.RUNNING)
+
+
 class ExperimentLifecycleTest(unittest.TestCase):
     def test_start_from_loaded_runs(self):
         svc = _loaded_service_with_mock_orchestrator()

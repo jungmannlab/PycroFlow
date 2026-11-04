@@ -1,0 +1,127 @@
+name: Release — Windows GUI installer
+
+# Builds the standalone Windows GUI executable (pycroflow-gui.exe) + its
+# Inno Setup installer and attaches both to the GitHub Release for the pushed
+# tag. Fires on a vX.Y.Z tag push — the same action that cuts a PycroFlow
+# release (setuptools-scm derives the version from the tag). The lint + unit
+# gates run on branches/PRs; this only runs post-merge, on the tag.
+#
+# Converges on monet's release route (PyInstaller onefile + Inno Setup,
+# Windows-only) rather than picasso-workflow's cross-platform conda
+# `constructor` installers: PycroFlow, like monet, is a Windows rig-control GUI
+# (it even embeds monet's window as a tab), not a cross-platform analysis tool.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Manual trigger so the Windows build can be smoke-tested without cutting a
+  # real release (the Release-asset upload below is gated to tag runs only).
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create/update the Release and upload the exe + installer
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # setuptools-scm needs history + the tag for the version
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install PycroFlow (GUI + hardware + monitoring extras) + PyInstaller
+        # [hardware] as well as [gui]: the frozen build bundles the vendor SDK
+        # *Python* packages (pycromanager, msl-equipment, pyvisa, nidaqmx,
+        # pycobolt, …) and the embedded monet tab (monet[hardware] is a declared
+        # [hardware] dep) so a real rig can connect. [monitoring] adds the
+        # webcam OpenCV source. The vendor DLLs/runtimes (Thorlabs Kinesis,
+        # NI-DAQmx, Micro-Manager) still have to be installed on the rig PC.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[gui,hardware,monitoring]" pyinstaller
+
+      - name: Confirm the bundled version matches the tag
+        shell: bash
+        run: |
+          ver=$(python -c "import PycroFlow; print(PycroFlow.__version__)")
+          echo "PycroFlow version: $ver"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="${GITHUB_REF_NAME#v}"
+            echo "release tag: $tag"
+            if [ "$ver" != "$tag" ]; then
+              echo "::error::bundled version ($ver) != tag ($tag) — setuptools-scm/tag mismatch (is fetch-depth:0 and the tag present?)"
+              exit 1
+            fi
+          fi
+
+      - name: Build pycroflow-gui.exe
+        run: pyinstaller --clean --noconfirm packaging/pycroflow-gui.spec
+
+      - name: Smoke-check the artifact (bundle contains PycroFlow + drivers)
+        shell: bash
+        run: |
+          test -f dist/pycroflow-gui.exe
+          # Headless import check: fails the release if a dynamically-loaded
+          # driver module (or the embedded monet tab) didn't make it into the
+          # frozen bundle.
+          ./dist/pycroflow-gui.exe --selfcheck
+
+      - name: Build the Windows installer (Inno Setup)
+        # PowerShell, not bash: Git-Bash's MSYS path conversion mangles the
+        # leading-slash ``/DMyAppVersion=...`` flag into a second filename, which
+        # ISCC rejects ("You may not specify more than one script filename").
+        shell: pwsh
+        run: |
+          # Version for the installer filename / Add-Remove-Programs entry:
+          # the tag on a release run, else the bundled version.
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $ver = $env:GITHUB_REF_NAME -replace '^v', ''
+          } else {
+            $ver = (python -c "import PycroFlow; print(PycroFlow.__version__)").Trim()
+          }
+          Write-Host "installer version: $ver"
+          # Inno Setup 6 ships on windows-latest; install to be robust to image
+          # changes (a no-op "already installed" otherwise).
+          choco install innosetup --no-progress -y
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc "/DMyAppVersion=$ver" "packaging\pycroflow-gui.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+          if (-not (Test-Path "dist\PycroFlow-Setup-$ver.exe")) {
+            throw "installer not found: dist\PycroFlow-Setup-$ver.exe"
+          }
+
+      - name: Upload exe + installer as build artifacts (always)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pycroflow-gui-windows
+          path: |
+            dist/pycroflow-gui.exe
+            dist/PycroFlow-Setup-*.exe
+          if-no-files-found: error
+
+      - name: Attach exe + installer to the GitHub Release (tag runs only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          # Attaches to the Release for this tag, creating it if it does not
+          # exist yet and updating it (without clobbering notes) if it does.
+          # Both the one-click installer and the portable exe are shipped.
+          files: |
+            dist/PycroFlow-Setup-*.exe
+            dist/pycroflow-gui.exe
+          fail_on_unmatched_files: true
+          # Mark pre-release tags (alpha/beta/rc, e.g. v0.2.0rc1) as GitHub
+          # pre-releases so they do not read as the latest stable release.
+          prerelease: >-
+            ${{ contains(github.ref_name, 'a')
+            || contains(github.ref_name, 'b')
+            || contains(github.ref_name, 'rc') }}

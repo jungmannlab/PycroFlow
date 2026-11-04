@@ -49,7 +49,9 @@ def _field(default=..., *, alias=None, default_factory=None, **extra):
     schema-driven GUI editor reads it to render richer inputs. Recognised
     keys: ``unit`` (label), ``choices`` (static dropdown options),
     ``choices_from`` (dropdown options from an editor *context* key),
-    ``allow_none`` (add a blank → None option), ``tooltip``, and for mappings
+    ``allow_none`` (add a blank → None option), ``allow_custom`` (the
+    dropdown is editable, so a value outside the option set — or any value
+    when the set is unknown — can be typed), ``tooltip``, and for mappings
     ``columns`` / ``display_value_first`` / ``key_choices_from`` /
     ``value_choices_from``. ``default=...`` (the pydantic sentinel) marks a
     required field.
@@ -64,9 +66,9 @@ def _field(default=..., *, alias=None, default_factory=None, **extra):
     return Field(default, **kw)
 
 
-def _unit(default=..., unit=None, *, alias=None):
-    """Shorthand for a numeric field with only a physical ``unit``."""
-    return _field(default, alias=alias, unit=unit)
+def _unit(default=..., unit=None, *, alias=None, tooltip=None):
+    """Shorthand for a numeric field with a physical ``unit`` (+ tooltip)."""
+    return _field(default, alias=alias, unit=unit, tooltip=tooltip)
 
 
 def field_meta(field_info) -> dict:
@@ -102,8 +104,16 @@ class ResiRound(BaseModel):
     """One RESI round: which adapter, and how long to incubate it."""
 
     model_config = _CFG
-    adapter: str = _field(choices_from="reservoir_names", allow_none=True)
-    adapter_incubation: float = _unit(unit="min")
+    adapter: str = _field(
+        choices_from="reservoir_names",
+        allow_none=True,
+        tooltip="Adapter/docking-strand reservoir injected for this RESI "
+        "round.",
+    )
+    adapter_incubation: float = _unit(
+        unit="min",
+        tooltip="Minutes to incubate the adapter before imaging this round.",
+    )
 
 
 class TargetRound(BaseModel):
@@ -143,9 +153,17 @@ class ExchangeExperiment(BaseModel):
 
     model_config = _CFG
     type: Literal["Exchange"]
-    wash_buffer: str = _field(choices_from="reservoir_names", allow_none=True)
+    wash_buffer: str = _field(
+        choices_from="reservoir_names",
+        allow_none=True,
+        tooltip="Reservoir used to wash the sample between imager rounds.",
+    )
     initial_imager: Optional[str] = _field(
-        None, choices_from="reservoir_names", allow_none=True
+        None,
+        choices_from="reservoir_names",
+        allow_none=True,
+        tooltip="Imager already present in the sample at the start, so its "
+        "injection is skipped for the first round. Leave empty if none.",
     )
     # One dropdown row per exchange round (add/remove), chosen from the
     # design's reservoir names; shown as a 'rounds' box with per-row labels.
@@ -155,7 +173,52 @@ class ExchangeExperiment(BaseModel):
         allow_none=True,
         title="rounds",
         row_label="imager round {}",
+        tooltip="The imager reservoirs to cycle through — one wash + inject + "
+        "acquisition round each, in this order.",
     )
+    monitor_fluid: bool = _field(
+        False,
+        tooltip="Acquire a short movie CONCURRENTLY with each imager/wash "
+        "injection, to watch washing/flushing efficiency live. These "
+        "monitoring movies are flagged separately and do not count as "
+        "exchange rounds.",
+    )
+    monitor_t_exp: Optional[float] = _unit(
+        None,
+        unit="ms",
+        tooltip="Exposure time for the wash-monitoring movies. Defaults to "
+        "the imaging exposure when left empty.",
+    )
+    monitor_margin_s: float = _unit(
+        2.0,
+        unit="s",
+        tooltip="Extra seconds of monitoring beyond the estimated fluid-step "
+        "duration, so the movie safely covers the whole injection.",
+    )
+
+    def design_warnings(self):
+        """Soft, non-blocking design warnings for this Exchange experiment.
+
+        Reusing an imager is *allowed* — redundant imaging rounds are a
+        legitimate thing to want (e.g. for testing), so it is reported as a
+        warning rather than raised as a hard error. Note that repeating an
+        imager within ``imagers`` (``[R4, R2, R4, R2]``) is ordinary
+        Exchange-PAINT and is deliberately NOT warned about; only the
+        ``initial_imager`` — which is already in the sample and whose injection
+        is skipped — is worth flagging if it is ALSO listed in the rounds
+        (it would then be imaged twice, once pre-loaded and once re-injected).
+        """
+        warnings = []
+        if self.initial_imager and self.initial_imager in (self.imagers or []):
+            warnings.append(
+                "Initial imager {!r} is also listed in the exchange rounds. "
+                "It is already in the sample (imaged first, injection "
+                "skipped), so it will be imaged again as a redundant round. "
+                "Allowed — but if unintended, remove it from the rounds.".format(
+                    self.initial_imager
+                )
+            )
+        return warnings
 
 
 class SphResiExperiment(BaseModel):
@@ -164,14 +227,33 @@ class SphResiExperiment(BaseModel):
     model_config = _CFG
     type: Literal["SPH-RESI"]
     wash_buffer_1: str = _field(
-        choices_from="reservoir_names", allow_none=True
+        choices_from="reservoir_names",
+        allow_none=True,
+        tooltip="Primary wash buffer, flushed between steps.",
     )
     wash_buffer_2: Optional[str] = _field(
-        None, choices_from="reservoir_names", allow_none=True
+        None,
+        choices_from="reservoir_names",
+        allow_none=True,
+        tooltip="Optional secondary wash buffer (e.g. a high-salt buffer). "
+        "Leave empty to use only wash buffer 1.",
     )
-    blocker: str = _field(choices_from="reservoir_names", allow_none=True)
-    blocker_incubation: float = _unit(unit="min")
-    initial_imager_present: bool = False
+    blocker: str = _field(
+        choices_from="reservoir_names",
+        allow_none=True,
+        tooltip="Blocking reagent injected before imaging to suppress "
+        "non-specific binding.",
+    )
+    blocker_incubation: float = _unit(
+        unit="min",
+        tooltip="Minutes to incubate the blocker in the sample before "
+        "washing it out.",
+    )
+    initial_imager_present: bool = _field(
+        False,
+        tooltip="Whether the first imager is already in the sample at the "
+        "start (skips its first injection).",
+    )
     round0: Optional[Round0]
     target_rounds: Dict[str, TargetRound] = Field(alias="target-rounds")
 
@@ -189,20 +271,135 @@ class FluidParameters(BaseModel):
     """Per-run fluid driver parameters (passed through to the Run Sequence)."""
 
     model_config = _CFG
-    start_velocity: float = _unit(500, "µl/min")
-    max_velocity: float = _unit(10000, "µl/min")
-    stop_velocity: float = _unit(500, "µl/min")
-    pumpout_dispense_velocity: float = _unit(290000, "µl/min")
-    clean_velocity: float = _unit(10000, "µl/min")
-    clean_delay: float = _unit(0, "s")
-    mode: str = _field(
-        "tubing_ignore", choices=["tubing_ignore", "tubing_stack"]
+    start_velocity: float = _unit(
+        500,
+        "µl/min",
+        tooltip="Flow rate the syringe pump ramps up from at the start of "
+        "each stroke.",
     )
-    extractionfactor: float = 1
-    inject_pickup_extravol: float = _unit(0, "µl")
-    inject_in_to_out_delay: float = _unit(0, "s")
-    inject_out_to_in_delay: float = _unit(0, "s")
-    inject_precreate_underpressure: bool = False
+    max_velocity: float = _unit(
+        10000,
+        "µl/min",
+        tooltip="Peak flow rate for injecting/withdrawing. Also the default "
+        "velocity for any step that does not set its own.",
+    )
+    stop_velocity: float = _unit(
+        500,
+        "µl/min",
+        tooltip="Flow rate the pump ramps down to at the end of each stroke.",
+    )
+    pumpout_dispense_velocity: float = _unit(
+        290000,
+        "µl/min",
+        tooltip="Rate at which the extraction (waste) pump empties itself to "
+        "waste between strokes.",
+    )
+    clean_velocity: float = _unit(
+        10000,
+        "µl/min",
+        tooltip="Flow rate used during the tubing-cleaning procedure.",
+    )
+    clean_delay: float = _unit(
+        0, "s", tooltip="Seconds to soak between cleaning strokes."
+    )
+    mode: str = _field(
+        "tubing_ignore",
+        choices=["tubing_ignore", "tubing_stack"],
+        tooltip="How tubing dead-volume is handled. 'tubing_ignore' pumps the "
+        "requested volume as-is; 'tubing_stack' accounts for the reservoir→"
+        "pump tubing volume so the requested volume actually reaches the "
+        "sample.",
+    )
+    extractionfactor: float = _field(
+        1,
+        tooltip="Ratio of volume withdrawn by the extraction pump to volume "
+        "injected. >1 removes more than is added (nets liquid out of the "
+        "sample); 1 keeps the sample volume constant.",
+    )
+    inject_pickup_extravol: float = _unit(
+        0,
+        "µl",
+        tooltip="Extra volume the extraction (waste) pump withdraws per "
+        "inject, on top of the injected volume, to fully clear the sample "
+        "line. (Applied to the pump-out despite the 'pickup' name.)",
+    )
+    inject_in_to_out_delay: float = _unit(
+        0,
+        "s",
+        tooltip="Pause after the valve switches from the reservoir (in) to "
+        "the sample (out) side, letting pressure equilibrate before pushing.",
+    )
+    inject_out_to_in_delay: float = _unit(
+        0,
+        "s",
+        tooltip="Pause after the valve switches from the sample (out) back to "
+        "the reservoir (in) side.",
+    )
+    inject_precreate_underpressure: bool = _field(
+        False,
+        tooltip="Briefly pull back before injecting to pre-load a slight "
+        "under-pressure, reducing dribble when the valve opens.",
+    )
+
+
+class CleaningSettings(BaseModel):
+    """Tubing-cleaning configuration for the manual clean procedure.
+
+    Cleaning is **not** part of the Run Sequence — these settings are threaded
+    into ``LegacyArchitecture`` (via ``configs.assemble_hamilton_config``) and
+    consumed by ``clean_tubings()``. Each cleaning round uses one
+    cleaning-liquid reservoir; rounds run in order. Whether the liquid is
+    reused across reservoirs (shuttled through them) or discarded (fresh liquid
+    per reservoir) is a single global choice.
+    """
+
+    model_config = _CFG
+    # One dropdown row per cleaning round (add/remove), chosen from the
+    # design's reservoir names; shown as a 'cleaning rounds' box with per-row
+    # labels — mirrors the Exchange ``imagers`` pattern.
+    cleaning_rounds: List[Union[int, str]] = _field(
+        default_factory=list,
+        choices_from="reservoir_names",
+        allow_none=True,
+        title="cleaning rounds",
+        row_label="clean round {}",
+        tooltip="Cleaning-liquid reservoirs, one per round, used in order "
+        "(e.g. an H2O round then an IPA round).",
+    )
+    reuse_cleaning_liquid: bool = _field(
+        True,
+        tooltip="Reuse the cleaning liquid by shuttling it through every "
+        "reservoir in turn (fewer µl), or discard it and draw fresh liquid for "
+        "each reservoir (more thorough, more liquid).",
+    )
+    pre_empty_volume: Optional[float] = _unit(
+        None,
+        "µl",
+        tooltip="Volume to extract from each reservoir before cleaning starts, "
+        "clearing leftover protocol liquid. Blank or 0 skips the pre-empty.",
+    )
+    extra_volume: float = _unit(
+        100,
+        "µl",
+        tooltip="Volume pushed through each path beyond its tubing volume, so "
+        "the whole path is flushed.",
+    )
+    clean_velocity: float = _unit(
+        10000, "µl/min", tooltip="Flow rate used during cleaning."
+    )
+    clean_delay: float = _unit(
+        0, "s", tooltip="Seconds to soak between cleaning strokes."
+    )
+    flush_out_strokes: int = _field(
+        1,
+        tooltip="Number of extraction strokes the output (waste) pump makes "
+        "when expelling each cleaned path to waste.",
+    )
+    require_needles_confirmation: bool = _field(
+        True,
+        tooltip="Ask the operator to confirm the input and output needles "
+        "share a container (fluidly connected) before cleaning starts.",
+    )
 
 
 class FluidSettings(BaseModel):
@@ -220,6 +417,10 @@ class FluidSettings(BaseModel):
         # The names defined here populate the imager/buffer dropdowns; publish
         # them live so those dropdowns update as the table is edited.
         provides="reservoir_names",
+        tooltip="Map each reservoir id (a physical valve / multiplexer "
+        "position wired in the setup) to a friendly name. Every "
+        "imager/buffer/adapter field elsewhere in the design picks from "
+        "these names.",
     )
     # Stored name -> id, but displayed (ID, name) for consistency with
     # reservoir_names (display_value_first swaps the columns; the id column
@@ -229,18 +430,60 @@ class FluidSettings(BaseModel):
         display_value_first=True,
         value_choices_from="reservoir_ids",
         columns=["Reservoir ID", "Special name"],
+        tooltip="Reservoirs the procedures reference by a fixed role name "
+        "(e.g. 'flushbuffer_a' for the wash/flush buffer used by fill/clean).",
     )
-    vol_wash: float = _unit(unit="µl")
-    vol_reagent: Optional[float] = _unit(None, "µl")
-    vol_imager_post: Optional[float] = _unit(None, "µl")
-    vol_remove_before_flush: float = _unit(0, "µl")
-    wait_after_pickup: float = _unit(0, "s")
-    cleaning_reservoirs: List[Union[int, str]] = _field(
-        default_factory=list,
-        tooltip="Comma-separated reservoir ids or special names used for "
-        'cleaning, e.g. "h2o, ipa".',
+    vol_wash: float = _unit(
+        unit="µl",
+        tooltip="Volume of wash buffer flushed through the sample after each "
+        "imaging round, to clear the previous imager.",
     )
+    vol_reagent: Optional[float] = _unit(
+        None,
+        "µl",
+        tooltip="Volume of imager/reagent dispensed into the sample BEFORE "
+        "imaging each round — imager, adapter and blocker alike. Used by both "
+        "Exchange and SPH-RESI. (Exchange designs predating this split fall "
+        "back to the old 'vol_imager_post' for this.)",
+    )
+    vol_reagent_post: Optional[float] = _unit(
+        None,
+        "µl",
+        tooltip="Optional volume of imager/reagent dispensed into the sample "
+        "AFTER imaging a round (a top-up). Leave empty to skip it.",
+    )
+    vol_remove_before_flush: float = _unit(
+        0,
+        "µl",
+        tooltip="Volume withdrawn from the sample just before the wash flush, "
+        "so the incoming liquid is not diluted by the old liquid.",
+    )
+    wait_after_pickup: float = _unit(
+        0,
+        "s",
+        tooltip="Seconds to pause after the syringe draws liquid before it "
+        "dispenses, letting the flow settle.",
+    )
+    cleaning: CleaningSettings = Field(default_factory=CleaningSettings)
     experiment: ExperimentBlock
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_cleaning_reservoirs(cls, data):
+        """Back-compat: fold a legacy flat ``cleaning_reservoirs`` list into the
+        cleaning section's ``cleaning_rounds`` so old designs still load."""
+        if isinstance(data, dict) and "cleaning_reservoirs" in data:
+            legacy = data.pop("cleaning_reservoirs")
+            cleaning = data.get("cleaning")
+            if cleaning is None:
+                cleaning = {}
+            if (
+                isinstance(cleaning, dict)
+                and "cleaning_rounds" not in cleaning
+            ):
+                cleaning["cleaning_rounds"] = list(legacy or [])
+            data["cleaning"] = cleaning
+        return data
 
 
 class FluidSection(BaseModel):
@@ -263,10 +506,32 @@ class ImgParameters(BaseModel):
 
 class ImgSettings(BaseModel):
     model_config = _CFG
-    t_exp: float = _unit(unit="ms")
+    t_exp: float = _unit(unit="ms", tooltip="Camera exposure time per frame.")
     # frames may be a single count or a per-imager mapping (Exchange).
-    frames: Optional[Union[int, Dict[str, int]]] = None
-    darkframes: Optional[int] = None
+    frames: Optional[Union[int, Dict[str, int]]] = _field(
+        None,
+        tooltip="Frames to acquire per imaging round — a single count for "
+        "all rounds, or one count per imager name.",
+    )
+    darkframes: Optional[int] = _field(
+        None,
+        tooltip=(
+            "Frames to acquire after each wash, to check the sample "
+            "went dark. Leave empty to skip dark-frame acquisitions "
+            "entirely — the wash itself still runs."
+        ),
+    )
+    use_positions: bool = _field(
+        False,
+        tooltip=(
+            "Acquire every position saved in Micro-Manager's position list "
+            "at each imaging step: the stage visits each position (PFS "
+            "re-engaged) and records one movie per position into its own "
+            "*_pos<N> dataset folder. Save the position list in MM before "
+            "starting the run; all positions are imaged before the round "
+            "signals the fluid exchange."
+        ),
+    )
 
 
 class ImgSection(BaseModel):
@@ -282,12 +547,37 @@ class ImgSection(BaseModel):
 
 class IlluSettings(BaseModel):
     model_config = _CFG
-    laser: int = _field(choices_from="lasers")
-    power_acq: float = _unit(unit="mW")
-    power_nonacq: Optional[float] = _unit(None, "mW")
-    warmup_delay: float = _unit(0, "s")
-    shutter_off_nonacq: bool = False
-    lasers_off_finally: bool = False
+    laser: int = _field(
+        choices_from="lasers",
+        allow_custom=True,
+        tooltip=(
+            "Laser line (nm). The dropdown lists the lines the setup's "
+            "monet config declares; any other value can be typed in."
+        ),
+    )
+    power_acq: float = _unit(
+        unit="mW", tooltip="Laser power at the sample while acquiring frames."
+    )
+    power_nonacq: Optional[float] = _unit(
+        None,
+        "mW",
+        tooltip="Laser power between acquisitions (fluid exchange / waiting). "
+        "Defaults to the acquisition power when left empty.",
+    )
+    warmup_delay: float = _unit(
+        0,
+        "s",
+        tooltip="Seconds to hold at power before acquiring, letting the laser "
+        "output stabilise.",
+    )
+    shutter_off_nonacq: bool = _field(
+        False,
+        tooltip="Close the shutter between acquisitions to spare the sample "
+        "from light exposure while not imaging.",
+    )
+    lasers_off_finally: bool = _field(
+        False, tooltip="Switch the lasers off when the whole run finishes."
+    )
 
     @model_validator(mode="after")
     def _default_nonacq_power(self):
@@ -346,3 +636,36 @@ def validate_experiment_design(data) -> ExperimentDesign:
         raise ExperimentDesignValidationError(
             "Experiment design validation failed:\n{}".format(exc)
         ) from exc
+
+
+def design_warnings(design) -> List[str]:
+    """Collect soft, non-blocking warnings for an experiment design.
+
+    These are advisory notes (e.g. an imager reused in a way that produces a
+    redundant imaging round) that should be surfaced to the operator WITHOUT
+    blocking save/translate. Hard problems still raise during validation; this
+    is strictly for the "allowed but worth a heads-up" cases.
+
+    Parameters
+    ----------
+    design : ExperimentDesign or dict
+        A validated model, or a design dict (validated here; an invalid dict
+        yields no warnings — the hard validation error surfaces elsewhere).
+
+    Returns
+    -------
+    list of str
+        Human-readable warning messages (empty when nothing to flag).
+    """
+    if not isinstance(design, ExperimentDesign):
+        try:
+            design = validate_experiment_design(design)
+        except ExperimentDesignValidationError:
+            return []
+    experiment = getattr(
+        getattr(getattr(design, "fluid", None), "settings", None),
+        "experiment",
+        None,
+    )
+    getter = getattr(experiment, "design_warnings", None)
+    return list(getter()) if callable(getter) else []

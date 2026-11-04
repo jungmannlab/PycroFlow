@@ -190,6 +190,63 @@ class TestOrchestration(unittest.TestCase):
         self.assertEqual(po.threadexchange["fluid"], ["fluid round 1 done"])
         self.assertEqual(po.threadexchange["img"], ["imaging round 1 done"])
 
+    def test_start_at_round_preseeds_signals_no_deadlock(self):
+        # Resume mid-protocol: a round-1 img entry waits for a round-0 fluid
+        # signal. Starting both subsystems at round 1 must PRE-FIRE the skipped
+        # round-0 signal, or img waits forever for an emission that now never
+        # happens. The run must finish, and the skipped entries must NOT run.
+        protocol = {
+            "fluid": _wrap(
+                [
+                    {"$type": "signal", "value": "flush r0"},  # 0 (skipped)
+                    {"$type": "signal", "value": "flush r1"},  # 1 (resume)
+                ]
+            ),
+            "img": _wrap(
+                [
+                    {"$type": "signal", "value": "ack r0"},  # 0 (skipped)
+                    {
+                        "$type": "wait for signal",
+                        "target": "fluid",
+                        "value": "flush r0",  # a ROUND-0 signal
+                    },  # 1 (resume)
+                ]
+            ),
+        }
+        po = por.ProtocolOrchestrator(
+            protocol, fluid_system=MagicMock(), imaging_system=MagicMock()
+        )
+        po.start_orchestration()
+        po.start_protocol(system_steps={"fluid": 1, "img": 1})
+        deadline = time.time() + 5
+        while time.time() < deadline and not po.poll_protocol_finished():
+            time.sleep(0.02)
+        finished = po.poll_protocol_finished()
+        po.end_orchestration()
+        self.assertTrue(
+            finished, "start-at-round deadlocked (signal pre-seed failed)"
+        )
+        # Round-0 fluid signal was pre-fired (registry only), not re-executed;
+        # only round-1's flush was emitted onto the message list.
+        self.assertEqual(po.threadexchange["fluid"], ["flush r1"])
+        # img ran only its round-1 wait (satisfied by the pre-seed) and emitted
+        # nothing; the skipped round-0 "ack r0" never ran.
+        self.assertNotIn("ack r0", po.threadexchange["img"])
+
+    def test_normal_start_begins_at_zero(self):
+        # With no system_steps the run starts at index 0 (unchanged behaviour).
+        protocol = {
+            "fluid": _wrap([{"$type": "signal", "value": "r0"}]),
+        }
+        po = por.ProtocolOrchestrator(protocol, fluid_system=MagicMock())
+        po.start_orchestration()
+        po.start_protocol()
+        deadline = time.time() + 5
+        while time.time() < deadline and not po.poll_protocol_finished():
+            time.sleep(0.02)
+        po.end_orchestration()
+        self.assertEqual(po.threadexchange["fluid"], ["r0"])
+
     def test_get_step_progress_handler_and_system(self):
         # The handler returns its own step_progress (set by the incubate
         # dispatcher) if present, else delegates to the system.
@@ -259,3 +316,66 @@ class TestOrchestration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFatalStepAbort(unittest.TestCase):
+    """An unrecoverable step error aborts the whole run loudly instead of
+    killing one handler thread while the others hang (ibidi-fault scenario)."""
+
+    def test_fluid_fault_aborts_and_frees_waiting_img(self):
+        from PycroFlow.tests.emulators.subsystems import (
+            EmulatedFluidSystem,
+            EmulatedImagingSystem,
+        )
+
+        class _FailingFluid(EmulatedFluidSystem):
+            def _on_entry(self, entry):
+                if entry.get("$type") == "inject":
+                    raise RuntimeError("valve boom (simulated fault)")
+
+        # img waits for a 'done flushing' signal the failed inject never
+        # sends; pre-fix it hangs forever, post-fix the run aborts.
+        protocol = {
+            "fluid": {
+                "protocol_entries": [
+                    {"$type": "inject", "reservoir_id": 0, "volume": 10},
+                    {"$type": "signal", "value": "done flushing img-0"},
+                ]
+            },
+            "img": {
+                "protocol_entries": [
+                    {
+                        "$type": "wait for signal",
+                        "target": "fluid",
+                        "value": "done flushing img-0",
+                    },
+                    {
+                        "$type": "acquire",
+                        "frames": 1,
+                        "t_exp": 1,
+                        "message": "round_img-0-X",
+                    },
+                ]
+            },
+        }
+        img = EmulatedImagingSystem()
+        po = por.ProtocolOrchestrator(
+            protocol,
+            fluid_system=_FailingFluid(),
+            imaging_system=img,
+        )
+        po.start_orchestration()
+        po.start_protocol()
+        deadline = time.time() + 10
+        while time.time() < deadline and not po.poll_protocol_finished():
+            time.sleep(0.05)
+        po.end_orchestration()
+        self.assertTrue(
+            po.poll_protocol_finished(), "run hung instead of aborting"
+        )
+        self.assertTrue(po.poll_protocol_errored())
+        self.assertIn("valve boom", po.protocol_error_message() or "")
+        # The fatal abort must also stop the *other* subsystems' in-flight
+        # work (not only the failing fluid handler), so a mid-acquisition
+        # imaging movie is told to abort before the run is marked finished.
+        self.assertTrue(img.aborted, "sibling imaging system was not aborted")

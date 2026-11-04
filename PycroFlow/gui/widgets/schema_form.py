@@ -206,9 +206,24 @@ class _ListScalarEditor(QWidget):
 
 
 class _ChoiceEditor(QWidget):
-    """A dropdown for a string field with a fixed/contextual option set."""
+    """A dropdown for a string field with a fixed/contextual option set.
 
-    def __init__(self, options, value, allow_none, ann=str, parent=None):
+    With ``allow_custom`` the combo is editable, so a value outside the
+    option set can be typed. That matters when the options come from an
+    external source that may not know them all (e.g. the laser lines a
+    setup's monet config declares) — otherwise an empty option set would
+    leave the field unchangeable.
+    """
+
+    def __init__(
+        self,
+        options,
+        value,
+        allow_none,
+        ann=str,
+        parent=None,
+        allow_custom=False,
+    ):
         super().__init__(parent)
         self.is_block = False
         self._allow_none = allow_none
@@ -220,6 +235,10 @@ class _ChoiceEditor(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         self._combo = QComboBox()
+        self._combo.setEditable(allow_custom)
+        if allow_custom:
+            # Typing a value must not silently add it to the option list.
+            self._combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         if allow_none:
             self._combo.addItem("")  # blank -> None
         self._combo.addItems(opts)
@@ -327,6 +346,10 @@ class _ListChoiceEditor(QGroupBox):
         rlay.addWidget(ed, 1)
         rm = QPushButton("✕")
         rm.setFixedWidth(28)
+        # Keep row-remove buttons out of the tab chain: tabbing out of an
+        # input should reach the next row's input, not a destructive button
+        # that would swallow a stray Space/Enter.
+        rm.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         rlay.addWidget(rm)
         self._items_lay.addWidget(row)
         entry = (row, ed, label)
@@ -361,8 +384,11 @@ class _MappingEditor(QGroupBox):
     ``columns`` gives the two column headers in display order. By default the
     key is shown in column 0 and the value in column 1; ``display_value_first``
     swaps that (used for ``special_names``, stored name->id but shown id,
-    name). ``key_choices`` / ``value_choices``, when given, render that side as
-    a dropdown restricted to those options (e.g. the setup's reservoir ids).
+    name). ``key_choices_key`` / ``value_choices_key`` name a *context* key
+    whose options render that side as a dropdown (e.g. the setup's reservoir
+    ids); the editor subscribes, so rows re-offer the current options when the
+    setup changes — a snapshot would leave the column as free text forever if
+    the form was built before a setup was loaded.
     """
 
     def __init__(
@@ -374,8 +400,8 @@ class _MappingEditor(QGroupBox):
         *,
         columns=None,
         display_value_first=False,
-        key_choices=None,
-        value_choices=None,
+        key_choices_key=None,
+        value_choices_key=None,
         provides=None,
         context=None,
         parent=None,
@@ -385,8 +411,8 @@ class _MappingEditor(QGroupBox):
         self._key_ann = key_ann
         self._val_ann = val_ann
         self._dvf = display_value_first
-        self._key_choices = key_choices
-        self._value_choices = value_choices
+        self._key_choices_key = key_choices_key
+        self._value_choices_key = value_choices_key
         # When set, push this mapping's values to context[provides] on edit,
         # so dropdowns fed by those values (e.g. imager names) update live.
         self._provides = provides
@@ -401,11 +427,44 @@ class _MappingEditor(QGroupBox):
                 lbl = QLabel("<b>{}</b>".format(head))
                 self._grid.addWidget(lbl, self._next_row, c)
             self._next_row += 1
-        add = QPushButton("Add")
-        add.clicked.connect(lambda: self._add_row("", ""))
-        self._lay.addWidget(add)
+        self._add_btn = QPushButton("Add")
+        self._add_btn.clicked.connect(lambda: self._add_row("", ""))
+        self._lay.addWidget(self._add_btn)
         for k, v in (value or {}).items():
             self._add_row(k, v)
+        # Follow the option sources, so a setup loaded/switched after this
+        # form was built still turns the column into a dropdown.
+        for key, side in (
+            (self._key_choices_key, "key"),
+            (self._value_choices_key, "value"),
+        ):
+            if key and hasattr(self._ctx, "subscribe"):
+                self._ctx.subscribe(
+                    key, lambda opts, s=side: self._refresh_choices(s, opts)
+                )
+
+    def _choices(self, side):
+        key = (
+            self._key_choices_key if side == "key" else self._value_choices_key
+        )
+        if not key or self._ctx is None:
+            return None
+        return self._ctx.get(key, [])
+
+    def _refresh_choices(self, side, options):
+        """Rebuild one column's cells against a new option set, in place."""
+        idx = 0 if side == "key" else 1
+        for row in list(self._rows):
+            old = row[idx]
+            new = self._make_cell(self._cell_text(old), options)
+            self._grid.replaceWidget(old, new)
+            old.setParent(None)
+            replacement = list(row)
+            replacement[idx] = new
+            self._rows[self._rows.index(row)] = tuple(replacement)
+            if self._provides and idx == 1:
+                self._connect_change(new)
+        self._retab()
 
     @staticmethod
     def _make_cell(val, choices):
@@ -430,10 +489,14 @@ class _MappingEditor(QGroupBox):
     def _add_row(self, k, v):
         r = self._next_row
         self._next_row += 1
-        key_w = self._make_cell(k, self._key_choices)
-        val_w = self._make_cell(v, self._value_choices)
+        key_w = self._make_cell(k, self._choices("key"))
+        val_w = self._make_cell(v, self._choices("value"))
         rm = QPushButton("✕")
         rm.setFixedWidth(28)
+        # Keep row-remove buttons out of the tab chain: tabbing out of an
+        # input should reach the next row's input, not a destructive button
+        # that would swallow a stray Space/Enter.
+        rm.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         # Column 0/1 placement honours display_value_first.
         left, right = (val_w, key_w) if self._dvf else (key_w, val_w)
         self._grid.addWidget(left, r, 0)
@@ -442,10 +505,39 @@ class _MappingEditor(QGroupBox):
         row = (key_w, val_w, rm)
         self._rows.append(row)
         rm.clicked.connect(lambda: self._remove(row))
+        self._retab()
         # Live-publish the values (e.g. reservoir names) as they change.
         if self._provides:
             self._connect_change(val_w)
             self._notify()
+
+    def _retab(self):
+        """Chain the typed cells down the table, column by column.
+
+        Qt's default chain follows widget *creation* order, which puts the
+        ✕ button between a row's name field and the next row — so tabbing
+        out of a name landed on 'remove'. Instead Tab runs straight down the
+        typed column (name → next row's name), which is how the table is
+        actually filled in: the other column is a dropdown, picked from its
+        list rather than typed, so it is taken out of the tab chain (it stays
+        click- and keyboard-operable once focused). A column that is *not* a
+        dropdown — e.g. reservoir ids before a setup is loaded — must still be
+        typeable, so it keeps its place in the chain.
+
+        Rows are rebuilt (option refresh) and removed out of order, so the
+        chain is re-derived from the current row list rather than assumed.
+        """
+        stops = []
+        for key_w, val_w, _ in self._rows:
+            left, right = (val_w, key_w) if self._dvf else (key_w, val_w)
+            if isinstance(left, QComboBox):
+                left.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+            else:
+                left.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+                stops.append(left)
+            stops.append(right)
+        for first, second in zip(stops, stops[1:]):
+            QWidget.setTabOrder(first, second)
 
     def _connect_change(self, w):
         if isinstance(w, QComboBox):
@@ -462,6 +554,7 @@ class _MappingEditor(QGroupBox):
         for w in row:
             w.setParent(None)
         self._rows.remove(row)
+        self._retab()
         if self._provides:
             self._notify()
 
@@ -503,6 +596,10 @@ class _ListModelEditor(QGroupBox):
         rlay.addWidget(form, 1)
         rm = QPushButton("✕")
         rm.setFixedWidth(28)
+        # Keep row-remove buttons out of the tab chain: tabbing out of an
+        # input should reach the next row's input, not a destructive button
+        # that would swallow a stray Space/Enter.
+        rm.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         rlay.addWidget(rm)
         self._items_lay.addWidget(row)
         entry = (row, form)
@@ -545,6 +642,10 @@ class _DictModelEditor(QGroupBox):
         head.addWidget(key_edit, 1)
         rm = QPushButton("✕")
         rm.setFixedWidth(28)
+        # Keep row-remove buttons out of the tab chain: tabbing out of an
+        # input should reach the next row's input, not a destructive button
+        # that would swallow a stray Space/Enter.
+        rm.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         head.addWidget(rm)
         rlay.addLayout(head)
         form = SchemaForm(self._item_cls, data, context=self._context)
@@ -674,16 +775,8 @@ def _make_editor(ann, optional, value, label, meta, context):
             label,
             columns=meta.get("columns"),
             display_value_first=meta.get("display_value_first", False),
-            key_choices=(
-                context.get(meta["key_choices_from"])
-                if "key_choices_from" in meta
-                else None
-            ),
-            value_choices=(
-                context.get(meta["value_choices_from"])
-                if "value_choices_from" in meta
-                else None
-            ),
+            key_choices_key=meta.get("key_choices_from"),
+            value_choices_key=meta.get("value_choices_from"),
             provides=meta.get("provides"),
             context=context,
         )
@@ -693,7 +786,13 @@ def _make_editor(ann, optional, value, label, meta, context):
         opts = meta.get("choices")
         if opts is None:
             opts = context.get(key, [])
-        editor = _ChoiceEditor(opts, value, meta.get("allow_none", False), ann)
+        editor = _ChoiceEditor(
+            opts,
+            value,
+            meta.get("allow_none", False),
+            ann,
+            allow_custom=meta.get("allow_custom", False),
+        )
         if key is not None and hasattr(context, "subscribe"):
             context.subscribe(key, editor.set_options)
         return editor
@@ -799,16 +898,32 @@ class SchemaForm(QWidget):
                 hint = QLabel(unit)
                 hint.setStyleSheet("color: gray;")
                 editor.add_suffix(hint)
-            if meta.get("tooltip"):
-                editor.setToolTip(meta["tooltip"])
+            tooltip = meta.get("tooltip")
+            if tooltip:
+                editor.setToolTip(tooltip)
             if getattr(editor, "is_block", False):
                 form.addRow(editor)
             else:
-                form.addRow(alias, editor)
+                # Build the label as a widget (not a bare string) so the
+                # tooltip is shown when hovering the parameter *name*, which is
+                # the natural place to ask "what does this do?".
+                label = QLabel(alias)
+                if tooltip:
+                    label.setToolTip(tooltip)
+                form.addRow(label, editor)
 
     def field_editor(self, alias):
         """Return the editor widget for a top-level field (None if absent)."""
         return self._editors.get(alias)
+
+    @property
+    def context(self):
+        """The :class:`FormContext` shared down this form tree.
+
+        Exposed so an owner can publish fresh option lists (e.g. after the
+        microscope setup changes) without rebuilding the form.
+        """
+        return self._context
 
     def to_dict(self):
         """Return the edited values as an alias-keyed dict."""

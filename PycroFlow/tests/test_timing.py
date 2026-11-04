@@ -32,12 +32,25 @@ def _example_protocol():
 
 class TestEntryDuration(unittest.TestCase):
 
-    def test_acquire_is_frames_times_exposure(self):
-        # 1000 frames * 100 ms = 100 s.
+    def test_acquire_is_frames_times_exposure_plus_overhead(self):
+        # 1000 frames * (100 ms exposure + 90 ms readout) + 2 s arm/startup.
         d = estimate_entry_duration(
             {"$type": "acquire", "frames": 1000, "t_exp": 100}
         )
-        self.assertAlmostEqual(d, 100.0)
+        self.assertAlmostEqual(d, 1000 * (0.1 + 0.09) + 2.0)
+
+    def test_acquire_overheads_are_overridable(self):
+        # est_frame_overhead / est_acquire_setup tune the acquire model.
+        d = estimate_entry_duration(
+            {"$type": "acquire", "frames": 100, "t_exp": 100},
+            {"est_frame_overhead": 0.0, "est_acquire_setup": 0.0},
+        )
+        self.assertAlmostEqual(d, 10.0)  # back to frames * t_exp
+
+    def test_zero_frame_acquire_is_zero(self):
+        self.assertEqual(
+            estimate_entry_duration({"$type": "acquire", "frames": 0}), 0.0
+        )
 
     def test_incubate_uses_duration(self):
         self.assertAlmostEqual(
@@ -50,25 +63,46 @@ class TestEntryDuration(unittest.TestCase):
             12.0,
         )
 
-    def test_inject_uses_volume_over_velocity(self):
-        # 120 * 500 / 1000 = 60 s, plus delays.
+    def test_inject_uses_volume_over_velocity_plus_overhead(self):
+        # 120 * 500 / 1000 = 60 s motion, plus the fixed inject overhead.
         d = estimate_entry_duration(
             {"$type": "inject", "volume": 500, "velocity": 1000}
         )
-        self.assertAlmostEqual(d, 60.0)
+        self.assertAlmostEqual(d, 60.0 + 3.45)
 
     def test_inject_falls_back_to_max_velocity(self):
         d = estimate_entry_duration(
             {"$type": "inject", "volume": 500}, {"max_velocity": 1000}
         )
+        self.assertAlmostEqual(d, 60.0 + 3.45)
+
+    def test_inject_overhead_dominates_small_volumes(self):
+        # A 1 µl inject is almost all fixed overhead (the log's 1 µl injects
+        # took ~3 s though motion is ~0.01 s).
+        d = estimate_entry_duration(
+            {"$type": "inject", "volume": 1, "velocity": 10000}
+        )
+        self.assertAlmostEqual(d, 120.0 / 10000 + 3.45)
+
+    def test_inject_overhead_is_overridable(self):
+        d = estimate_entry_duration(
+            {"$type": "inject", "volume": 500, "velocity": 1000},
+            {"est_inject_overhead": 0.0},
+        )
         self.assertAlmostEqual(d, 60.0)
+
+    def test_pump_out_adds_its_own_overhead(self):
+        d = estimate_entry_duration(
+            {"$type": "pump_out", "volume": 1, "velocity": 10000}
+        )
+        self.assertAlmostEqual(d, 120.0 / 10000 + 1.6)
 
     def test_inject_adds_equilibration_delays(self):
         d = estimate_entry_duration(
             {"$type": "inject", "volume": 500, "velocity": 1000, "delay": 5},
             {"inject_in_to_out_delay": 3, "inject_out_to_in_delay": 2},
         )
-        self.assertAlmostEqual(d, 60.0 + 3 + 2 + 2 * 5)
+        self.assertAlmostEqual(d, 60.0 + 3 + 2 + 2 * 5 + 3.45)
 
     def test_coordination_and_instant_steps_are_zero(self):
         for entry in (
@@ -129,5 +163,175 @@ class TestFormatDuration(unittest.TestCase):
         self.assertEqual(format_duration(90000), "1d 1h")
 
 
+class TestVolumes(unittest.TestCase):
+
+    def test_sums_injects_per_reservoir_and_waste(self):
+        from PycroFlow.protocols.timing import estimate_volumes
+
+        protocol = {
+            "fluid": {
+                "protocol_entries": [
+                    {"$type": "inject", "reservoir_id": 1, "volume": 100},
+                    {"$type": "inject", "reservoir_id": 1, "volume": 50},
+                    {"$type": "inject", "reservoir_id": 2, "volume": 500},
+                    {"$type": "pump_out", "volume": 600},
+                    {"$type": "signal", "value": "x"},  # ignored
+                ]
+            }
+        }
+        vols = estimate_volumes(protocol)
+        self.assertEqual(vols["per_reservoir"], {1: 150.0, 2: 500.0})
+        self.assertEqual(vols["total_injected"], 650.0)
+        # Waste = simultaneous extraction of every inject (ef defaults to 1)
+        # plus the standalone pump_out: 100 + 50 + 500 + 600.
+        self.assertEqual(vols["total_waste"], 1250.0)
+
+    def test_waste_scales_with_extraction_factor(self):
+        # Each inject extracts extractionfactor * volume; a per-entry factor
+        # (e.g. the 0 re-inject that pushes liquid back) overrides the default.
+        from PycroFlow.protocols.timing import estimate_volumes
+
+        protocol = {
+            "fluid": {
+                "parameters": {"extractionfactor": 6},
+                "protocol_entries": [
+                    {"$type": "inject", "reservoir_id": 1, "volume": 100},
+                    {
+                        "$type": "inject",
+                        "reservoir_id": 1,
+                        "volume": 10,
+                        "extractionfactor": 0,
+                    },
+                    {"$type": "pump_out", "volume": 5, "extractionfactor": 1},
+                ],
+            }
+        }
+        vols = estimate_volumes(protocol)
+        self.assertEqual(vols["total_injected"], 110.0)
+        # 6*100 (default ef) + 0*10 (per-entry) + 1*5 (per-entry) = 605.
+        self.assertEqual(vols["total_waste"], 605.0)
+
+    def test_empty_protocol_is_zero(self):
+        from PycroFlow.protocols.timing import estimate_volumes
+
+        vols = estimate_volumes({})
+        self.assertEqual(vols["per_reservoir"], {})
+        self.assertEqual(vols["total_injected"], 0.0)
+
+    def test_example_protocol_has_positive_volume(self):
+        from PycroFlow.protocols.timing import estimate_volumes
+
+        vols = estimate_volumes(_example_protocol())
+        self.assertGreater(vols["total_injected"], 0)
+
+    def test_format_volume(self):
+        from PycroFlow.protocols.timing import format_volume
+
+        self.assertEqual(format_volume(0), "0 µl")
+        self.assertEqual(format_volume(-5), "0 µl")
+        self.assertEqual(format_volume(750), "750 µl")
+        self.assertEqual(format_volume(1000), "1 ml")
+        self.assertEqual(format_volume(2500), "2.50 ml")
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMultiPositionEstimates(unittest.TestCase):
+    """use_positions: acquire estimates scale by the MM position count."""
+
+    def test_acquire_scales_including_per_position_setup(self):
+        from PycroFlow.protocols.timing import estimate_entry_duration
+
+        entry = {"$type": "acquire", "frames": 100, "t_exp": 100}
+        single = estimate_entry_duration(entry)
+        self.assertEqual(
+            estimate_entry_duration(entry, positions=3), 3 * single
+        )
+        # Non-acquire entries are untouched by the factor.
+        inc = {"$type": "incubate", "duration": 30}
+        self.assertEqual(
+            estimate_entry_duration(inc, positions=3),
+            estimate_entry_duration(inc),
+        )
+
+    def test_protocol_level_factor_applies_to_img_only(self):
+        from PycroFlow.protocols.timing import (
+            estimate_durations,
+            estimate_total_duration,
+        )
+
+        protocol = {
+            "img": {
+                "protocol_entries": [
+                    {"$type": "acquire", "frames": 10, "t_exp": 100}
+                ]
+            },
+            "fluid": {
+                "protocol_entries": [{"$type": "incubate", "duration": 7}]
+            },
+        }
+        base = estimate_durations(protocol)
+        scaled = estimate_durations(protocol, img_positions=4)
+        self.assertEqual(scaled["img"][0], 4 * base["img"][0])
+        self.assertEqual(scaled["fluid"], base["fluid"])
+        self.assertEqual(
+            estimate_total_duration(protocol, img_positions=4),
+            4 * base["img"][0] + base["fluid"][0],
+        )
+
+    def test_step_progress_spans_positions(self):
+        from types import SimpleNamespace
+
+        from PycroFlow.imaging import ImagingSystem
+
+        stub = SimpleNamespace(
+            acquiring=True,
+            curr_n_frames=100,
+            curr_frame=30,
+            n_positions=4,
+            curr_position=2,
+        )
+        self.assertEqual(
+            ImagingSystem.get_step_progress(stub),
+            (230, 400, "frames · pos 3/4"),
+        )
+        stub.n_positions = 0
+        self.assertEqual(
+            ImagingSystem.get_step_progress(stub), (30, 100, "frames")
+        )
+
+    def test_position_count_is_cached_per_protocol(self):
+        from types import SimpleNamespace
+
+        from PycroFlow.imaging import ImagingSystem
+
+        class _CountingStudio:
+            calls = 0
+
+            def get_position_list_manager(self):
+                _CountingStudio.calls += 1
+
+                class _Mgr:
+                    def get_position_list(self):
+                        class _List:
+                            def get_number_of_positions(self):
+                                return 4
+
+                        return _List()
+
+                return _Mgr()
+
+        stub = SimpleNamespace(
+            config={"use_positions": True},
+            studio=_CountingStudio(),
+            _position_count=None,
+        )
+        self.assertEqual(ImagingSystem.position_count(stub), 4)
+        self.assertEqual(ImagingSystem.position_count(stub), 4)
+        # One MM round-trip per run, not per call/step.
+        self.assertEqual(_CountingStudio.calls, 1)
+        # A new protocol re-arms the query (new run, list may differ).
+        ImagingSystem._assign_protocol(stub, {"protocol_entries": []})
+        self.assertIsNone(stub._position_count)

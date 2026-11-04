@@ -17,7 +17,69 @@ through a registry client (real or the in-memory mock).
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from typing import Any
+
+from loguru import logger
+
+from PycroFlow.live_analysis.run_id import new_run_id
+
+
+def setup_acquisition_fields(setup_name: str | None) -> dict:
+    """Acquisition-run fields that reference the active microscope setup.
+
+    Reads the resolved on-disk setup YAML (user-local-first, via
+    :func:`PycroFlow.configs.setup_path`) and returns the fields that pin it to
+    the run — so a dataset's provenance records *which* rig config produced it,
+    content-addressed for later de-dup / a registry ``setup_config`` endpoint:
+
+    * ``microscope_id`` — the setup name;
+    * ``config_yaml`` — the full setup YAML text (stored verbatim);
+    * ``extra`` — ``{"setup_sha256": <hex>}``, the SHA-256 of that text (the
+      stable "version" of this local setup).
+
+    Best-effort: an empty/unknown/unreadable ``setup_name`` returns ``{}`` so
+    stamping never breaks a run or a registry post.
+    """
+    if not setup_name:
+        return {}
+    from PycroFlow import configs
+
+    try:
+        text = Path(configs.setup_path(setup_name)).read_text(encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 - stamping is best-effort
+        logger.debug(
+            "setup stamp: could not read setup {!r} ({!r})", setup_name, exc
+        )
+        return {}
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return {
+        "microscope_id": str(setup_name),
+        "config_yaml": text,
+        "extra": {"setup_sha256": digest},
+    }
+
+
+def _ensure_id(fields: dict) -> str:
+    """Pre-mint the row id so the FK chain never needs the server response.
+
+    The WP-3 ``BufferedRegistryClient``'s writes are fire-and-forget — they
+    return an acknowledgement (``{"buffered": True}``), not the created row —
+    so chaining on the response id would KeyError with the production client.
+    The registry honors client-supplied ids (crud mints only when absent),
+    and a pre-minted id also makes at-least-once replay dedup exactly.
+    """
+    if not fields.get("id"):
+        fields["id"] = new_run_id()
+    return fields["id"]
+
+
+def _row_id(response: Any, fallback: str) -> str:
+    """The server-confirmed id when the client returns rows, else ours."""
+    if isinstance(response, dict) and response.get("id"):
+        return response["id"]
+    return fallback
 
 
 def build_fov_payload(
@@ -103,29 +165,106 @@ def build_fov_payload(
 def post_fov_record(client: Any, payload: dict) -> dict:
     """Post a :func:`build_fov_payload` record through a registry client.
 
-    Writes acquisition_run -> fov -> analysis_run -> metrics, threading the
-    server-assigned ids down the FK chain, and returns the created ids. Works
-    with the real ``RegistryClient`` and the in-memory ``MockRegistryClient``
-    (both share the ``log_*`` surface).
+    Writes acquisition_run -> fov -> analysis_run -> metrics. Row ids are
+    pre-minted client-side (see :func:`_ensure_id`) so the chain works with
+    the fire-and-forget ``BufferedRegistryClient`` as well as the synchronous
+    ``RegistryClient`` / in-memory ``MockRegistryClient`` (whose returned row
+    ids are preferred when present). Returns the created ids.
     """
-    acq = client.log_acquisition(**payload["acquisition_run"])
+    acq_fields = dict(payload["acquisition_run"])
+    acq_id = _ensure_id(acq_fields)
+    acq_id = _row_id(client.log_acquisition(**acq_fields), acq_id)
 
     fov_fields = dict(payload["fov"])
-    fov_fields["acquisition_run_id"] = acq["id"]
-    fov = client.log_fov(**fov_fields)
+    fov_fields["acquisition_run_id"] = acq_id
+    fov_id = _ensure_id(fov_fields)
+    fov_id = _row_id(client.log_fov(**fov_fields), fov_id)
 
     an_fields = dict(payload["analysis_run"])
-    an_fields["acquisition_run_id"] = acq["id"]
-    an_fields["fov_id"] = fov["id"]
-    analysis = client.log_analysis(**an_fields)
+    an_fields["acquisition_run_id"] = acq_id
+    an_fields["fov_id"] = fov_id
+    an_id = _ensure_id(an_fields)
+    an_id = _row_id(client.log_analysis(**an_fields), an_id)
 
     metric_fields = dict(payload["metrics"])
-    metric_fields["analysis_run_id"] = analysis["id"]
-    metrics = client.log_metrics(**metric_fields)
+    metric_fields["analysis_run_id"] = an_id
+    metrics_id = _ensure_id(metric_fields)
+    metrics_id = _row_id(client.log_metrics(**metric_fields), metrics_id)
 
     return {
-        "acquisition_run_id": acq["id"],
-        "fov_id": fov["id"],
-        "analysis_run_id": analysis["id"],
-        "metrics_id": metrics.get("id"),
+        "acquisition_run_id": acq_id,
+        "fov_id": fov_id,
+        "analysis_run_id": an_id,
+        "metrics_id": metrics_id,
     }
+
+
+def build_experiment_payload(
+    *,
+    experiment_id: str,
+    run_id: str,
+    design: dict | None = None,
+    setup_name: str | None = None,
+    sequence_modified: bool = False,
+) -> dict:
+    """Assemble the experiment-level registry record (WP-LIVE-INT).
+
+    One row per orchestrated run, written at run start; the per-FOV
+    ``acquisition_run`` rows link to it via ``acquisition_run.experiment_id``.
+    It carries what the Experiment Design already knows (the experiment type
+    and run naming) under ``extra`` — the A2 descriptor axes (taxon, target,
+    modality) are populated by the cohort/experiment layer, not here.
+
+    Parameters
+    ----------
+    experiment_id : str
+        The minted ULID that becomes ``experiment.id``.
+    run_id : str
+        The experiment's acquisition run_id (recorded for the join).
+    design : dict or None
+        The validated Experiment Design dict (aliased keys).
+    setup_name : str or None
+        The microscope setup name, when the frontend knows it.
+    sequence_modified : bool
+        Whether the Run Sequence was hand-edited after translation. When true
+        the run is no longer a faithful instance of its named experiment type,
+        so ``experiment_type`` is suffixed ``-modified`` and a
+        ``sequence_modified`` flag is recorded.
+    """
+    design = design if isinstance(design, dict) else {}
+    exp = design.get("experiment") or {}
+    exp_type = exp.get("type")
+    if exp_type and sequence_modified:
+        exp_type = "{}-modified".format(exp_type)
+    extra = {
+        "run_id": run_id,
+        "experiment_type": exp_type,
+        "base_name": design.get("base_name"),
+        "setup": setup_name,
+        "sequence_modified": True if sequence_modified else None,
+    }
+    return {
+        "id": experiment_id,
+        "extra": {k: v for k, v in extra.items() if v is not None},
+    }
+
+
+def post_experiment_record(client: Any, payload: dict) -> dict:
+    """Post a :func:`build_experiment_payload` record through a client.
+
+    Parameters
+    ----------
+    client : Any
+        A registry client exposing the ``log_*`` surface (real, buffered, or
+        the in-memory mock).
+    payload : dict
+        The experiment row from :func:`build_experiment_payload`.
+
+    Returns
+    -------
+    dict
+        The client's response — the created row for synchronous clients, a
+        ``{"buffered": True}`` acknowledgement for the fire-and-forget one
+        (callers fall back to the payload's pre-minted ``id``).
+    """
+    return client.log_experiment(**payload)

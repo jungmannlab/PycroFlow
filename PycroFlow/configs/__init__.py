@@ -1,21 +1,96 @@
 """Instrument-specific configs shipped with PycroFlow.
 
-This subpackage holds YAML descriptions of fluid-handler hardware
-topologies — valves, pumps, reservoirs, tubing volumes — previously baked
-into ``hamilton_architecture.py`` as module-scope dicts. The loader
-:func:`load_legacy_config` reads them and exposes the resulting dicts.
+This subpackage holds YAML descriptions of instrument hardware — valves,
+pumps, reservoirs, tubing volumes — previously baked into
+``hamilton_architecture.py`` as module-scope dicts.
+
+Per-microscope setups (``setups/<name>.yaml``, loaded by :func:`load_setup`)
+group hardware by **role**, each role naming the driver serving it:
+
+* ``fluid`` — ``pumps`` (``driver: hamilton-psd``), ``multiplexer``
+  (``driver: hamilton-mvp`` with ``valves``, or ``driver: ibidi-multiflow``
+  with its own serial ``port``), ``flush_pos``, ``reservoirs``, ``tubing``
+* ``imaging`` — ``pfs_pars``
+* ``illumination`` — ``{backend: monet, config: <monet.CONFIGS key>}``; the
+  monet config names the *microscope*, which may differ from the setup's own
+  name (see :func:`monet_config` and ADR 008)
+
+:class:`LegacyArchitecture` still consumes a flat, vendor-shaped config dict;
+:func:`assemble_hamilton_config` is the single translation point.
 
 The package data is included via ``[tool.setuptools.package-data]`` in
 ``pyproject.toml``.
 """
 
 import copy
+import os
+import shutil
 from pathlib import Path
 
 import yaml
+from loguru import logger
 
 _CONFIG_DIR = Path(__file__).resolve().parent
 _SETUP_DIR = _CONFIG_DIR / "setups"
+
+#: Multiplexer drivers a setup's ``fluid.multiplexer.driver`` may name.
+HAMILTON_MVP = "hamilton-mvp"
+IBIDI_MULTIFLOW = "ibidi-multiflow"
+MULTIPLEXER_DRIVERS = (HAMILTON_MVP, IBIDI_MULTIFLOW)
+
+
+def user_setups_dir():
+    """Return the per-user directory for local (uncommitted) setup configs.
+
+    A microscope setup describes one lab's specific rig, so it does not belong
+    in the shipped package (that only carries the emulated setups + a template).
+    Real setups live in a per-user directory instead, discovered here.
+
+    Resolution order:
+
+    1. the ``PYCROFLOW_SETUPS_DIR`` environment variable, used verbatim;
+    2. ``<PYCROFLOW_HOME>/setups`` when the frozen-GUI launcher set
+       ``PYCROFLOW_HOME``;
+    3. the per-user config location otherwise —
+       ``%LOCALAPPDATA%\\PycroFlow\\setups`` on Windows,
+       ``$XDG_CONFIG_HOME/PycroFlow/setups`` (``~/.config`` default) elsewhere.
+
+    The directory is not created here; :func:`save_setup` creates it on write.
+    """
+    override = os.environ.get("PYCROFLOW_SETUPS_DIR")
+    if override:
+        return Path(override)
+    home = os.environ.get("PYCROFLOW_HOME")
+    if home:
+        base = Path(home)
+    elif os.name == "nt":
+        base = (
+            Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "PycroFlow"
+        )
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")
+        base = Path(xdg) / "PycroFlow"
+    return base / "setups"
+
+
+def _setup_file(name):
+    """Resolve a setup *name* to its YAML path.
+
+    A bare setup name resolves to the user-local
+    ``<user_setups_dir>/<name>.yaml`` when that file exists, else the built-in
+    ``configs/setups/<name>.yaml`` — so a user-local setup shadows a built-in
+    of the same name. A value is treated as an explicit path (returned
+    unchanged) only when it has a directory component or a YAML suffix, so a
+    dotted bare name like ``'Mercury.v2'`` still resolves to
+    ``Mercury.v2.yaml`` rather than being opened literally.
+    """
+    p = Path(name)
+    if p.parent != Path(".") or p.suffix.lower() in (".yaml", ".yml"):
+        return p
+    user = user_setups_dir() / f"{name}.yaml"
+    if user.is_file():
+        return user
+    return _SETUP_DIR / f"{name}.yaml"
 
 
 def _resolve(path_or_name, suffix, base=None):
@@ -74,40 +149,264 @@ def load_legacy_tubing(name="legacy_tubing"):
 def list_setups():
     """Return the names of the available setup configs.
 
+    The union of the shipped built-in setups (``configs/setups/*.yaml`` — the
+    emulated setups + the template) and the user-local setups
+    (:func:`user_setups_dir`), sorted and de-duplicated. A user-local setup
+    shadows a built-in of the same name when loaded.
+
     Returns
     -------
     list of str
-        Sorted base names of ``configs/setups/*.yaml`` (e.g.
-        ``['Emulator', 'Mercury']``).
+        Sorted base names (e.g. the shipped
+        ``['Emulator', 'EmulatorCam', 'IbidiEmulator']`` plus any user-local
+        setups).
     """
-    if not _SETUP_DIR.is_dir():
-        return []
-    return sorted(p.stem for p in _SETUP_DIR.glob("*.yaml"))
+    names = set()
+    if _SETUP_DIR.is_dir():
+        names.update(p.stem for p in _SETUP_DIR.glob("*.yaml"))
+    udir = user_setups_dir()
+    if udir.is_dir():
+        names.update(p.stem for p in udir.glob("*.yaml"))
+    return sorted(names)
+
+
+def setup_path(name):
+    """Return the on-disk path to a setup's YAML file.
+
+    ``name`` is a setup basename (resolved user-local-first, see
+    :func:`_setup_file`) or a path. Used by the GUI to write edited values
+    (e.g. camera device indices) back to the file.
+    """
+    return str(_setup_file(name))
+
+
+def load_setup_file(name):
+    """Return a setup's raw, on-disk YAML content (un-normalised).
+
+    Unlike :func:`load_setup` — which normalises to the role-based layout and
+    converts tubing to a tuple-keyed dict — this returns the dict exactly as
+    written on disk. It is the clone source that pairs with :func:`save_setup`:
+    ``save_setup(name, edit(load_setup_file(src)))`` round-trips safely, whereas
+    feeding :func:`load_setup`'s normalised result to :func:`save_setup` would
+    fail (tuple keys are not YAML-serialisable). Resolution is user-local-first,
+    see :func:`_setup_file`.
+
+    Parameters
+    ----------
+    name : str
+        Setup name (user-local-first, else built-in) or path.
+
+    Returns
+    -------
+    dict
+        The parsed YAML, unmodified.
+    """
+    with open(_setup_file(name)) as f:
+        return yaml.safe_load(f)
+
+
+def save_setup(name, data):
+    """Write a setup to the per-user setups dir as ``<name>.yaml``.
+
+    Creates :func:`user_setups_dir` if needed, backs up an existing file to
+    ``<name>.yaml.bak``, and writes atomically. ``data`` must be the on-disk
+    setup shape (tubing as ``{from, to, volume}`` records, not the tuple-keyed
+    dict :func:`load_setup` returns) — use :func:`load_setup_file` as the clone
+    source, not :func:`load_setup`.
+
+    Parameters
+    ----------
+    name : str
+        Setup basename (no extension).
+    data : dict
+        The setup content to serialise.
+
+    Returns
+    -------
+    pathlib.Path
+        The path written.
+    """
+    udir = user_setups_dir()
+    udir.mkdir(parents=True, exist_ok=True)
+    dest = udir / f"{name}.yaml"
+    if dest.is_file():
+        shutil.copy2(dest, dest.with_name(dest.name + ".bak"))
+    tmp = dest.with_name(dest.name + ".tmp")
+    with open(tmp, "w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+    os.replace(tmp, dest)
+    return dest
 
 
 def load_setup(name):
     """Load a per-microscope setup (hardware) config.
 
     ``name`` is a setup basename in ``configs/setups`` (e.g. ``'Mercury'``)
-    or a path to a YAML file. The ``tubing`` record list is converted to the
+    or a path to a YAML file. The result is normalised to the role-based
+    layout (``fluid`` / ``imaging`` / ``illumination``, see
+    :func:`_normalize_setup`) and ``fluid.tubing`` is converted to the
     tuple-keyed dict shape used by :class:`LegacyArchitecture`.
 
     Parameters
     ----------
     name : str
-        Setup name or path.
+        Setup name (user-local-first, else built-in) or path.
 
     Returns
     -------
     dict
-        The parsed setup with ``tubing`` converted to a tuple-keyed dict.
+        The normalised setup.
     """
-    path = _resolve(name, ".yaml", base=_SETUP_DIR)
+    path = _setup_file(name)
     with open(path) as f:
         setup = yaml.safe_load(f)
-    if isinstance(setup.get("tubing"), list):
-        setup["tubing"] = _records_to_tubing(setup["tubing"])
+    return _normalize_setup(setup, source=path)
+
+
+def _normalize_setup(setup, source=None):
+    """Return ``setup`` in the canonical role-based layout.
+
+    Setups group hardware by *role* — ``fluid`` (pumps, multiplexer,
+    reservoirs, tubing), ``imaging``, ``illumination`` — with each role naming
+    the driver that serves it. The historical layout grouped by *vendor*
+    (a single ``hamilton:`` block that also held the ibidi multiplexer, plus a
+    top-level ``tubing:``); it is translated here so old setup files keep
+    working, with a deprecation warning.
+
+    Parameters
+    ----------
+    setup : dict
+        A parsed setup YAML in either layout.
+    source : path-like, optional
+        Where it was read from — only used in the deprecation message.
+
+    Returns
+    -------
+    dict
+        The setup with a ``fluid`` block and an ``illumination`` block;
+        ``fluid['tubing']`` is a tuple-keyed dict.
+    """
+    setup = copy.deepcopy(setup)
+    if "hamilton" in setup:
+        setup = _translate_legacy_setup(setup, source=source)
+
+    fluid = setup.setdefault("fluid", {})
+    if isinstance(fluid.get("tubing"), list):
+        fluid["tubing"] = _records_to_tubing(fluid["tubing"])
+
+    illu = setup.setdefault("illumination", {})
+    illu.setdefault("backend", "monet")
+    # Before illumination had its own block the setup's own name doubled as
+    # the monet config key. Keep that as the fallback.
+    if not illu.get("config"):
+        illu["config"] = setup.get("setup")
     return setup
+
+
+def _translate_legacy_setup(setup, source=None):
+    """Translate a vendor-grouped (``hamilton:``) setup to the role layout."""
+    logger.warning(
+        "setup {} uses the deprecated vendor-grouped 'hamilton:' layout; "
+        "please migrate it to the role-based 'fluid:' layout "
+        "(see configs/setups/Mercury.yaml)".format(
+            source if source is not None else setup.get("setup")
+        )
+    )
+    hamilton = setup.pop("hamilton")
+    fluid = {"system_type": hamilton.get("system_type", "legacy")}
+
+    pumps = {"driver": "hamilton-psd", "interface": hamilton["interface"]}
+    for key in ("pump_a", "pump_out"):
+        if key in hamilton:
+            pumps[key] = hamilton[key]
+    fluid["pumps"] = pumps
+
+    if hamilton.get("ibidi"):
+        mux = dict(hamilton["ibidi"])
+        mux["driver"] = IBIDI_MULTIFLOW
+    else:
+        mux = {"driver": HAMILTON_MVP, "valves": hamilton.get("valve_a", [])}
+    fluid["multiplexer"] = mux
+
+    for src, dst in (
+        ("flush_pos", "flush_pos"),
+        ("valve_flush", "valve_flush"),
+        ("reservoir_a_manifold", "reservoirs"),
+    ):
+        if src in hamilton:
+            fluid[dst] = hamilton[src]
+    if "tubing" in setup:
+        fluid["tubing"] = setup.pop("tubing")
+
+    setup["fluid"] = fluid
+    return setup
+
+
+def monet_config(setup):
+    """Return the monet ``CONFIGS`` key a setup's illumination uses.
+
+    The monet config names the *microscope* whose lasers are driven; a setup
+    name may differ from it (e.g. the ``Ibidi`` fluidics setup running on the
+    ``Mercury`` microscope). Falls back to the setup's own name for setups
+    that predate the ``illumination`` block.
+
+    Parameters
+    ----------
+    setup : dict or None
+        A setup from :func:`load_setup`.
+
+    Returns
+    -------
+    str or None
+        The monet config name, or None if none is configured.
+    """
+    if not setup:
+        return None
+    illu = setup.get("illumination") or {}
+    return illu.get("config") or setup.get("setup")
+
+
+def setup_reservoirs(setup):
+    """Return a setup's reservoir manifold entries (empty list if none)."""
+    if not setup:
+        return []
+    return (setup.get("fluid") or {}).get("reservoirs", []) or []
+
+
+def _flatten_fluid_config(fluid):
+    """Flatten a role-based ``fluid`` block into a legacy hamilton config.
+
+    :class:`LegacyArchitecture` still consumes the flat, vendor-shaped dict
+    (``interface`` / ``valve_a`` / ``ibidi`` / ``pump_a`` / ...); the setup
+    files describe roles. This is the single translation point between them.
+    """
+    pumps = fluid.get("pumps", {})
+    config = {
+        "system_type": fluid.get("system_type", "legacy"),
+        "interface": pumps["interface"],
+    }
+    for key in ("pump_a", "pump_out"):
+        if key in pumps:
+            config[key] = pumps[key]
+    for key in ("flush_pos", "valve_flush"):
+        if key in fluid:
+            config[key] = fluid[key]
+
+    mux = dict(fluid.get("multiplexer") or {})
+    driver = mux.pop("driver", HAMILTON_MVP)
+    if driver == HAMILTON_MVP:
+        config["valve_a"] = mux.pop("valves", [])
+    elif driver == IBIDI_MULTIFLOW:
+        # No Hamilton rotary valves: the ibidi unit multiplexes. Its remaining
+        # keys (port/baud/channels/address) configure IbidiMultiplexer.
+        config["valve_a"] = []
+        config["ibidi"] = mux
+    else:
+        raise ValueError(
+            "unknown fluid.multiplexer.driver {!r}; expected one of "
+            "{}".format(driver, list(MULTIPLEXER_DRIVERS))
+        )
+    return config
 
 
 def assemble_hamilton_config(setup, fluid_settings):
@@ -124,11 +423,11 @@ def assemble_hamilton_config(setup, fluid_settings):
     Parameters
     ----------
     setup : dict
-        A setup config from :func:`load_setup` (with ``hamilton`` and
-        ``tubing`` keys).
+        A setup config from :func:`load_setup` (with a ``fluid`` block).
     fluid_settings : dict
         The experiment design's ``fluid.settings`` (needs ``reservoir_names``;
-        optional ``special_names`` / ``cleaning_reservoirs``).
+        optional ``special_names`` and a ``cleaning`` block — or the legacy
+        flat ``cleaning_reservoirs`` list).
 
     Returns
     -------
@@ -136,14 +435,29 @@ def assemble_hamilton_config(setup, fluid_settings):
         ``(hamilton_config, tubing_config)`` ready for
         ``LegacyArchitecture(hamilton_config, tubing_config)``.
     """
-    hamilton = copy.deepcopy(setup["hamilton"])
-    manifold = hamilton.pop("reservoir_a_manifold", [])
+    fluid = copy.deepcopy(setup["fluid"])
+    hamilton = _flatten_fluid_config(fluid)
+    manifold = fluid.get("reservoirs", []) or []
     by_id = {entry["id"]: entry for entry in manifold}
 
     special_names = dict(fluid_settings.get("special_names", {}))
-    cleaning = fluid_settings.get("cleaning_reservoirs", []) or []
+    # Cleaning config lives in the ``cleaning`` block (``cleaning_rounds`` =
+    # one reservoir per round). Fall back to the legacy flat
+    # ``cleaning_reservoirs`` list for designs predating the block.
+    cleaning_block = dict(fluid_settings.get("cleaning") or {})
+    if cleaning_block:
+        cleaning = list(cleaning_block.get("cleaning_rounds", []) or [])
+    else:
+        cleaning = fluid_settings.get("cleaning_reservoirs", []) or []
 
     used_ids = list(fluid_settings.get("reservoir_names", {}).keys())
+    # Reservoirs named only in special_names (e.g. flushbuffer_a) are routed
+    # to just like any other — _flush() and fill_tubings() call
+    # _set_valves(special_names['flushbuffer_a']) — so they must be wired in
+    # too, even when the design does not also list them in reservoir_names.
+    for rid in special_names.values():
+        if rid not in used_ids:
+            used_ids.append(rid)
     for res in cleaning:
         if isinstance(res, int):
             rid = res
@@ -161,15 +475,23 @@ def assemble_hamilton_config(setup, fluid_settings):
     for rid in used_ids:
         if rid not in by_id:
             raise KeyError(
-                "Reservoir id {!r} is not wired in setup "
-                "{!r}'s reservoir_a_manifold".format(rid, setup.get("setup"))
+                "Reservoir id {!r} is not wired in setup {!r}'s "
+                "fluid.reservoirs (which wires {})".format(
+                    rid, setup.get("setup"), sorted(by_id)
+                )
             )
         reservoir_a.append(by_id[rid])
 
     hamilton["reservoir_a"] = reservoir_a
     hamilton["special_names"] = special_names
     hamilton["cleaning_reservoirs"] = cleaning
-    return hamilton, setup.get("tubing", {})
+    # Full cleaning config for clean_tubings() (the rounds plus the behaviour
+    # knobs); the rounds mirror ``cleaning_reservoirs`` so legacy readers that
+    # only know that key keep working.
+    if cleaning_block:
+        cleaning_block["cleaning_rounds"] = cleaning
+        hamilton["cleaning"] = cleaning_block
+    return hamilton, fluid.get("tubing", {})
 
 
 def assemble_imaging_config(setup, design):

@@ -238,8 +238,38 @@ class LegacyArchitecture(AbstractSystem):
             self.spill_sensor.stop_monitoring()
             self.spill_sensor.disconnect()
 
+    def close(self):
+        """Release hardware this architecture owns directly.
+
+        Stops the spill sensor and closes the ibidi multiplexer's serial
+        port. This is the *deterministic* counterpart to :meth:`__del__`: it
+        is called from the disconnect path so the ibidi port is released on
+        shutdown rather than whenever the garbage collector happens to run
+        (which may be never, before the process exits). Idempotent.
+        """
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        # Release each resource independently: the ``_closed`` guard means we
+        # get exactly one attempt, so a failure stopping the spill sensor must
+        # not skip closing the multiplexer's serial port (the port is the
+        # thing that otherwise stays held across a restart). Each step is
+        # best-effort; an error is logged, not propagated.
+        try:
+            self._stop_spill_sensor()
+        except Exception as exc:
+            logger.warning(
+                "spill sensor stop failed on close: {!r}".format(exc)
+            )
+        mux = getattr(self, "multiplexer", None)
+        if mux is not None:
+            try:
+                mux.close()
+            except Exception as exc:
+                logger.warning("multiplexer close failed: {!r}".format(exc))
+
     def __del__(self):
-        self._stop_spill_sensor()
+        self.close()
 
     def _assign_system_config(self, config):
         """Assign a system configuration.
@@ -252,9 +282,19 @@ class LegacyArchitecture(AbstractSystem):
         assert config["system_type"] == "legacy"
         for vconfig in config["valve_a"]:
             self.valve_a[vconfig["address"]] = Valve(**vconfig)
-        for rconfig in config["reservoir_a"]:
-            self.reservoir_a.add(Reservoir(**rconfig))
-            self.reservoir_paths[rconfig["id"]] = "a"
+        # Optional ibidi MultiFlOW multiplexer: an alternative to the Hamilton
+        # MVP rotary valves for reservoir multiplexing. It registers in the
+        # valve map under its address (default 'ibidi') so _set_valves() drives
+        # it via reservoir valve_pos entries like {ibidi: <channel>, 1: in}.
+        self.multiplexer = None
+        if config.get("ibidi"):
+            from PycroFlow.ibidi_multiplexer import IbidiMultiplexer
+
+            mux_cfg = dict(config["ibidi"])
+            address = mux_cfg.pop("address", "ibidi")
+            self.multiplexer = IbidiMultiplexer(address=address, **mux_cfg)
+            self.valve_a[address] = self.multiplexer
+        self.update_reservoirs(config)
         if config.get("valve_flush"):
             self.valve_flush = Valve(**config["valve_flush"])
         else:
@@ -278,13 +318,134 @@ class LegacyArchitecture(AbstractSystem):
         # self.pump_out = Pump(**pump_out_config)
         self.pump_out = Pump(**config["pump_out"])
 
-        self.special_names = config["special_names"]
         self.flush_pos = config["flush_pos"]
+
+    def update_reservoirs(self, config):
+        """(Re)build the reservoir set from an assembled hamilton config.
+
+        Which reservoirs exist comes from the *experiment design*, which can
+        change after the hardware was connected — editing the reservoir table
+        and re-translating must not leave the system routing by the previous
+        design's list (a reservoir added afterwards would raise ``KeyError``
+        mid-run, in :meth:`_set_valves`).
+
+        Serial connections, valves and pumps are untouched; only the
+        reservoir bookkeeping is replaced. The containers are rebuilt rather
+        than added to, so removed reservoirs really disappear.
+
+        Parameters
+        ----------
+        config : dict
+            An assembled hamilton config (see
+            :func:`PycroFlow.configs.assemble_hamilton_config`): needs
+            ``reservoir_a`` / ``special_names``, optional
+            ``cleaning_reservoirs``.
+        """
+        # Assign fresh per-instance containers: these attributes default to
+        # mutable *class* attributes, so mutating them in place would leak
+        # one architecture's reservoirs into the next.
+        self.reservoir_a = ReservoirDict()
+        self.reservoir_paths = {}
+        for rconfig in config["reservoir_a"]:
+            self.reservoir_a.add(Reservoir(**rconfig))
+            self.reservoir_paths[rconfig["id"]] = "a"
+        self.special_names = config["special_names"]
         self.cleaning_reservoirs = config.get("cleaning_reservoirs", {})
+        # Full cleaning config (mode/volumes/velocity/delay/flush strokes) the
+        # design's cleaning section supplies; clean_tubings() defaults from it.
+        # Empty dict on legacy configs that only carry cleaning_reservoirs.
+        self.cleaning_config = config.get("cleaning", {}) or {}
+        if isinstance(getattr(self, "tubing_config", None), TubingConfig):
+            self.tubing_config.set_special_names(self.special_names)
 
     def _assign_protocol(self, protocol):
         self.protocol = protocol["protocol_entries"]
         self.parameters = protocol["parameters"]
+        # Per-reservoir planned volume (sum of the protocol's inject volumes)
+        # and the running total pumped, for the fluid live view. Assigning a
+        # protocol is a fresh plan, so the used counters reset.
+        self.reservoir_totals = self._sum_inject_volumes(self.protocol)
+        self.reservoir_used = {}
+        # Waste sinks: the extraction pump dumps ``extractionfactor * volume``
+        # to the ``waste`` sink on every inject/pump_out, so its planned total
+        # is derivable from the protocol; ``flush_waste`` is only fed by the
+        # prep flush/fill routines (never the run), so it starts at 0.
+        default_ef = self.parameters.get("extractionfactor", 1)
+        self.waste_totals = {
+            "waste": self._sum_waste_volumes(self.protocol, default_ef)
+        }
+        self.waste_used = {}
+
+    @staticmethod
+    def _sum_inject_volumes(entries):
+        """Sum ``inject`` volumes per ``reservoir_id`` over protocol entries."""
+        totals = {}
+        for entry in entries or []:
+            if not isinstance(entry, dict) or entry.get("$type") != "inject":
+                continue
+            rid = entry.get("reservoir_id")
+            try:
+                vol = float(entry.get("volume") or 0)
+            except (TypeError, ValueError):
+                continue
+            totals[rid] = totals.get(rid, 0.0) + vol
+        return totals
+
+    @staticmethod
+    def _sum_waste_volumes(entries, default_ef):
+        """Sum ``extractionfactor * volume`` over injects/pump_outs (waste)."""
+        try:
+            default_ef = float(default_ef)
+        except (TypeError, ValueError):
+            default_ef = 1.0
+        total = 0.0
+        for entry in entries or []:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("$type") not in ("inject", "pump_out"):
+                continue
+            ef = entry.get("extractionfactor")
+            try:
+                ef = float(ef) if ef is not None else default_ef
+            except (TypeError, ValueError):
+                ef = default_ef
+            try:
+                total += ef * float(entry.get("volume") or 0)
+            except (TypeError, ValueError):
+                continue
+        return total
+
+    def _record_used(self, reservoir_id, volume):
+        """Add ``volume`` µl to the running total pumped from a reservoir."""
+        try:
+            vol = float(volume or 0)
+        except (TypeError, ValueError):
+            return
+        used = getattr(self, "reservoir_used", None)
+        if used is None:
+            used = self.reservoir_used = {}
+        used[reservoir_id] = used.get(reservoir_id, 0.0) + vol
+
+    def _record_waste(self, sink, volume):
+        """Add ``volume`` µl to the running total sent to a waste sink."""
+        try:
+            vol = float(volume or 0)
+        except (TypeError, ValueError):
+            return
+        used = getattr(self, "waste_used", None)
+        if used is None:
+            used = self.waste_used = {}
+        used[sink] = used.get(sink, 0.0) + vol
+
+    def _entry_extractionfactor(self, entry):
+        """Effective extraction factor for an entry (its own, else default)."""
+        ef = entry.get("extractionfactor") if isinstance(entry, dict) else None
+        if ef is None:
+            ef = self.parameters.get("extractionfactor", 1)
+        try:
+            return float(ef)
+        except (TypeError, ValueError):
+            return 1.0
 
     def _assign_tubing_config(self, config):
         self.tubing_config = TubingConfig(config)
@@ -920,11 +1081,14 @@ class LegacyArchitecture(AbstractSystem):
             if self.parameters["mode"] == "tubing_stack":
                 if (self.last_protocol_entry != i - 1) or (i == 0):
                     self._assemble_tubing_stack(i)
+                ef = self._entry_extractionfactor(self.protocol[i])
                 for reservoir_id, vol in self.tubing_stack[i]:
                     self._set_valves(reservoir_id)
                     self._inject(
                         vol, delay=delay, extractionfactor=extractionfactor
                     )
+                    self._record_used(reservoir_id, vol)
+                    self._record_waste("waste", ef * vol)
                 self.last_protocol_entry = i
             elif self.parameters["mode"] == "tubing_flush":
                 # # this way, we flush (1+flushfactor)
@@ -1021,6 +1185,13 @@ class LegacyArchitecture(AbstractSystem):
                 delay=delay,
                 extractionfactor=extractionfactor,
             )
+            self._record_used(pentry["reservoir_id"], injection_volume)
+            # The extraction pump simultaneously removes extractionfactor * vol
+            # from the sample to the waste sink.
+            self._record_waste(
+                "waste",
+                self._entry_extractionfactor(pentry) * injection_volume,
+            )
             # afterwards, flush in buffer to get the pentry
             # volume to the sample
             # self._set_valves(self.special_names['flushbuffer_a'])
@@ -1029,6 +1200,10 @@ class LegacyArchitecture(AbstractSystem):
             self._pump_out(
                 pentry["volume"],
                 extractionfactor=pentry.get("extractionfactor"),
+            )
+            self._record_waste(
+                "waste",
+                self._entry_extractionfactor(pentry) * pentry["volume"],
             )
 
         # tubing full of buffer, cannot simply proceed
@@ -1044,15 +1219,36 @@ class LegacyArchitecture(AbstractSystem):
         self._set_valves(self.special_names["flushbuffer_a"])
         self._inject(flush_volume)
 
+    def _resolve_cleaning_reservoir_ids(self, cleaning_reservoirs):
+        """Resolve cleaning entries (ints or special-name strings) to ids.
+
+        Names are looked up in ``special_names``; entries that resolve to
+        nothing are skipped. Shared by :meth:`clean_tubings` and the GUI's
+        cleaning-volume estimate so both agree on which tanks are cleaning
+        liquids.
+        """
+        ids = []
+        for res in cleaning_reservoirs or []:
+            rid = res if isinstance(res, int) else self.special_names.get(res)
+            if rid is not None:
+                ids.append(rid)
+        return ids
+
+    def _reservoirs_to_clean(self, cleaning_ids):
+        """Reservoirs to clean: every wired reservoir bar the cleaning tanks."""
+        cleaning = set(cleaning_ids)
+        return [rid for rid in self.reservoir_a.keys() if rid not in cleaning]
+
     def clean_tubings(
         self,
         cleaning_reservoirs=None,
-        extra_vol=100,
+        extra_vol=None,
         velocity=None,
         delay=None,
-        mode="chain",
+        mode=None,
         max_reservoir_vol=None,
         confirm=True,
+        flush_out_strokes=None,
     ):
         """Clean all tubings by pumping cleaning liquids through paths.
 
@@ -1065,27 +1261,37 @@ class LegacyArchitecture(AbstractSystem):
             Block on a terminal ``input()`` confirmation before starting.
             Pass ``False`` from a GUI (which must confirm via its own dialog),
             so cleaning never blocks on / crashes for missing stdin.
-        extra_vol : int, default: 100
-            Volume in ul beyond the tubing volume to push through each path.
+
+        Any of the following left as ``None`` default from the design's
+        cleaning section (``self.cleaning_config``), then from fluid
+        parameters / hard defaults.
+
+        extra_vol : int or None
+            Volume in ul beyond the tubing volume to push through each path
+            (config ``extra_volume``; default 100).
         velocity : int or None
-            Pumping velocity in ul/min. If None, uses ``clean_velocity`` or
-            ``max_velocity`` from parameters.
+            Pumping velocity in ul/min (config ``clean_velocity``, then
+            ``clean_velocity`` / ``max_velocity`` from parameters).
         delay : float or None
-            Seconds to wait between pickup and dispense strokes. If None,
-            uses ``clean_delay`` from parameters (default 0).
-        mode : str
-            ``'chain'`` (default) pumps cleaning liquid from tank into the
-            first reservoir, then chains it through all reservoirs
+            Seconds between pickup and dispense strokes (config
+            ``clean_delay``, then parameters; default 0).
+        mode : str or None
+            ``'chain'`` pumps cleaning liquid from tank into the first
+            reservoir, then chains it through all reservoirs
             (res_0 -> res_1 -> ... -> res_N) before pushing out the needle;
             uses one fill volume per cleaning liquid. ``'individual'`` pumps
             fresh cleaning liquid from tank into each reservoir individually,
             pushes it out the needle, and extracts; more thorough but uses
-            more liquid.
+            more liquid. ``None`` picks ``'chain'`` when the config's
+            ``reuse_cleaning_liquid`` is true, else ``'individual'``.
         max_reservoir_vol : int or None
             Maximum volume in ul that a reservoir may contain from a previous
-            protocol. If set, each reservoir is emptied (up to this volume)
-            through the needle before cleaning begins. If None, the
-            pre-emptying step is skipped.
+            protocol. If set (config ``pre_empty_volume``), each reservoir is
+            emptied (up to this volume) through the needle before cleaning
+            begins. If None, the pre-emptying step is skipped.
+        flush_out_strokes : int or None
+            Extraction strokes the output pump makes per expelled path (config
+            ``flush_out_strokes``; default 1).
 
         Notes
         -----
@@ -1096,12 +1302,33 @@ class LegacyArchitecture(AbstractSystem):
         - Each cleaning reservoir is connected to a large tank of cleaning
           liquid.
         """
+        # Unspecified args default from the design's cleaning section
+        # (self.cleaning_config), then from fluid parameters / hard defaults.
+        cfg = self.cleaning_config or {}
+        if extra_vol is None:
+            extra_vol = cfg.get("extra_volume", 100)
+        if velocity is None:
+            velocity = cfg.get("clean_velocity")
         if not velocity:
             velocity = self.parameters.get("clean_velocity")
         if not velocity:
             velocity = self.parameters["max_velocity"]
         if delay is None:
+            delay = cfg.get("clean_delay")
+        if delay is None:
             delay = self.parameters.get("clean_delay", 0)
+        if mode is None:
+            # reuse -> shuttle one fill through all reservoirs (chain);
+            # discard -> fresh liquid per reservoir (individual).
+            mode = (
+                "chain"
+                if cfg.get("reuse_cleaning_liquid", True)
+                else "individual"
+            )
+        if max_reservoir_vol is None:
+            max_reservoir_vol = cfg.get("pre_empty_volume")
+        if flush_out_strokes is None:
+            flush_out_strokes = cfg.get("flush_out_strokes", 1)
         logger.debug(f"Cleaning Reservoirs initial: {cleaning_reservoirs}")
         if cleaning_reservoirs is None:
             cleaning_reservoirs = self.cleaning_reservoirs
@@ -1167,11 +1394,7 @@ class LegacyArchitecture(AbstractSystem):
                 "settings to reservoir ids (e.g. [12]) or special names "
                 "(e.g. ['h2o']) that are defined in special_names."
             )
-        res_to_clean = [
-            rid
-            for rid in self.reservoir_a.keys()
-            if rid not in cleaning_reservoirs
-        ]
+        res_to_clean = self._reservoirs_to_clean(cleaning_reservoirs)
 
         logger.debug(
             f"Starting clean_tubings (mode={mode}). "
@@ -1193,16 +1416,30 @@ class LegacyArchitecture(AbstractSystem):
         # Pre-empty: push leftover protocol liquid out of all reservoirs
         if max_reservoir_vol is not None:
             self._clean_tubings_pre_empty(
-                res_to_clean, max_reservoir_vol, velocity, delay
+                res_to_clean,
+                max_reservoir_vol,
+                velocity,
+                delay,
+                flush_out_strokes=flush_out_strokes,
             )
 
         if mode == "chain":
             self._clean_tubings_chain(
-                cleaning_reservoirs, res_to_clean, extra_vol, velocity, delay
+                cleaning_reservoirs,
+                res_to_clean,
+                extra_vol,
+                velocity,
+                delay,
+                flush_out_strokes=flush_out_strokes,
             )
         elif mode == "individual":
             self._clean_tubings_individual(
-                cleaning_reservoirs, res_to_clean, extra_vol, velocity, delay
+                cleaning_reservoirs,
+                res_to_clean,
+                extra_vol,
+                velocity,
+                delay,
+                flush_out_strokes=flush_out_strokes,
             )
         else:
             raise ValueError(
@@ -1212,8 +1449,31 @@ class LegacyArchitecture(AbstractSystem):
 
         print("Tubing cleaning procedure complete.")
 
+    def _sample_side_flushvalve(self):
+        """Flush-valve setting for a stroke through the sample/needle side.
+
+        Use for any ``_pump`` move that draws from or pushes to the sample
+        needle (pickup_dir/dispense_dir ``'out'``).
+
+        On a setup with a real :class:`Valve` flush valve, route it to the
+        sample/inject path (``False``) so the liquid travels through the sample
+        needle. On a setup **without** a separate flush valve (e.g. the ibidi
+        multiplexer, where the pump's own valve is the only selector), return
+        ``None`` so :meth:`_pump` does not call :meth:`_set_flush_valve` —
+        otherwise it would drive pump_a to its ``flush_pos['inject']`` (input)
+        position right before the move, sending the liquid to the reservoir
+        side instead of through the needle. ``pickup_dir``/``dispense_dir``
+        then alone leave pump_a at the correct port.
+        """
+        return False if isinstance(self.valve_flush, Valve) else None
+
     def _clean_tubings_pre_empty(
-        self, res_to_clean, max_reservoir_vol, velocity, delay
+        self,
+        res_to_clean,
+        max_reservoir_vol,
+        velocity,
+        delay,
+        flush_out_strokes=1,
     ):
         """Empty leftover protocol liquid from all reservoirs before
         cleaning. For each reservoir, pump up to max_reservoir_vol
@@ -1230,7 +1490,9 @@ class LegacyArchitecture(AbstractSystem):
             vol = self._calc_vol_to_inlet(res_id) + max_reservoir_vol
             logger.debug(f"  Emptying reservoir {res_id} ({vol} ul)")
 
-            # Push from reservoir out through the input needle
+            # Push from reservoir out through the sample needle (pump_a to
+            # its output port; _sample_side_flushvalve avoids re-routing it to
+            # the input side on flush-valve-less setups).
             self._pump(
                 self.pump_a,
                 vol,
@@ -1238,15 +1500,26 @@ class LegacyArchitecture(AbstractSystem):
                 pickup_dir="in",
                 dispense_dir="out",
                 pickup_res=res_id,
-                dispense_flushvalve=False,
+                dispense_flushvalve=self._sample_side_flushvalve(),
                 delay=delay,
             )
 
             # Extract with output needle into waste
-            self.flush_pump_out(vol, only_forward=True, delay=delay)
+            self.flush_pump_out(
+                vol,
+                only_forward=True,
+                delay=delay,
+                strokes=flush_out_strokes,
+            )
 
     def _clean_tubings_chain(
-        self, cleaning_reservoirs, res_to_clean, extra_vol, velocity, delay
+        self,
+        cleaning_reservoirs,
+        res_to_clean,
+        extra_vol,
+        velocity,
+        delay,
+        flush_out_strokes=1,
     ):
         """Chain mode: pump cleaning liquid from tank into the first
         reservoir, shuttle it through all reservoirs, then push out.
@@ -1296,7 +1569,7 @@ class LegacyArchitecture(AbstractSystem):
                     delay=delay,
                 )
 
-            # 3. Push from last reservoir out through the input needle
+            # 3. Push from last reservoir out through the sample needle
             last_res = res_to_clean[-1]
             logger.debug(f"  Pushing from reservoir {last_res} to needle")
             self._pump(
@@ -1306,15 +1579,26 @@ class LegacyArchitecture(AbstractSystem):
                 pickup_dir="in",
                 dispense_dir="out",
                 pickup_res=last_res,
-                dispense_flushvalve=False,
+                dispense_flushvalve=self._sample_side_flushvalve(),
                 delay=delay,
             )
 
             # 4. Extract with output needle into waste
-            self.flush_pump_out(fill_vol, only_forward=True, delay=delay)
+            self.flush_pump_out(
+                fill_vol,
+                only_forward=True,
+                delay=delay,
+                strokes=flush_out_strokes,
+            )
 
     def _clean_tubings_individual(
-        self, cleaning_reservoirs, res_to_clean, extra_vol, velocity, delay
+        self,
+        cleaning_reservoirs,
+        res_to_clean,
+        extra_vol,
+        velocity,
+        delay,
+        flush_out_strokes=1,
     ):
         """Individual mode: for each reservoir, pump fresh cleaning
         liquid from tank, push it through that reservoir's full path
@@ -1343,7 +1627,7 @@ class LegacyArchitecture(AbstractSystem):
                     delay=delay,
                 )
 
-                # 2. Push from reservoir out through the input needle
+                # 2. Push from reservoir out through the sample needle
                 self._pump(
                     self.pump_a,
                     fill_vol,
@@ -1351,15 +1635,20 @@ class LegacyArchitecture(AbstractSystem):
                     pickup_dir="in",
                     dispense_dir="out",
                     pickup_res=res_id,
-                    dispense_flushvalve=False,
+                    dispense_flushvalve=self._sample_side_flushvalve(),
                     delay=delay,
                 )
 
                 # 3. Extract with output needle into waste
-                self.flush_pump_out(fill_vol, only_forward=True, delay=delay)
+                self.flush_pump_out(
+                    fill_vol,
+                    only_forward=True,
+                    delay=delay,
+                    strokes=flush_out_strokes,
+                )
 
     def flush_pump_out(
-        self, vol=None, only_forward=False, velocity=None, delay=0
+        self, vol=None, only_forward=False, velocity=None, delay=0, strokes=1
     ):
         if not velocity:
             velocity = self.parameters.get("clean_velocity")
@@ -1371,7 +1660,7 @@ class LegacyArchitecture(AbstractSystem):
         if dispense_velocity is None:
             dispense_velocity = velocity
 
-        for i in range(1):
+        for i in range(max(1, int(strokes))):
             self._pump(
                 self.pump_out,
                 vol,
@@ -1670,10 +1959,38 @@ class LegacyArchitecture(AbstractSystem):
             valve_positions = self.reservoir_a.get_reservoir_valve_positions(
                 reservoir_id
             )
-            for valve, pos in valve_positions.items():
-                self.valve_a[valve].set_valve(pos)
+            self.set_valve_positions(valve_positions)
         else:
             raise NotImplementedError('Legacy system only has fluid path "a".')
+
+    def set_valve_positions(self, valve_positions):
+        """Drive the valves to an explicit ``{valve address: position}`` map.
+
+        The routing step of :meth:`_set_valves`, split out so a caller that
+        already knows the positions can use it — manual hardware control
+        reaches *any* reservoir wired in the setup's manifold, not only the
+        subset the loaded experiment design happens to name.
+
+        Parameters
+        ----------
+        valve_positions : dict
+            Maps a valve address (as used in a reservoir's ``valve_pos``) to
+            the position for it. An ibidi multiplexer position may be a list
+            of channels.
+
+        Raises
+        ------
+        KeyError
+            A valve address is not wired in this system.
+        """
+        for valve, pos in valve_positions.items():
+            if valve not in self.valve_a:
+                raise KeyError(
+                    "valve {!r} is not wired in this system (have {})".format(
+                        valve, sorted(self.valve_a, key=str)
+                    )
+                )
+            self.valve_a[valve].set_valve(pos)
 
     def _flush(self, flushfactor=1):
         """Flush the tubing up to the flush valve with the flush buffer.
@@ -1777,10 +2094,29 @@ class LegacyArchitecture(AbstractSystem):
                 str(pickup_flushvalve), str(dispense_flushvalve)
             )
         )
+        # A reservoir is reached through the pump's *input* side, and routing
+        # to it (via ``_set_valves``) also drives the pump valve to its input
+        # position ("in"). So a ``pickup_res`` / ``dispense_res`` is only
+        # meaningful when the corresponding direction is that input side;
+        # when it points at the output (sample / waste) side, honouring the
+        # reservoir would clobber the requested "out" back to "in". Ignore it.
+        apply_pickup_res = pickup_res is not None and pickup_dir == "in"
+        apply_dispense_res = dispense_res is not None and dispense_dir == "in"
+        if pickup_res is not None and not apply_pickup_res:
+            logger.warning(
+                "ignoring pickup_res {!r}: pickup_dir {!r} is not the input "
+                "(reservoir) side".format(pickup_res, pickup_dir)
+            )
+        if dispense_res is not None and not apply_dispense_res:
+            logger.warning(
+                "ignoring dispense_res {!r}: dispense_dir {!r} is not the "
+                "input (reservoir) side".format(dispense_res, dispense_dir)
+            )
+
         curr_pump_vol = pump.get_current_volume()
         if curr_pump_vol > 0:
             pump.set_valve(dispense_dir)
-            if dispense_res is not None:
+            if apply_dispense_res:
                 self._set_valves(dispense_res)
             if dispense_flushvalve is not None:
                 self._set_flush_valve(dispense_flushvalve)
@@ -1798,14 +2134,14 @@ class LegacyArchitecture(AbstractSystem):
 
         for pump_volume in pump_volumes:
             pump.set_valve(pickup_dir)
-            if pickup_res is not None:
+            if apply_pickup_res:
                 self._set_valves(pickup_res)
             if pickup_flushvalve is not None:
                 self._set_flush_valve(pickup_flushvalve)
             pump.pickup(pump_volume, velocity, waitForPump=True)
             time.sleep(delay)
             pump.set_valve(dispense_dir)
-            if dispense_res is not None:
+            if apply_dispense_res:
                 self._set_valves(dispense_res)
             if dispense_flushvalve is not None:
                 self._set_flush_valve(dispense_flushvalve)
@@ -2073,6 +2409,20 @@ class LegacyArchitecture(AbstractSystem):
                 dispense_flushvalve=dispense_flushvalve,
                 delay=delay,
             )
+            # This leg dispenses to the flush_waste sink (live view gauge).
+            self._record_waste("flush_waste", vol)
+
+        if post_fill_flushbuffer and "flushbuffer_a" not in self.special_names:
+            # No flush buffer defined: skip the final central-tubing flush
+            # rather than dead-ending in the tubing lookup for an unrouted
+            # 'flushbuffer_a'. The per-reservoir fills above already ran.
+            logger.warning(
+                "post_fill_flushbuffer requested but no 'flushbuffer_a' is "
+                "defined in special_names; skipping the final flushbuffer "
+                "fill. Add a flush buffer reservoir to the experiment "
+                "design's special_names to enable it."
+            )
+            post_fill_flushbuffer = False
 
         if post_fill_flushbuffer:
             # now, flush everything with the flushbuffer
@@ -2092,7 +2442,7 @@ class LegacyArchitecture(AbstractSystem):
                 vol,
                 velocity=velocity,
                 pickup_res=self.special_names["flushbuffer_a"],
-                dispense_flushvalve=False,
+                dispense_flushvalve=self._sample_side_flushvalve(),
                 delay=delay,
             )
         return total_vol
@@ -2170,7 +2520,7 @@ class LegacyArchitecture(AbstractSystem):
             vol,
             velocity=velocity,
             pickup_res=src_res_id,
-            dispense_flushvalve=False,
+            dispense_flushvalve=self._sample_side_flushvalve(),
             delay=delay,
         )
         # fill reservoirs
@@ -2222,7 +2572,9 @@ class LegacyArchitecture(AbstractSystem):
                 dispense_res=self.special_names["flushbuffer_a"],
                 pickup_res=res_id,
             )
-        # empty sample tubing
+        # empty sample tubing (draw from the sample side — pump_a stays at its
+        # output port; _sample_side_flushvalve avoids re-routing it to the
+        # input side on flush-valve-less setups).
         vol = self.tubing_config.get("valve_flush", "sample")
         vol += extra_vol
         self._pump(
@@ -2232,7 +2584,7 @@ class LegacyArchitecture(AbstractSystem):
             pickup_dir="out",
             dispense_dir="in",
             dispense_res=self.special_names["flushbuffer_a"],
-            pickup_flushvalve=False,
+            pickup_flushvalve=self._sample_side_flushvalve(),
         )
         # fill flushbuffer-reservoir to flush outlet
         vol = (

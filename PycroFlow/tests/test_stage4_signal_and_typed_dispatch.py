@@ -84,6 +84,8 @@ class TestThreadExchange(unittest.TestCase):
             "abort_protocol_flag",
             "abort_flag",
             "graceful_stop_flag",
+            "error_flag",
+            "error_message",
             "signal_registry",
         }
         self.assertEqual(set(tx.keys()), expected)

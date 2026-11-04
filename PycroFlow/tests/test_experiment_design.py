@@ -13,6 +13,7 @@ from PycroFlow.schemas import (
     ExperimentDesignValidationError,
 )
 from PycroFlow.services import ExperimentService
+from PycroFlow.tests import chdir_to_test_output
 
 _EXAMPLE = os.path.join(
     os.path.dirname(PycroFlow.__file__), "examples", "sph_resi_6plex.yaml"
@@ -20,8 +21,14 @@ _EXAMPLE = os.path.join(
 
 
 def _example_design():
+    # Loading a design from disk chdirs to its folder (so run output lands
+    # beside it). Restore the test output dir, or later tests write their
+    # run records into the checkout.
     svc = ExperimentService()
-    return svc.load_experiment_design(_EXAMPLE)
+    try:
+        return svc.load_experiment_design(_EXAMPLE)
+    finally:
+        chdir_to_test_output()
 
 
 class TestExperimentDesignSchema(unittest.TestCase):
@@ -55,6 +62,28 @@ class TestExperimentDesignSchema(unittest.TestCase):
         # Unitless fields report None.
         self.assertIsNone(u(FluidParameters, "extractionfactor"))
 
+    def test_key_fields_carry_tooltips(self):
+        from PycroFlow.schemas.experiment_design import (
+            field_meta,
+            ExchangeExperiment,
+            FluidParameters,
+            FluidSettings,
+        )
+
+        def tip(model, field):
+            return field_meta(model.model_fields[field]).get("tooltip")
+
+        # Volumes / velocities / experiment fields explain themselves on hover.
+        # vol_reagent covers imagers too (not adapter-only), and points at the
+        # Exchange counterpart.
+        vol_reagent_tip = tip(FluidSettings, "vol_reagent").lower()
+        self.assertIn("imager", vol_reagent_tip)
+        self.assertIn("vol_imager_post", vol_reagent_tip)
+        self.assertTrue(tip(FluidSettings, "vol_wash"))
+        self.assertTrue(tip(FluidParameters, "extractionfactor"))
+        self.assertTrue(tip(FluidParameters, "max_velocity"))
+        self.assertIn("wash", tip(ExchangeExperiment, "wash_buffer").lower())
+
     def test_fluid_settings_reordered_and_wash_buffers_removed(self):
         from PycroFlow.schemas.experiment_design import FluidSettings
 
@@ -62,9 +91,73 @@ class TestExperimentDesignSchema(unittest.TestCase):
         # Wash buffers live only in the experiment block now.
         self.assertNotIn("wash_buffer_1", fields)
         self.assertNotIn("wash_buffer_2", fields)
-        # Reservoir tables first; volumes then cleaning above experiment.
+        # Reservoir tables first; volumes then the cleaning section above
+        # the experiment block.
         self.assertEqual(fields[:2], ["reservoir_names", "special_names"])
-        self.assertEqual(fields[-2:], ["cleaning_reservoirs", "experiment"])
+        self.assertEqual(fields[-2:], ["cleaning", "experiment"])
+
+    def test_cleaning_section_fields_and_metadata(self):
+        from PycroFlow.schemas.experiment_design import (
+            CleaningSettings,
+            field_meta,
+        )
+
+        fields = CleaningSettings.model_fields
+        # The rounds field is an add/remove dropdown-rows editor like imagers.
+        rounds_meta = field_meta(fields["cleaning_rounds"])
+        self.assertEqual(rounds_meta.get("choices_from"), "reservoir_names")
+        self.assertEqual(rounds_meta.get("title"), "cleaning rounds")
+        self.assertIn("{}", rounds_meta.get("row_label", ""))
+        # Reuse toggle defaults to reuse (chain mode).
+        self.assertTrue(CleaningSettings().reuse_cleaning_liquid)
+        self.assertEqual(CleaningSettings().extra_volume, 100)
+        self.assertEqual(CleaningSettings().flush_out_strokes, 1)
+        self.assertTrue(CleaningSettings().require_needles_confirmation)
+
+    def test_cleaning_section_round_trips(self):
+        from PycroFlow.schemas.experiment_design import FluidSettings
+
+        fs = FluidSettings.model_validate(
+            {
+                "vol_wash": 10,
+                "reservoir_names": {1: "R1", 2: "H2O"},
+                "cleaning": {
+                    "cleaning_rounds": ["H2O"],
+                    "reuse_cleaning_liquid": False,
+                    "pre_empty_volume": 200,
+                    "flush_out_strokes": 3,
+                },
+                "experiment": {
+                    "type": "Exchange",
+                    "wash_buffer": "R1",
+                    "imagers": ["R1"],
+                },
+            }
+        )
+        self.assertEqual(fs.cleaning.cleaning_rounds, ["H2O"])
+        self.assertFalse(fs.cleaning.reuse_cleaning_liquid)
+        self.assertEqual(fs.cleaning.pre_empty_volume, 200)
+        self.assertEqual(fs.cleaning.flush_out_strokes, 3)
+
+    def test_legacy_cleaning_reservoirs_migrates(self):
+        # A design predating the cleaning section still loads: the flat list
+        # becomes the cleaning section's rounds.
+        from PycroFlow.schemas.experiment_design import FluidSettings
+
+        fs = FluidSettings.model_validate(
+            {
+                "vol_wash": 10,
+                "reservoir_names": {1: "R1"},
+                "cleaning_reservoirs": ["h2o", 16],
+                "experiment": {
+                    "type": "Exchange",
+                    "wash_buffer": "R1",
+                    "imagers": ["R1"],
+                },
+            }
+        )
+        self.assertEqual(fs.cleaning.cleaning_rounds, ["h2o", 16])
+        self.assertNotIn("cleaning_reservoirs", fs.model_dump())
 
     def test_illu_section_has_no_parameters(self):
         from PycroFlow.schemas.experiment_design import IlluSection
@@ -88,7 +181,7 @@ class TestExperimentDesignSchema(unittest.TestCase):
             "fluid": {
                 "settings": {
                     "vol_wash": 10,
-                    "vol_imager_post": 5,
+                    "vol_reagent": 5,
                     "reservoir_names": {1: "R1"},
                     "experiment": {
                         "type": "Exchange",
@@ -101,6 +194,55 @@ class TestExperimentDesignSchema(unittest.TestCase):
         }
         model = validate_experiment_design(design)
         self.assertEqual(model.fluid.settings.experiment.type, "Exchange")
+
+    @staticmethod
+    def _exchange_design(imagers, initial_imager=None):
+        experiment = {
+            "type": "Exchange",
+            "wash_buffer": "B",
+            "imagers": list(imagers),
+        }
+        if initial_imager is not None:
+            experiment["initial_imager"] = initial_imager
+        return {
+            "base_name": "x",
+            "fluid": {
+                "settings": {
+                    "vol_wash": 10,
+                    "vol_reagent": 5,
+                    "reservoir_names": {1: "R1", 2: "R2"},
+                    "experiment": experiment,
+                }
+            },
+            "img": {"settings": {"t_exp": 100, "frames": 100}},
+        }
+
+    def test_initial_imager_reuse_no_longer_raises(self):
+        # Reusing the initial imager in the rounds is a redundant imaging round,
+        # which is allowed (e.g. for testing) — it must validate, not raise.
+        from PycroFlow.schemas import design_warnings
+
+        design = self._exchange_design(["R1"], initial_imager="R1")
+        model = validate_experiment_design(design)  # no raise
+        warnings = design_warnings(model)
+        self.assertTrue(any("R1" in w for w in warnings))
+        # design_warnings accepts the raw dict too.
+        self.assertTrue(design_warnings(design))
+
+    def test_duplicate_imagers_not_flagged(self):
+        # Repeating imagers across rounds is ordinary Exchange-PAINT — it must
+        # NOT produce warnings (the operator explicitly wants redundant rounds).
+        from PycroFlow.schemas import design_warnings
+
+        design = self._exchange_design(["R1", "R2", "R1", "R2"])
+        self.assertEqual(design_warnings(design), [])
+
+    def test_clean_design_has_no_warnings(self):
+        from PycroFlow.schemas import design_warnings
+
+        design = self._exchange_design(["R1"], initial_imager="R2")
+        # R2 is initial and NOT in the rounds list -> no warning.
+        self.assertEqual(design_warnings(design), [])
 
     def test_rejects_bad_experiment_type(self):
         design = _example_design()
@@ -156,7 +298,7 @@ class TestSetupConfigs(unittest.TestCase):
         setup = configs.load_setup("Mercury")
         self.assertFalse(setup["emulated"])
         # tubing records convert to a tuple-keyed dict
-        self.assertIn(("pump_a", "sample"), setup["tubing"])
+        self.assertIn(("pump_a", "sample"), setup["fluid"]["tubing"])
 
     def test_assemble_filters_and_attaches(self):
         setup = configs.load_setup("Emulator")
@@ -174,12 +316,150 @@ class TestSetupConfigs(unittest.TestCase):
         self.assertEqual(ham["cleaning_reservoirs"], ["h2o"])
         self.assertIn("interface", ham)
 
+    def test_assemble_threads_cleaning_block(self):
+        setup = configs.load_setup("Emulator")
+        ham, _ = configs.assemble_hamilton_config(
+            setup,
+            {
+                "reservoir_names": {1: "A1", 7: "C+"},
+                "special_names": {"flushbuffer_a": 7, "h2o": 16},
+                "cleaning": {
+                    "cleaning_rounds": ["h2o"],
+                    "reuse_cleaning_liquid": False,
+                    "pre_empty_volume": 150,
+                    "extra_volume": 80,
+                    "flush_out_strokes": 2,
+                },
+            },
+        )
+        # Cleaning tank 'h2o' (16) is pulled into the wired reservoirs.
+        ids = sorted(r["id"] for r in ham["reservoir_a"])
+        self.assertEqual(ids, [1, 7, 16])
+        # The rounds mirror the legacy key, and the block carries the knobs.
+        self.assertEqual(ham["cleaning_reservoirs"], ["h2o"])
+        self.assertEqual(ham["cleaning"]["cleaning_rounds"], ["h2o"])
+        self.assertFalse(ham["cleaning"]["reuse_cleaning_liquid"])
+        self.assertEqual(ham["cleaning"]["pre_empty_volume"], 150)
+        self.assertEqual(ham["cleaning"]["flush_out_strokes"], 2)
+
     def test_assemble_unknown_reservoir_raises(self):
         setup = configs.load_setup("Emulator")
         with self.assertRaises(KeyError):
             configs.assemble_hamilton_config(
                 setup, {"reservoir_names": {999: "nope"}}
             )
+
+    def test_multiplexer_drivers_flatten_to_legacy_config(self):
+        # LegacyArchitecture still consumes the flat vendor-shaped dict:
+        # hamilton-mvp fills valve_a, ibidi-multiflow fills 'ibidi' instead.
+        settings = {"reservoir_names": {1: "R1"}}
+        mvp, _ = configs.assemble_hamilton_config(
+            configs.load_setup("Mercury"), settings
+        )
+        self.assertEqual([v["address"] for v in mvp["valve_a"]], [3, 5])
+        self.assertNotIn("ibidi", mvp)
+
+        ibidi, _ = configs.assemble_hamilton_config(
+            configs.load_setup("IbidiEmulator"), settings
+        )
+        self.assertEqual(ibidi["valve_a"], [])
+        self.assertEqual(ibidi["ibidi"]["channels"], 24)
+        self.assertNotIn("driver", ibidi["ibidi"])
+
+    def test_special_name_reservoir_is_wired_in(self):
+        # A reservoir named only via special_names (not in reservoir_names)
+        # is still routed to — _flush() sets the valves to flushbuffer_a —
+        # so it must end up in reservoir_a.
+        setup = configs.load_setup("Emulator")
+        ham, _ = configs.assemble_hamilton_config(
+            setup,
+            {
+                "reservoir_names": {1: "A1"},
+                "special_names": {"flushbuffer_a": 20},
+            },
+        )
+        self.assertEqual(sorted(r["id"] for r in ham["reservoir_a"]), [1, 20])
+
+    def test_sparse_manifold_with_multi_channel_routing(self):
+        # ibidi manifolds are sparse (ids need not start at 1 or be
+        # contiguous) and route through several channels at once.
+        setup = configs.load_setup("IbidiEmulator")
+        setup["fluid"]["reservoirs"] = [
+            {"id": 2, "valve_pos": {"ibidi": [1, 2], 1: "in"}},
+            {"id": 8, "valve_pos": {"ibidi": [1, 6, 7, 8], 1: "in"}},
+            {"id": 20, "valve_pos": {"ibidi": [1, 6, 7, 19, 20], 1: "in"}},
+        ]
+        ham, _ = configs.assemble_hamilton_config(
+            setup,
+            {
+                "reservoir_names": {2: "imager1", 8: "imager2"},
+                "special_names": {"flushbuffer_a": 20},
+            },
+        )
+        self.assertEqual(
+            sorted(r["id"] for r in ham["reservoir_a"]), [2, 8, 20]
+        )
+        by_id = {r["id"]: r for r in ham["reservoir_a"]}
+        self.assertEqual(by_id[20]["valve_pos"]["ibidi"], [1, 6, 7, 19, 20])
+
+    def test_reservoir_missing_from_manifold_lists_available(self):
+        setup = configs.load_setup("IbidiEmulator")
+        setup["fluid"]["reservoirs"] = [
+            {"id": 2, "valve_pos": {"ibidi": [1, 2], 1: "in"}}
+        ]
+        with self.assertRaises(KeyError) as ctx:
+            configs.assemble_hamilton_config(
+                setup, {"reservoir_names": {7: "nope"}}
+            )
+        self.assertIn("[2]", str(ctx.exception))
+
+    def test_unknown_multiplexer_driver_raises(self):
+        setup = configs.load_setup("Emulator")
+        setup["fluid"]["multiplexer"]["driver"] = "nonexistent-mux"
+        with self.assertRaises(ValueError):
+            configs.assemble_hamilton_config(
+                setup, {"reservoir_names": {1: "R1"}}
+            )
+
+    def test_legacy_vendor_layout_normalizes(self):
+        # The old vendor-grouped layout ('hamilton:' + top-level 'tubing:',
+        # with the ibidi block nested inside) still loads, and assembles to
+        # the same config as its role-based twin.
+        import yaml
+
+        new = configs.load_setup("IbidiEmulator")
+        old_yaml = yaml.safe_load(
+            """
+            setup: IbidiEmulator
+            emulated: true
+            hamilton:
+              system_type: legacy
+              interface: {COM: '0', baud: 9600}
+              valve_a: []
+              ibidi: {port: '7', baud: 115200, channels: 24, address: ibidi,
+                      batch_valves: false, switch_delay: 0.01}
+              flush_pos: {inject: in, flush: out}
+              pump_a: {address: 1, instrument_type: '4', valve_type: Y,
+                       syringe: 500u, input_pos: in, output_pos: out,
+                       motorsteps_per_step: 1, speed_factor: 2}
+              pump_out: {address: 0, instrument_type: '4', valve_type: Y,
+                         syringe: 5.0m, input_pos: in, output_pos: out,
+                         motorsteps_per_step: 1, speed_factor: 2}
+              reservoir_a_manifold:
+                - {id: 1, valve_pos: {ibidi: 1, 1: in}}
+            tubing:
+              - {from: R1, to: pump_a, volume: 325}
+        """
+        )
+        old = configs._normalize_setup(old_yaml)
+        self.assertEqual(configs.monet_config(old), "IbidiEmulator")
+        self.assertEqual([e["id"] for e in configs.setup_reservoirs(old)], [1])
+
+        settings = {"reservoir_names": {1: "R1"}}
+        ham_old, tub_old = configs.assemble_hamilton_config(old, settings)
+        ham_new, tub_new = configs.assemble_hamilton_config(new, settings)
+        self.assertEqual(ham_old, ham_new)
+        self.assertEqual(tub_old[("R1", "pump_a")], tub_new[("R1", "pump_a")])
 
 
 class TestBuilderSplit(unittest.TestCase):
@@ -229,6 +509,26 @@ class TestEmulatedFluidOps(unittest.TestCase):
         svc = self._connected()
         svc.fill_tubings()  # over the fake serial; must not raise
 
+    def test_fill_expels_flushbuffer_through_output_needle(self):
+        # Regression (same class as the cleaning fix): on a flush-valve-less
+        # setup the final flushbuffer expel in fill_tubings must push out the
+        # sample needle. It must never ask _set_flush_valve to route to the
+        # input ('inject') side — that would yank pump_a off its output port
+        # mid-dispense and push the buffer to the reservoir side instead.
+        from unittest import mock
+
+        svc = self._connected()
+        fs = svc.fluid_system
+        self.assertIsNone(fs._sample_side_flushvalve())
+        with mock.patch.object(
+            fs, "_set_flush_valve", wraps=fs._set_flush_valve
+        ) as flush_spy:
+            fs.fill_tubings()
+        # The flush-valve path is exercised (dest != 'sample' -> True) but is
+        # never driven to the input side (False) during the fill.
+        args = [c.args[0] for c in flush_spy.call_args_list if c.args]
+        self.assertNotIn(False, args)
+
     def test_clean_tubings_is_gui_safe(self):
         from unittest import mock
 
@@ -239,6 +539,73 @@ class TestEmulatedFluidOps(unittest.TestCase):
             side_effect=AssertionError("input() must not be called"),
         ):
             svc.clean_tubings()
+
+    def test_clean_expels_through_output_needle_not_input(self):
+        # Regression: on a flush-valve-less setup (the ibidi multiplexer; the
+        # Emulator likewise declares no valve_flush) the cleaning expel must
+        # leave pump_a at its OUTPUT port so liquid is pushed out the sample
+        # needle and pump_out can extract it. Previously the expel passed
+        # dispense_flushvalve=False, which drove _set_flush_valve to reset
+        # pump_a to its input position right before the dispense, so liquid
+        # was only shuffled between input reservoirs.
+        from unittest import mock
+
+        svc = self._connected()
+        fs = svc.fluid_system
+        # No real flush valve -> the expel must not touch the flush valve.
+        self.assertIsNone(fs._sample_side_flushvalve())
+        with (
+            mock.patch.object(
+                fs, "_set_flush_valve", wraps=fs._set_flush_valve
+            ) as flush_spy,
+            mock.patch.object(
+                fs.pump_out, "dispense", wraps=fs.pump_out.dispense
+            ) as pumpout_dispense,
+            mock.patch(
+                "builtins.input",
+                side_effect=AssertionError("input() must not be called"),
+            ),
+        ):
+            svc.clean_tubings()
+        # The pump's own valve is never yanked back to the input side mid-clean.
+        flush_spy.assert_not_called()
+        # And pump_out actually extracted the expelled liquid to waste.
+        self.assertTrue(pumpout_dispense.called)
+
+    def test_estimate_cleaning_volume_reuse_vs_discard(self):
+        # Discard (fresh liquid per reservoir) needs more than reuse (one
+        # fill shuttled through all reservoirs).
+        from PycroFlow.services import SystemService
+
+        def _svc(reuse):
+            s = SystemService()
+            s.load_setup("Emulator")
+            s.connect_fluid(
+                {
+                    "parameters": {"max_velocity": 200, "clean_velocity": 200},
+                    "settings": {
+                        "reservoir_names": {1: "R1", 2: "R2", 7: "C+"},
+                        "special_names": {"flushbuffer_a": 7, "h2o": 16},
+                        "cleaning": {
+                            "cleaning_rounds": ["h2o"],
+                            "reuse_cleaning_liquid": reuse,
+                            "extra_volume": 100,
+                        },
+                    },
+                }
+            )
+            return s
+
+        reuse_vol = _svc(True).estimate_cleaning_volume()
+        discard_vol = _svc(False).estimate_cleaning_volume()
+        self.assertIsNotNone(reuse_vol)
+        self.assertIsNotNone(discard_vol)
+        self.assertGreater(discard_vol, reuse_vol)
+
+    def test_estimate_cleaning_volume_none_without_system(self):
+        from PycroFlow.services import SystemService
+
+        self.assertIsNone(SystemService().estimate_cleaning_volume())
 
     def test_clean_tubings_without_reservoirs_raises(self):
         # An empty/unresolved cleaning_reservoirs would pump nothing — clean
@@ -363,9 +730,12 @@ class TestTranslate(unittest.TestCase):
         )
 
     def test_load_from_dict_keeps_cwd(self):
+        # Build the design first: loading it *from a path* chdirs, which is
+        # exactly what this test asserts does NOT happen for a dict.
+        design = _example_design()
         original = os.getcwd()
         self.addCleanup(os.chdir, original)
-        ExperimentService().load_experiment_design(_example_design())
+        ExperimentService().load_experiment_design(design)
         self.assertEqual(os.getcwd(), original)
 
 
@@ -427,7 +797,7 @@ class TestSubsystemDeselection(unittest.TestCase):
             "fluid": {
                 "settings": {
                     "vol_wash": 10,
-                    "vol_imager_post": 5,
+                    "vol_reagent": 5,
                     "reservoir_names": {1: "R1"},
                     "experiment": {
                         "type": "Exchange",
@@ -464,3 +834,91 @@ class TestSubsystemDeselection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUsePositions(unittest.TestCase):
+    """The multi-position checkbox: schema -> design dump -> imaging config."""
+
+    _DESIGN = {
+        "base_name": "x",
+        "fluid": {
+            "settings": {
+                "vol_wash": 10,
+                "vol_reagent": 5,
+                "reservoir_names": {1: "R1"},
+                "experiment": {
+                    "type": "Exchange",
+                    "wash_buffer": "B",
+                    "imagers": ["R1"],
+                },
+            }
+        },
+        "img": {
+            "settings": {"t_exp": 100, "frames": 100, "use_positions": True}
+        },
+    }
+
+    def test_schema_carries_use_positions_default_off(self):
+        model = validate_experiment_design(self._DESIGN)
+        self.assertTrue(model.img.settings.use_positions)
+        dumped = model.model_dump(by_alias=True)
+        self.assertTrue(dumped["img"]["settings"]["use_positions"])
+        # Default stays off for existing designs.
+        plain = {
+            **self._DESIGN,
+            "img": {"settings": {"t_exp": 100, "frames": 100}},
+        }
+        model = validate_experiment_design(plain)
+        self.assertFalse(model.img.settings.use_positions)
+
+    def test_assemble_imaging_config_threads_it_through(self):
+        from PycroFlow import configs
+
+        setup = configs.load_setup("Emulator")
+        design = validate_experiment_design(self._DESIGN).model_dump(
+            by_alias=True
+        )
+        cfg = configs.assemble_imaging_config(setup, design)
+        self.assertTrue(cfg["use_positions"])
+
+
+class TestInitialImagerValidation(unittest.TestCase):
+    """initial_imager must not also be an exchange round (double-imaging)."""
+
+    def _design(self, initial, imagers):
+        return {
+            "base_name": "x",
+            "fluid": {
+                "settings": {
+                    "vol_wash": 10,
+                    "vol_reagent": 5,
+                    "reservoir_names": {1: "R1", 2: "R2", 3: "R3"},
+                    "experiment": {
+                        "type": "Exchange",
+                        "wash_buffer": "R3",
+                        "initial_imager": initial,
+                        "imagers": imagers,
+                    },
+                }
+            },
+            "img": {"settings": {"t_exp": 100, "frames": 100}},
+        }
+
+    def test_overlap_allowed_but_warned(self):
+        # Redundant imaging rounds are allowed (e.g. for testing): reusing the
+        # initial imager in the rounds validates, but surfaces a soft warning
+        # rather than a hard error.
+        from PycroFlow.schemas import design_warnings
+
+        model = validate_experiment_design(self._design("R1", ["R1", "R2"]))
+        self.assertEqual(model.fluid.settings.experiment.initial_imager, "R1")
+        warnings = design_warnings(model)
+        self.assertTrue(any("R1" in w for w in warnings))
+
+    def test_separate_initial_and_imagers_ok(self):
+        model = validate_experiment_design(self._design("R1", ["R2"]))
+        self.assertEqual(model.fluid.settings.experiment.initial_imager, "R1")
+
+    def test_no_initial_imager_ok(self):
+        model = validate_experiment_design(self._design(None, ["R1", "R2"]))
+        self.assertIsNone(model.fluid.settings.experiment.initial_imager)

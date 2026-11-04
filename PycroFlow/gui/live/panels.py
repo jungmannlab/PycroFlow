@@ -298,9 +298,30 @@ class OverviewZoom(QWidget):
         self.boxes_cb.toggled.connect(self._render)
         head.addWidget(self.boxes_cb)
         self.auto_btn = QPushButton("Auto")
-        self.auto_btn.setToolTip("Auto-contrast the displayed frame")
-        self.auto_btn.clicked.connect(self._auto_contrast)
+        self.auto_btn.setCheckable(True)
+        self.auto_btn.setToolTip(
+            "Auto-contrast. Latched (MM-style autostretch): every incoming "
+            "frame is re-stretched with the ignore-% clip; editing black/"
+            "white manually takes back control and unlatches it."
+        )
+        self.auto_btn.toggled.connect(self._on_auto_toggled)
         head.addWidget(self.auto_btn)
+        # MM-style reference setting for Auto: clip this percentage of the
+        # darkest/brightest pixels when stretching (MM's "ignore %").
+        self.ignore_pct = QDoubleSpinBox()
+        self.ignore_pct.setRange(0.0, 20.0)
+        self.ignore_pct.setSingleStep(0.05)
+        self.ignore_pct.setDecimals(2)
+        self.ignore_pct.setValue(0.1)
+        self.ignore_pct.setSuffix(" %")
+        self.ignore_pct.setToolTip(
+            "Auto-contrast ignores this fraction of the darkest and "
+            'brightest pixels (Micro-Manager\'s "ignore %") — raise it '
+            "when hot pixels or a few bright spots crush the stretch."
+        )
+        self.ignore_pct.valueChanged.connect(self._auto_contrast)
+        head.addWidget(QLabel("ignore"))
+        head.addWidget(self.ignore_pct)
         layout.addLayout(head)
 
         self.image = QLabel("no frame yet")
@@ -349,9 +370,13 @@ class OverviewZoom(QWidget):
         # alternating x, y (JSON/transport-friendly) + the box size. Stored and
         # drawn in _render; absent -> no overlay (older/minimal payloads).
         boxes = payload.get("boxes")
+        # Boxes are PER-FRAME data: they describe detections on THIS
+        # payload's image. A payload without boxes CLEARS the overlay —
+        # otherwise a previous frame's detections would stay drawn over the
+        # new image (stale boxes).
+        self._boxes = boxes if boxes is not None else []
         if boxes is not None:
             self._box_size = int(payload.get("box_size", self._box_size))
-            self._boxes = boxes  # [x0, y0, x1, y1, ...]
         data = payload.get("data")
         if data is not None and shape is not None:
             self._set_image_from_bytes(data, shape, payload.get("dtype"))
@@ -370,7 +395,12 @@ class OverviewZoom(QWidget):
             arr = np.frombuffer(bytes(data), dtype=dtype or np.uint16)
             arr = arr.reshape(shape[:2])
             self._raw = arr
-            self._render()
+            if self.auto_btn.isChecked():
+                # Latched autostretch: re-fit black/white to EVERY incoming
+                # frame (renders once inside).
+                self._auto_contrast()
+            else:
+                self._render()
         except Exception:
             self.image.setText("frame {}".format(shape))
 
@@ -426,17 +456,40 @@ class OverviewZoom(QWidget):
         finally:
             painter.end()
 
-    def _auto_contrast(self) -> None:
+    def _auto_contrast(self, *_: object) -> None:
         raw = getattr(self, "_raw", None)
         if raw is None:
             return
         import numpy as np
 
-        self.black.setValue(int(np.percentile(raw, 1)))
-        self.white.setValue(int(np.percentile(raw, 99)))
+        # Percentile stretch with the MM-style ignore fraction: 0 % = true
+        # min/max; 0.1 % (default, MM's default) shrugs off hot pixels.
+        # setValue is silenced so the two valueChanged->_reapply_contrast
+        # hops don't each re-render — one explicit render at the end.
+        pct = float(self.ignore_pct.value())
+        pct = min(max(pct, 0.0), 49.0)
+        for w in (self.black, self.white):
+            w.blockSignals(True)
+        try:
+            self.black.setValue(int(np.percentile(raw, pct)))
+            self.white.setValue(int(np.percentile(raw, 100.0 - pct)))
+        finally:
+            for w in (self.black, self.white):
+                w.blockSignals(False)
         self._render()
 
+    def _on_auto_toggled(self, checked: bool) -> None:
+        if checked:
+            self._auto_contrast()
+
     def _reapply_contrast(self, *_: object) -> None:
+        # A USER edit of black/white (programmatic sets are signal-blocked in
+        # _auto_contrast) means manual control: unlatch the autostretch so
+        # the next frame doesn't overwrite the chosen window.
+        if self.auto_btn.isChecked():
+            self.auto_btn.blockSignals(True)
+            self.auto_btn.setChecked(False)
+            self.auto_btn.blockSignals(False)
         if getattr(self, "_raw", None) is not None:
             self._render()
 

@@ -197,6 +197,16 @@ class TubingConfig:
             while searching:
                 segment = [k for k in self.config.keys() if k[0] == segstart]
                 logger.debug("found segment {:s}".format(str(segment)))
+                if not segment:
+                    # A reservoir wired in the manifold but missing from the
+                    # tubing config dead-ends here; say so rather than
+                    # raising IndexError deep in a volume calculation.
+                    raise KeyError(
+                        "no tubing segment leaves {!r} on the way from {!r} "
+                        "to {!r}; add it to the setup's fluid.tubing".format(
+                            segstart, res, path[1]
+                        )
+                    )
                 segment = segment[0]
                 vol += self.config[segment]
                 if segment[1] == path[1]:
@@ -229,6 +239,24 @@ class TubingConfig:
             for ent in self.config.keys()
             if ent[0] == res and "pump_a" in ent[1]
         ]
+        if not entries:
+            # No valve or pump_a directly downstream of this reservoir. This
+            # is the ibidi MultiFlOW topology: the multiplexer is not part of
+            # the tubing graph, so reservoirs daisy-chain toward the pump via
+            # other reservoir junctions (R2 -> R1 -> pump_a, R3 -> R2 -> ...).
+            # Fall back to the reservoir's own outgoing segment into the next
+            # reservoir node -- its dead leg up to the first shared junction,
+            # which is exactly the volume fill_tubings needs to prime. (For
+            # the Hamilton MVP topology the branches above already matched, so
+            # this changes nothing there.) A segment to a non-reservoir sink
+            # (e.g. 'sample') is not an upstream-to-pump path and still raises.
+            entries = [
+                ent
+                for ent in self.config.keys()
+                if ent[0] == res
+                and isinstance(ent[1], str)
+                and ent[1].startswith("R")
+            ]
         logger.debug("found entries{:s}".format(str(entries)))
         if len(entries) == 1:
             return self.config[entries[0]]
@@ -313,6 +341,10 @@ class Valve:
         # ``_assign_multiprocess_events``.
         self.pause_flag = threading.Event()
         self.abort_flag = threading.Event()
+        #: Last commanded position (updated in-process on every ``set_valve``),
+        #: so the GUI schematic can show the rotary valve's current selection
+        #: without polling the bus. ``None`` until first moved.
+        self.valve_pos = None
 
     def set_valve(self, pos, move_now=True):
         """Set the valve position of the PSD.
@@ -330,6 +362,7 @@ class Valve:
             The command to execute later, only if ``move_now`` is True.
         """
         assert pos in ["in", "out", *list(range(1, 9))]
+        self.valve_pos = pos
 
         i = 0
         while self.pause_flag.is_set():

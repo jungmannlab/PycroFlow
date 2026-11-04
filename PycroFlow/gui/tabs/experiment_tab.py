@@ -12,6 +12,8 @@ from.
 """
 
 import ast
+import copy
+import re
 import time
 
 from PyQt6.QtCore import Qt, QTimer
@@ -24,8 +26,10 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QLabel,
     QListWidget,
+    QComboBox,
     QPlainTextEdit,
     QFileDialog,
+    QInputDialog,
     QGroupBox,
     QTableWidget,
     QTableWidgetItem,
@@ -42,6 +46,7 @@ from PycroFlow.protocols.timing import (
     estimate_remaining,
     format_duration,
 )
+from PycroFlow.protocols.describe import action_label
 
 # The subsystems, in display order.
 _SYSTEMS = ("fluid", "img", "illu")
@@ -64,6 +69,15 @@ _CAN_START = {
     ExperimentState.LOADED,
     ExperimentState.ORCHESTRATING,
     ExperimentState.PAUSED,
+    ExperimentState.FINISHED,
+    ExperimentState.ABORTED,
+}
+# Start-at-round launches a FRESH run that begins partway through the loaded
+# sequence (resume-after-abort / re-run from round N). Only offered from the
+# non-running states — the orchestrator reads its start index once, when the
+# handler threads enter run_protocol, so a mid-run jump is a separate feature.
+_CAN_START_AT_ROUND = {
+    ExperimentState.LOADED,
     ExperimentState.FINISHED,
     ExperimentState.ABORTED,
 }
@@ -90,6 +104,47 @@ _CAN_CLEAR = {
 # Step-list shading.
 _FINISHED_COLOR = QColor("#e8f5e9")  # light green — completed
 _ACTIVE_COLOR = QColor("#fff59d")  # amber — currently executing
+
+# Entry types offered by the "Add step" control, per subsystem, with a default
+# template. Editing the sequence by hand flags the run as modified (it is no
+# longer a faithful instance of its named experiment type), so these are for
+# tweaks/tests rather than authoring a protocol from scratch.
+_NEW_ENTRY_TEMPLATES = {
+    "inject": {"$type": "inject", "reservoir_id": 0, "volume": 10.0},
+    "incubate": {"$type": "incubate", "duration": 60.0},
+    "flush": {"$type": "flush", "flushfactor": 1.0},
+    "pump_out": {"$type": "pump_out", "volume": 10.0},
+    "acquire": {"$type": "acquire", "frames": 100, "t_exp": 100.0},
+    "await_acquisition": {"$type": "await_acquisition"},
+    "signal": {"$type": "signal", "value": "custom signal"},
+    "wait for signal": {
+        "$type": "wait for signal",
+        "target": "img",
+        "value": "custom signal",
+    },
+    "set power": {"$type": "set power", "laser": 560, "power": 30.0},
+    "set shutter": {"$type": "set shutter", "state": True},
+    "laser enable": {"$type": "laser enable", "laser": "all", "state": True},
+}
+_SYSTEM_ENTRY_TYPES = {
+    "fluid": [
+        "inject",
+        "incubate",
+        "flush",
+        "pump_out",
+        "signal",
+        "wait for signal",
+        "await_acquisition",
+    ],
+    "img": ["acquire", "signal", "wait for signal", "await_acquisition"],
+    "illu": [
+        "set power",
+        "set shutter",
+        "laser enable",
+        "signal",
+        "wait for signal",
+    ],
+}
 
 
 class _Stopwatch:
@@ -136,6 +191,10 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # Human-readable description of each round (one per imaging acquire),
         # used to annotate the "Round k/N" status line.
         self._round_names = []
+        # {reservoir_id: name} from the loaded design, to name injected
+        # reservoirs in the live action readout ({} when a bare Run Sequence
+        # was loaded without a design).
+        self._reservoir_names = {}
         # Per-step logical "time" (longest-path level over the signal/wait
         # happens-before graph), used to correlate concurrent steps across
         # systems. {system: [level per entry]}.
@@ -156,6 +215,18 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._current_row = -1
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(500)
+        # --- post-run replay (feature: scrub a finished run). The scrubber now
+        # lives in the global ReplayBar above the tabs (so a run can be scrubbed
+        # from any tab); this tab only contributes the run-sequence step
+        # highlight (:meth:`replay_set_progress`, the controller's progress
+        # sink) and routes step/round clicks back to the bar as timeline jumps.
+        self._replay_active = False
+        # Callback(system, index) set by the main window -> ReplayBar.seek_to_step
+        # so clicking a step/round jumps the timeline while replaying.
+        self.on_replay_seek_step = None
+        # Callback() the main window sets to drop a now-stale replay when the
+        # loaded sequence is structurally edited.
+        self.on_sequence_edited = None
         self._build_ui()
         self._connect_signals()
         self._refresh_controls(self._service.state)
@@ -169,6 +240,12 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.state_label = QLabel(self._service.state.value)
         self.state_label.setObjectName("state_label")
         status_row.addWidget(self.state_label)
+        # Shown only once the loaded sequence has been hand-edited: the run is
+        # then recorded as "<type>-modified", not a faithful named experiment.
+        self.modified_label = QLabel("⚠ modified sequence")
+        self.modified_label.setStyleSheet("color: #b8860b; font-weight: bold;")
+        self.modified_label.setVisible(False)
+        status_row.addWidget(self.modified_label)
         status_row.addStretch()
         layout.addLayout(status_row)
 
@@ -177,6 +254,9 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.load_btn = QPushButton("Load run sequence…")
         self.clear_btn = QPushButton("Clear")
         self.start_btn = QPushButton("Start")
+        # Launch a fresh run that begins partway through the sequence (resume
+        # after an abort / re-run from a chosen round).
+        self.start_at_btn = QPushButton("Start at round…")
         # One button toggles Pause/Resume depending on the run state.
         self.pause_resume_btn = QPushButton("Pause")
         self.abort_btn = QPushButton("Abort")
@@ -184,6 +264,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
             self.load_btn,
             self.clear_btn,
             self.start_btn,
+            self.start_at_btn,
             self.pause_resume_btn,
             self.abort_btn,
         ):
@@ -244,6 +325,15 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.center_btn = QPushButton("Center on current step")
         self.center_btn.clicked.connect(self._center_on_current)
         steps_head.addWidget(self.center_btn)
+        # Jump the three lists to the start of a major step (a round). The
+        # combo is repopulated per protocol with one entry per exchange round
+        # (and "Start of run"); selecting one centres all three lists on that
+        # round's first entry in each subsystem.
+        steps_head.addWidget(QLabel("Go to:"))
+        self.goto_combo = QComboBox()
+        self.goto_combo.setMinimumWidth(220)
+        self.goto_combo.activated.connect(self._on_goto_selected)
+        steps_head.addWidget(self.goto_combo)
         steps_head.addWidget(
             QLabel(
                 "Click a step to highlight the concurrent step in the other "
@@ -263,6 +353,32 @@ class ExperimentTab(YamlDropMixin, QWidget):
             col.addWidget(lst)
             lists_row.addLayout(col, 1)
         steps_layout.addLayout(lists_row, 1)
+
+        # --- sequence edit toolbar (operates on the selected step/list)
+        edit_row = QHBoxLayout()
+        edit_row.addWidget(QLabel("Edit selected list:"))
+        self.add_type_combo = QComboBox()
+        self.add_type_combo.setMinimumWidth(150)
+        edit_row.addWidget(self.add_type_combo)
+        self.add_step_btn = QPushButton("Add")
+        self.dup_step_btn = QPushButton("Duplicate")
+        self.del_step_btn = QPushButton("Delete")
+        self.move_up_btn = QPushButton("Move ↑")
+        self.move_down_btn = QPushButton("Move ↓")
+        for b in (
+            self.add_step_btn,
+            self.dup_step_btn,
+            self.del_step_btn,
+            self.move_up_btn,
+            self.move_down_btn,
+        ):
+            edit_row.addWidget(b)
+        edit_row.addStretch()
+        steps_layout.addLayout(edit_row)
+        # Inline (non-blocking) consistency feedback after an edit.
+        self.consistency_label = QLabel("")
+        self.consistency_label.setWordWrap(True)
+        steps_layout.addWidget(self.consistency_label)
 
         params_box = QGroupBox("Step parameters (editable)")
         params_layout = QVBoxLayout(params_box)
@@ -314,14 +430,30 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._bridge.state_changed.connect(self._on_state_changed)
         self._bridge.log_message.connect(self._on_log)
         for system, lst in self.step_lists.items():
+            # currentRowChanged covers keyboard navigation; itemClicked also
+            # fires when the user clicks a row that is ALREADY current in that
+            # list (e.g. clicking back and forth between the systems), which
+            # currentRowChanged does not — both route to the same handler so
+            # the parameter box always follows the last interaction.
             lst.currentRowChanged.connect(
                 lambda row, s=system: self._on_step_selected(s, row)
             )
+            lst.itemClicked.connect(
+                lambda item, s=system, lw=lst: self._on_step_selected(
+                    s, lw.row(item)
+                )
+            )
         self.apply_btn.clicked.connect(self._on_apply)
+        self.add_step_btn.clicked.connect(self._on_add_step)
+        self.dup_step_btn.clicked.connect(self._on_duplicate_step)
+        self.del_step_btn.clicked.connect(self._on_delete_step)
+        self.move_up_btn.clicked.connect(lambda: self._on_move_step(-1))
+        self.move_down_btn.clicked.connect(lambda: self._on_move_step(1))
         self._poll_timer.timeout.connect(self._poll_progress)
         self.load_btn.clicked.connect(self._on_load)
         self.clear_btn.clicked.connect(self._on_clear)
         self.start_btn.clicked.connect(self._on_start)
+        self.start_at_btn.clicked.connect(self._on_start_at_round)
         self.pause_resume_btn.clicked.connect(self._on_pause_resume)
         self.abort_btn.clicked.connect(self._on_abort)
 
@@ -345,7 +477,74 @@ class ExperimentTab(YamlDropMixin, QWidget):
             self._service.clear_protocol()
 
     def _on_start(self):
-        self._service.start()
+        self._launch_run()
+
+    def _launch_run(self, system_steps=None):
+        # Refuse to launch a hand-edited sequence that would hang (orphan /
+        # circular wait). Scoped to edited sequences so un-edited runs behave
+        # exactly as before (the service applies the same scoping as a
+        # backstop).
+        issues = (
+            self._service.check_runnable()
+            if getattr(self._service, "protocol_modified", False) is True
+            else []
+        )
+        if issues:
+            QMessageBox.critical(
+                self,
+                "Run Sequence would hang",
+                "This sequence cannot run as-is:\n\n• "
+                + "\n• ".join(issues)
+                + "\n\nFix the steps (or reload/translate) before starting.",
+            )
+            return
+        try:
+            self._service.start(system_steps=system_steps)
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not start run", "{}".format(exc))
+
+    def _on_start_at_round(self):
+        # Launch a fresh run that SKIPS everything before a chosen round. The
+        # skipped fluidic/illumination steps do NOT run — the operator asserts
+        # the sample already holds that round's state (resume after an abort).
+        # Skipped cross-subsystem signals are pre-seeded by the orchestrator so
+        # the run doesn't deadlock waiting on an emission that never happens.
+        names = self._round_names
+        if len(names) < 2:
+            return
+        labels = [
+            "Round {}{}".format(r + 1, ": {}".format(n) if n else "")
+            for r, n in enumerate(names)
+        ]
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Start at round",
+            "Begin the run at the start of which round?\n(Rounds before it "
+            "will be skipped — they will NOT run.)",
+            labels,
+            1,  # default to round 2 — starting at round 1 is just Start
+            editable=False,
+        )
+        if not ok:
+            return
+        round_index = labels.index(choice)
+        targets = self._goto_targets(round_index)
+        reply = QMessageBox.warning(
+            self,
+            "Start at {}?".format(choice),
+            "The run will begin at the start of {}.\n\n"
+            "Rounds before it will be SKIPPED — their fluidics, imaging and "
+            "illumination steps will NOT run. Make sure the sample already "
+            "physically holds this round's state (the right imager injected, "
+            "powers set) before continuing.\n\nStart the run here?".format(
+                choice
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._launch_run(system_steps=targets)
 
     def _on_pause_resume(self):
         if self._service.state is ExperimentState.RUNNING:
@@ -365,14 +564,21 @@ class ExperimentTab(YamlDropMixin, QWidget):
         """Load a Run Sequence YAML dropped onto the tab."""
         self.load_protocol_path(path)
 
+    def _can_start_at_round(self, state):
+        """Whether "Start at round…" is offered: a startable state with a
+        choice of rounds (more than one) to begin from."""
+        return state in _CAN_START_AT_ROUND and len(self._round_names) > 1
+
     def _refresh_controls(self, state):
         """Enable/disable + relabel the run controls for the given state."""
         self.load_btn.setEnabled(state in _CAN_LOAD)
         self.clear_btn.setEnabled(state in _CAN_CLEAR)
         self.start_btn.setEnabled(state in _CAN_START)
+        self.start_at_btn.setEnabled(self._can_start_at_round(state))
         self.abort_btn.setEnabled(state in _CAN_ABORT)
         # Centring on the current step only makes sense while one is running.
         self.center_btn.setEnabled(state in _ACTIVE_STATES)
+        self._refresh_edit_controls(state)
         if state is ExperimentState.RUNNING:
             self.pause_resume_btn.setText("Pause")
             self.pause_resume_btn.setEnabled(True)
@@ -385,9 +591,37 @@ class ExperimentTab(YamlDropMixin, QWidget):
 
     # --- bridge-driven UI updates (run on the GUI thread)
 
+    def _img_positions(self):
+        """MM position-list factor for the duration estimates (1 offline).
+
+        The count lives in MM at runtime, so it is only known once the
+        imaging system is connected — estimates computed at protocol-load
+        time are refreshed when the run starts (imaging is connected then).
+        """
+        system = getattr(self._service, "imaging_system", None)
+        try:
+            return getattr(system, "position_count", lambda: 1)()
+        except Exception:
+            return 1
+
+    def _refresh_durations(self, protocol=None):
+        protocol = protocol if protocol is not None else self._service.protocol
+        positions = self._img_positions()
+        self._durations = estimate_durations(protocol, img_positions=positions)
+        self._total_duration = estimate_total_duration(
+            protocol, img_positions=positions
+        )
+
     def _on_state_changed(self, old, new):
         self.state_label.setText(new.value)
+        # Clear any red "aborted — step error" styling from a prior run.
+        self.state_label.setStyleSheet("")
         self._refresh_controls(new)
+        if new is ExperimentState.ORCHESTRATING:
+            # Imaging is connected by now: fold the MM position-list count
+            # into the ETA/remaining estimates (use_positions runs).
+            self._refresh_durations()
+            self._update_total_estimate_label()
         # Repopulate the step lists whenever a protocol becomes loaded,
         # regardless of how it was loaded (toolbar, drag&drop, programmatic),
         # so the view always reflects the active protocol. Clearing it
@@ -441,10 +675,23 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self._round_names = [
             self._acquire_label(e)
             for e in self._entries.get("img", [])
-            if isinstance(e, dict) and e.get("$type") == "acquire"
+            if isinstance(e, dict)
+            and e.get("$type") == "acquire"
+            and not self._is_dark(e)
+            and not self._is_monitoring(e)
         ]
-        self._durations = estimate_durations(protocol)
-        self._total_duration = estimate_total_duration(protocol)
+        design = self._service.experiment_design or {}
+        self._reservoir_names = (
+            (design.get("fluid") or {}).get("settings") or {}
+        ).get("reservoir_names") or {}
+        self._populate_goto_combo()
+        # _round_names is only known now; refresh the start-at-round button
+        # (its enablement depends on the round count, and _refresh_controls
+        # runs before this on the LOADED transition, with stale names).
+        self.start_at_btn.setEnabled(
+            self._can_start_at_round(self._service.state)
+        )
+        self._refresh_durations(protocol)
         self._overall_sw.reset()
         self._round_sw.reset()
         self._round_index_seen = -1
@@ -454,6 +701,8 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.step_table.setRowCount(0)
         self.step_param_label.setText("Select a step above to view it.")
         self.apply_btn.setEnabled(False)
+        self._update_modified_badge()
+        self._refresh_edit_controls(self._service.state)
 
     def _reset_progress_display(self):
         """Zero the progress bars / counters / status (used when cleared)."""
@@ -585,17 +834,296 @@ class ExperimentTab(YamlDropMixin, QWidget):
             cur = min(max(cur, 0), lst.count() - 1)
             lst.scrollToItem(lst.item(cur), _CENTER)
 
-    @staticmethod
-    def _is_round_marker(entry):
-        """Whether an entry marks the end of a round for its subsystem.
+    # --- post-run replay (scrub a finished run) ------------------------
 
-        Each PycroFlow round is one imaging acquisition; subsystems sync on it.
-        So a round closes at an ``acquire`` (imaging) or at the
-        ``wait for signal`` on the imaging subsystem (fluid/illumination wait
-        for imaging to finish before the next round). Both occur exactly once
-        per round, giving a consistent round count across subsystems.
+    def set_replay_active(self, on):
+        """Tell the tab whether the global ReplayBar is in replay mode.
+
+        While active, clicking a step / picking a round jumps the timeline (via
+        :attr:`on_replay_seek_step`) instead of the live cross-highlight.
+        """
+        self._replay_active = bool(on)
+
+    def replay_set_progress(self, prog):
+        """Progress sink for replay: drive the same progress bars the live run
+        does (overall + steps-in-round + status line) and highlight the step
+        active at the scrubbed time. Reuses the live render helpers but without
+        the live-only side effects (round stopwatch, substep bars, finish
+        detection), and marks the active step even though the run state is
+        terminal, so the operator sees exactly where the run was at time T."""
+        if not prog:
+            return
+        self._set_overall_bar(prog)
+        done_rounds, total_rounds = self._round_counts(prog.get("img"))
+        self._set_step_status(prog, done_rounds, total_rounds)
+        if total_rounds:
+            current = min(done_rounds, total_rounds)
+            done, total, _ = self._current_round_counts(prog, current)
+            pct = int(100 * done / total) if total else 0
+            self.current_round_bar.setValue(pct)
+            self.current_round_count.setText("{}/{}".format(done, total))
+        else:
+            self.current_round_bar.setValue(0)
+            self.current_round_count.setText("—")
+        for system in _SYSTEMS:
+            lst = self.step_lists[system]
+            cur = prog.get(system, (0, 0))[0]
+            for idx in range(lst.count()):
+                item = lst.item(idx)
+                if item is None:
+                    continue
+                if idx < cur:
+                    item.setBackground(_FINISHED_COLOR)
+                elif idx == cur:
+                    item.setBackground(_ACTIVE_COLOR)
+                    lst.scrollToItem(item, _CENTER)
+                else:
+                    item.setBackground(QBrush())
+
+    # --- major-step (round) navigation
+
+    def _populate_goto_combo(self):
+        """Fill the Go-to combo with one entry per round + "Start of run".
+
+        Each item's data is the 0-based round index (``-1`` for the start of
+        the run), which :meth:`_round_start_indices` maps to the first entry
+        of that round in each subsystem.
+        """
+        combo = self.goto_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Start of run", -1)
+        for r, name in enumerate(self._round_names):
+            label = "Round {}{}".format(
+                r + 1, ": {}".format(name) if name else ""
+            )
+            combo.addItem(label, r)
+        combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+        combo.setEnabled(combo.count() > 1)
+
+    @staticmethod
+    def _nondark_round_tag(entry):
+        """The ``img-<N>`` round tag of a non-dark imaging acquire, or None.
+
+        Parsed from the acquire ``message`` (``'round_img-1-EGFR'`` ->
+        ``'img-1'``); the per-round signal values embed the same tag
+        (``'done flushing img-1'`` / ``'done setting power round img-1'``), so
+        it correlates the round across all three subsystems.
         """
         if not isinstance(entry, dict):
+            return None
+        m = re.search(r"(img-\d+)", str(entry.get("message", "")))
+        return m.group(1) if m else None
+
+    @staticmethod
+    def _block_start(entries, idx):
+        """Walk back from ``idx`` over contiguous ``wait for signal`` entries.
+
+        Lands on the top of the step's prep block (its power/flush waits), so
+        centring shows the whole round-start, not just the acquire line.
+        """
+        i = idx
+        while (
+            i > 0
+            and isinstance(entries[i - 1], dict)
+            and entries[i - 1].get("$type") == "wait for signal"
+        ):
+            i -= 1
+        return i
+
+    def _goto_targets(self, round_index):
+        """Per-subsystem index to centre for the selected major step.
+
+        ``round_index < 0`` is the start of the run (0 everywhere). Otherwise
+        each list lands on the START of that round's own work — the imager
+        INJECTION for fluid, the imaging prep/acquire for img, the power-set
+        for illu — rather than the previous round's trailing wash (which the
+        round-block boundary lumps in first). Falls back to the round-block
+        start when a tag can't be correlated, and clamps to the list end.
+        """
+        out = {s: 0 for s in _SYSTEMS}
+        if round_index < 0:
+            return out
+        img_entries = self._entries.get("img", [])
+        nondark = [
+            i
+            for i, e in enumerate(img_entries)
+            if isinstance(e, dict)
+            and e.get("$type") == "acquire"
+            and not self._is_dark(e)
+            and not self._is_monitoring(e)
+        ]
+        if round_index >= len(nondark):
+            return {
+                s: max(len(self._entries.get(s, [])) - 1, 0) for s in _SYSTEMS
+            }
+        acq_idx = nondark[round_index]
+        tag = self._nondark_round_tag(img_entries[acq_idx])
+
+        # img: the top of this acquire's prep block.
+        out["img"] = self._block_start(img_entries, acq_idx)
+
+        if tag is None:  # unparseable — fall back to the round-block starts.
+            for system in ("fluid", "illu"):
+                rounds = self._round_of.get(system) or []
+                idx = next(
+                    (i for i, r in enumerate(rounds) if r == round_index),
+                    None,
+                )
+                out[system] = idx if idx is not None else 0
+            return out
+
+        # fluid: the imager injection — the inject just before this round's
+        # "done flushing <tag>" signal, PROVIDED that signal precedes the
+        # round's "done imaging <tag>" wait (i.e. the imager is injected
+        # before imaging). For a pre-loaded initial imager the flushing is the
+        # post-imaging wash, so there is no pre-injection -> stay at 0.
+        out["fluid"] = self._fluid_injection_index(tag)
+        # illu: the power-set that precedes this round's "done setting power"
+        # signal.
+        out["illu"] = self._illu_power_index(tag)
+        return out
+
+    def _fluid_injection_index(self, tag):
+        fluid = self._entries.get("fluid", [])
+        flush_i = self._signal_index(fluid, "done flushing {}".format(tag))
+        wait_i = self._wait_index(fluid, "done imaging round {}".format(tag))
+        if flush_i is None or (wait_i is not None and wait_i < flush_i):
+            return 0  # pre-loaded initial imager (or no match): run start
+        # Back up over the contiguous inject(s) feeding this flush signal.
+        i = flush_i
+        while (
+            i > 0
+            and isinstance(fluid[i - 1], dict)
+            and fluid[i - 1].get("$type") == "inject"
+        ):
+            i -= 1
+        return i
+
+    def _illu_power_index(self, tag):
+        illu = self._entries.get("illu", [])
+        sig_i = self._signal_index(
+            illu, "done setting power round {}".format(tag)
+        )
+        if sig_i is None:
+            return 0
+        i = sig_i
+        while (
+            i > 0
+            and isinstance(illu[i - 1], dict)
+            and illu[i - 1].get("$type") in ("set power", "set shutter")
+        ):
+            i -= 1
+        return i
+
+    @staticmethod
+    def _signal_index(entries, value):
+        for i, e in enumerate(entries):
+            if (
+                isinstance(e, dict)
+                and e.get("$type") == "signal"
+                and e.get("value") == value
+            ):
+                return i
+        return None
+
+    @staticmethod
+    def _wait_index(entries, value):
+        for i, e in enumerate(entries):
+            if (
+                isinstance(e, dict)
+                and e.get("$type") == "wait for signal"
+                and e.get("value") == value
+            ):
+                return i
+        return None
+
+    def _on_goto_selected(self, _index):
+        """Centre all three lists on the start of the selected round.
+
+        Each list is selected + centred on the START of that round's own work
+        (see :meth:`_goto_targets`). The per-list ``currentRowChanged``
+        cross-highlight (which would otherwise re-select a *concurrent* step in
+        the other lists and clobber the targets) is blocked for the duration.
+        """
+        round_index = self.goto_combo.currentData()
+        if round_index is None:
+            return
+        targets = self._goto_targets(round_index)
+        for system in _SYSTEMS:
+            lst = self.step_lists[system]
+            if not lst.count():
+                continue
+            row = min(max(targets.get(system, 0), 0), lst.count() - 1)
+            lst.blockSignals(True)
+            lst.setCurrentRow(row)
+            lst.blockSignals(False)
+            lst.scrollToItem(lst.item(row), _CENTER)
+        # The list signals were blocked above, so refresh the parameter box
+        # explicitly — anchor on the round-defining imaging step (its own
+        # list is already positioned; no re-highlight).
+        for anchor in ("img", "fluid", "illu"):
+            lst = self.step_lists[anchor]
+            if lst.count() and lst.currentRow() >= 0:
+                self._show_step_params(anchor, lst.currentRow())
+                break
+        # In replay, jump the timeline to that round's start (its imaging step).
+        if self._replay_active and callable(self.on_replay_seek_step):
+            self.on_replay_seek_step("img", targets.get("img", 0))
+
+    @staticmethod
+    def _is_dark(entry):
+        """Whether an entry belongs to a dark-frame acquisition.
+
+        Dark frames are recorded per imager for background/bleaching and are
+        *not* a separate exchange round: the builder tags them with ``dark`` in
+        the acquire ``name``/``message`` (e.g. ``'EGFR (dark frames)'`` /
+        ``'round_img-dark-0-EGFR'``) and in the fluid/illu ``wait for signal``
+        value (``'done imaging round dark-0'``). Grouping them with their imager
+        gives one round per exchange imager.
+        """
+        if not isinstance(entry, dict):
+            return False
+        text = " ".join(
+            str(entry.get(k, "")) for k in ("name", "message", "value")
+        ).lower()
+        return "dark" in text
+
+    @staticmethod
+    def _is_monitoring(entry):
+        """Whether an acquire is a wash/flush-monitoring movie, not a round.
+
+        Monitoring acquisitions run concurrently with a fluid injection to
+        watch washing efficiency; they carry ``monitoring: True`` (and a
+        ``'(wash monitor)'`` name / ``round_monitor-`` message). Like dark
+        frames, they are folded out of the exchange-round count.
+        """
+        if not isinstance(entry, dict):
+            return False
+        if entry.get("monitoring"):
+            return True
+        text = " ".join(
+            str(entry.get(k, "")) for k in ("name", "message")
+        ).lower()
+        return "monitor" in text
+
+    @classmethod
+    def _is_round_marker(cls, entry):
+        """Whether an entry marks the end of a round for its subsystem.
+
+        Each PycroFlow round is one *exchange imager*; subsystems sync on its
+        imaging acquisition. So a round closes at an ``acquire`` (imaging) or at
+        the ``wait for signal`` on the imaging subsystem (fluid/illumination
+        wait for imaging to finish before the next round) -- but a dark-frame
+        acquisition (and its fluid/illu wait) is folded into the imager's round,
+        not counted separately.
+        """
+        if (
+            not isinstance(entry, dict)
+            or cls._is_dark(entry)
+            or cls._is_monitoring(entry)
+        ):
             return False
         type_ = entry.get("$type")
         if type_ == "acquire":
@@ -621,13 +1149,29 @@ class ExperimentTab(YamlDropMixin, QWidget):
         prog = self._service.progress()
         if not prog:
             return
+        self._set_overall_bar(prog)
+        done_rounds, total_rounds = self._round_counts(prog.get("img"))
+        self._set_step_status(prog, done_rounds, total_rounds)
+        round_remaining = self._update_current_round_bar(
+            prog, done_rounds, total_rounds
+        )
+        self._update_time_summary(
+            estimate_remaining(self._durations, prog), round_remaining
+        )
+        self._update_substep_bars()
+        self._shade_steps(prog)
+        self._check_finished()
+
+    def _set_overall_bar(self, prog):
+        """Overall bar + count from a ``{sys: (cur, total)}`` progress map."""
         done = sum(c for c, _ in prog.values())
         total = sum(t for _, t in prog.values())
         pct = int(100 * done / total) if total else 0
         self.overall_bar.setValue(pct)
         self.overall_count.setText("{}/{}".format(done, total))
 
-        done_rounds, total_rounds = self._round_counts(prog.get("img"))
+    def _set_step_status(self, prog, done_rounds, total_rounds):
+        """The single Round-k/N + per-subsystem step-status line."""
         parts = []
         if total_rounds:
             # 1-based number of the round currently executing, plus a short
@@ -653,15 +1197,25 @@ class ExperimentTab(YamlDropMixin, QWidget):
                 )
         self.step_status.setText("      ".join(parts))
 
-        round_remaining = self._update_current_round_bar(
-            prog, done_rounds, total_rounds
-        )
-        self._update_time_summary(
-            estimate_remaining(self._durations, prog), round_remaining
-        )
-        self._update_substep_bars()
-        self._shade_steps(prog)
-        self._check_finished()
+    def _current_round_counts(self, prog, current_round):
+        """(done, total, remaining_s) steps for ``current_round`` across systems.
+
+        Pure — no stopwatch/UI side effects, so both the live bar and the replay
+        bar can use it.
+        """
+        done = total = 0
+        remaining = 0.0
+        for system in _SYSTEMS:
+            cur = prog.get(system, (0, 0))[0]
+            durs = self._durations.get(system, [])
+            for idx, rnd in enumerate(self._round_of.get(system, [])):
+                if rnd == current_round:
+                    total += 1
+                    if idx < cur:
+                        done += 1
+                    elif idx < len(durs):
+                        remaining += durs[idx]
+        return done, total, remaining
 
     def _check_finished(self):
         """Leave the running state once every subsystem has finished.
@@ -672,11 +1226,21 @@ class ExperimentTab(YamlDropMixin, QWidget):
         run controls and unlocks the hardware tabs via the usual state-change
         handlers.
         """
-        if (
-            self._service.state is ExperimentState.RUNNING
-            and self._service.is_finished()
-        ):
-            self._service.end()
+        # A run can reach a terminal state two ways: completing all steps, or a
+        # handler aborting it on an unrecoverable step error (e.g. the ibidi
+        # valve failing after its retries). The service centralizes that
+        # decision and drives the transition (through abort()/end(), notifying
+        # observers); here we only add the loud error surfacing. It is
+        # NON-blocking — this runs on the progress-poll timer, so a modal
+        # dialog would freeze the event loop.
+        terminal = self._service.finalize_if_done()
+        if terminal is ExperimentState.ABORTED:
+            msg = self._service.error_message() or "unknown error"
+            self._on_log("RUN ABORTED — step error: {}".format(msg))
+            self.state_label.setText("aborted — step error (see log)")
+            self.state_label.setStyleSheet(
+                "color: #d9534f; font-weight: bold;"
+            )
 
     def _set_substep_visible(self, system, visible):
         for w in self.substep_bars[system]:
@@ -708,10 +1272,14 @@ class ExperimentTab(YamlDropMixin, QWidget):
         return "{} {:.0f}/{:.0f} s".format(name, cur, tot)
 
     def _step_name(self, system, cur):
-        """``$type`` of the step a subsystem is currently on (or 'done')."""
+        """Human-readable action a subsystem is currently on (or 'done').
+
+        E.g. ``'inject Imager 1'`` / ``'acquire EGFR'`` / ``'wait'`` instead of
+        the raw ``$type``, so the status line reads as what is happening now.
+        """
         entries = self._entries.get(system, [])
         if 0 <= cur < len(entries) and isinstance(entries[cur], dict):
-            return entries[cur].get("$type", "?")
+            return action_label(entries[cur], self._reservoir_names)
         if entries and cur >= len(entries):
             return "done"
         return "—"
@@ -736,8 +1304,9 @@ class ExperimentTab(YamlDropMixin, QWidget):
     def _round_counts(self, img_prog):
         """(completed_rounds, total_rounds) from the imaging acquisitions.
 
-        Each ``acquire`` step is one round; the number already passed by the
-        imaging handler gives the completed-round count.
+        One round per *exchange imager*: dark-frame acquisitions are folded into
+        their imager's round, not counted separately. ``done_rounds`` is the
+        number of imager rounds fully behind the one currently imaging.
         """
         protocol = self._service.protocol or {}
         img = protocol.get("img", {})
@@ -747,13 +1316,19 @@ class ExperimentTab(YamlDropMixin, QWidget):
         acquire_idx = [
             i
             for i, e in enumerate(entries)
-            if isinstance(e, dict) and e.get("$type") == "acquire"
+            if isinstance(e, dict)
+            and e.get("$type") == "acquire"
+            and not self._is_dark(e)
+            and not self._is_monitoring(e)
         ]
         total_rounds = len(acquire_idx)
         if not total_rounds:
             return 0, 0
         cur = img_prog[0] if img_prog else 0
-        done_rounds = sum(1 for i in acquire_idx if i < cur)
+        # The imager group cur is in = number of imager acquires reached
+        # (<= cur); the rounds fully behind it are that minus one.
+        started = sum(1 for i in acquire_idx if i <= cur)
+        done_rounds = max(0, started - 1)
         return done_rounds, total_rounds
 
     def _update_current_round_bar(self, prog, done_rounds, total_rounds):
@@ -775,18 +1350,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
             self._round_sw.reset()
             if self._service.state is ExperimentState.RUNNING:
                 self._round_sw.start()
-        done = total = 0
-        remaining = 0.0
-        for system in _SYSTEMS:
-            cur = prog.get(system, (0, 0))[0]
-            durs = self._durations.get(system, [])
-            for idx, rnd in enumerate(self._round_of.get(system, [])):
-                if rnd == current:
-                    total += 1
-                    if idx < cur:
-                        done += 1
-                    elif idx < len(durs):
-                        remaining += durs[idx]
+        done, total, remaining = self._current_round_counts(prog, current)
         pct = int(100 * done / total) if total else 0
         self.current_round_bar.setValue(pct)
         self.current_round_count.setText("{}/{}".format(done, total))
@@ -819,6 +1383,20 @@ class ExperimentTab(YamlDropMixin, QWidget):
         if row < 0:
             # Deselection — e.g. from clearing another list, or repopulating.
             return
+        if self._replay_active and callable(self.on_replay_seek_step):
+            # In replay, clicking a step jumps the timeline to when that step
+            # became active (the ReplayBar seeks); the recorded progress then
+            # shades the lists.
+            self._show_step_params(system, row)
+            self._refresh_edit_controls(self._service.state)
+            self.on_replay_seek_step(system, row)
+            return
+        self._highlight_concurrent(system, row)
+        self._show_step_params(system, row)
+        self._refresh_edit_controls(self._service.state)
+
+    def _highlight_concurrent(self, system, row):
+        """Select + centre the concurrent step in the OTHER two lists."""
         corr = self._concurrent_indices(system, row)
         for other, lst in self.step_lists.items():
             if other == system:
@@ -832,11 +1410,20 @@ class ExperimentTab(YamlDropMixin, QWidget):
                 lst.setCurrentRow(-1)
             lst.blockSignals(False)
 
+    def _show_step_params(self, system, row):
+        """Populate the editable parameter box from ``system``'s step ``row``.
+
+        Separate from :meth:`_highlight_concurrent` so callers that have
+        already positioned the lists (the Go-to selector, which blocks the
+        list signals) can refresh the box without re-triggering the
+        cross-highlight.
+        """
         self._current_sys = system
         self._current_row = row
         self.step_table.setRowCount(0)
         entries = self._entries.get(system, [])
-        if row >= len(entries):
+        if row < 0 or row >= len(entries):
+            self.step_param_label.setText("Select a step above to view it.")
             self.apply_btn.setEnabled(False)
             return
         entry = entries[row]
@@ -898,6 +1485,143 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # Re-render from the stored entry so displayed text and the cached
         # value types reflect what was actually written.
         self._on_step_selected(self._current_sys, row)
+
+    # --- structural sequence editing (add / duplicate / delete / move)
+
+    def _refresh_edit_controls(self, state):
+        """Enable the edit toolbar only when a sequence can be edited.
+
+        Editing is allowed when nothing is running (``state in _CAN_LOAD``) and
+        a protocol is loaded. Add needs a target system; the per-row actions
+        need a selected row. The add-type combo is repopulated for the selected
+        system so only that subsystem's valid step types are offered.
+        """
+        can_edit = state in _CAN_LOAD and bool(self._service.protocol)
+        system = self._current_sys
+        row = self._current_row
+        has_system = can_edit and system in _SYSTEM_ENTRY_TYPES
+        has_row = has_system and 0 <= row < len(self._entries.get(system, []))
+        # Populate the add-type combo for the selected system.
+        wanted = _SYSTEM_ENTRY_TYPES.get(system, []) if has_system else []
+        current = [
+            self.add_type_combo.itemText(i)
+            for i in range(self.add_type_combo.count())
+        ]
+        if current != wanted:
+            self.add_type_combo.blockSignals(True)
+            self.add_type_combo.clear()
+            self.add_type_combo.addItems(wanted)
+            self.add_type_combo.blockSignals(False)
+        self.add_type_combo.setEnabled(has_system)
+        self.add_step_btn.setEnabled(has_system)
+        self.dup_step_btn.setEnabled(has_row)
+        self.del_step_btn.setEnabled(has_row)
+        self.move_up_btn.setEnabled(has_row and row > 0)
+        self.move_down_btn.setEnabled(
+            has_row and row < len(self._entries.get(system, [])) - 1
+        )
+
+    def _protocol_entries(self, system):
+        """The underlying (mutable) protocol entry list for ``system``.
+
+        Edits must mutate the list the orchestrator runs — ``self._entries`` is
+        a shallow copy rebuilt on every repopulate, so inserting/removing there
+        would be lost. Returns None when the system is absent.
+        """
+        proto = self._service.protocol or {}
+        sub = proto.get(system)
+        if isinstance(sub, dict) and isinstance(
+            sub.get("protocol_entries"), list
+        ):
+            return sub["protocol_entries"]
+        return None
+
+    def _after_structural_edit(self, system, select_row):
+        """Common tail for every structural edit.
+
+        Flags the run modified, re-renders the lists, restores the selection,
+        refreshes the duration estimates + modified badge, and runs the
+        (non-blocking) consistency check.
+        """
+        self._service.mark_protocol_modified()
+        # A structural edit desyncs the step lists from any recorded run, so a
+        # stale replay would highlight the wrong steps — drop it (the main
+        # window clears the ReplayBar, which exits replay mode if active).
+        if callable(self.on_sequence_edited):
+            self.on_sequence_edited()
+        self._populate_steps()
+        self._update_modified_badge()
+        # Restore a sensible selection so the user can keep editing.
+        entries = self._entries.get(system, [])
+        if entries:
+            row = min(max(select_row, 0), len(entries) - 1)
+            lst = self.step_lists[system]
+            lst.setCurrentRow(row)  # fires _on_step_selected -> params + edit
+        else:
+            self._current_sys = system
+            self._current_row = -1
+            self._refresh_edit_controls(self._service.state)
+        self._check_consistency_inline()
+
+    def _on_add_step(self):
+        system = self._current_sys
+        entries = self._protocol_entries(system)
+        if entries is None:
+            return
+        type_ = self.add_type_combo.currentText()
+        template = _NEW_ENTRY_TEMPLATES.get(type_)
+        if template is None:
+            return
+        at = self._current_row + 1 if self._current_row >= 0 else len(entries)
+        entries.insert(at, copy.deepcopy(template))
+        self._after_structural_edit(system, at)
+
+    def _on_duplicate_step(self):
+        system = self._current_sys
+        entries = self._protocol_entries(system)
+        row = self._current_row
+        if entries is None or not (0 <= row < len(entries)):
+            return
+        entries.insert(row + 1, copy.deepcopy(entries[row]))
+        self._after_structural_edit(system, row + 1)
+
+    def _on_delete_step(self):
+        system = self._current_sys
+        entries = self._protocol_entries(system)
+        row = self._current_row
+        if entries is None or not (0 <= row < len(entries)):
+            return
+        del entries[row]
+        self._after_structural_edit(system, row)
+
+    def _on_move_step(self, delta):
+        system = self._current_sys
+        entries = self._protocol_entries(system)
+        row = self._current_row
+        if entries is None or not (0 <= row < len(entries)):
+            return
+        j = row + delta
+        if not (0 <= j < len(entries)):
+            return
+        entries[row], entries[j] = entries[j], entries[row]
+        self._after_structural_edit(system, j)
+
+    def _update_modified_badge(self):
+        self.modified_label.setVisible(
+            bool(getattr(self._service, "protocol_modified", False))
+        )
+
+    def _check_consistency_inline(self):
+        """Show a non-blocking consistency hint for the edited sequence."""
+        issues = self._service.check_runnable()
+        if issues:
+            self.consistency_label.setStyleSheet("color: #d9534f;")
+            self.consistency_label.setText(
+                "⚠ Sequence problem:  " + "   ".join(issues)
+            )
+        else:
+            self.consistency_label.setStyleSheet("color: #2e7d32;")
+            self.consistency_label.setText("✓ Sequence consistent")
 
     # --- editing helpers
 

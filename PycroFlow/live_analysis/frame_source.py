@@ -114,6 +114,11 @@ class FrameSource(abc.ABC):
     #: True for lossless sources safe to use as the authoritative stream.
     lossless: bool = True
 
+    #: Newest frame (ndarray) as a cheap display tap for live thumbnails —
+    #: None until a source chooses to maintain it (the peek and mock sources
+    #: do). Part of the contract so new sources know preview depends on it.
+    latest_frame = None
+
     @abc.abstractmethod
     def batches(self, batch_size: int) -> Iterator[Batch]:
         """Yield :class:`Batch` objects until the source is closed/exhausted.
@@ -366,15 +371,29 @@ class RamPeekFrameSource(FrameSource):
         MM ZMQ bridge port.
     maxsize : int
         Internal queue cap; when full the oldest frame is dropped (fresh-first).
+    camera_info : dict or None
+        Picasso photon-conversion info returned by :meth:`camera_info` — MM
+        tags don't carry it, so a caller that LOCALIZES the peeked stream
+        (the Live-tab preview) must pass the setup's values. None keeps the
+        WP-4 view-only behaviour.
     """
 
     lossless = False
 
     def __init__(
-        self, *, poll_s: float = 0.02, port: int = 4827, maxsize: int = 2000
+        self,
+        *,
+        poll_s: float = 0.02,
+        port: int = 4827,
+        maxsize: int = 2000,
+        camera_info: dict | None = None,
     ):
         self.poll_s = poll_s
         self.port = port
+        # MM tags don't carry picasso's photon-conversion keys; a caller that
+        # localizes the peeked stream (the Live-tab preview mode) passes the
+        # setup's camera_info here. None keeps the WP-4 view-only behaviour.
+        self._camera_info = dict(camera_info) if camera_info else None
         self._q: "queue.Queue[_PeekFrame]" = queue.Queue(maxsize=maxsize)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -383,6 +402,9 @@ class RamPeekFrameSource(FrameSource):
         self._read = 0
         self.n_missed = 0
         self.n_dropped = 0
+        # Newest peeked frame (ndarray) — a cheap display tap for thumbnails,
+        # independent of the (consumed) batch queue.
+        self.latest_frame = None
 
     def start(self) -> "RamPeekFrameSource":
         self._thread = threading.Thread(
@@ -392,32 +414,73 @@ class RamPeekFrameSource(FrameSource):
         return self
 
     def camera_info(self) -> dict | None:
-        return None
+        return dict(self._camera_info) if self._camera_info else None
 
     def frames_read(self) -> int:
         return self._read
 
     def _produce(self) -> None:  # pragma: no cover - needs a running MM
+        from loguru import logger
+
         try:
             from pycromanager import Core
 
             self._core = Core(port=self.port)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "live preview RAM peek could not open a Core on port {} "
+                "({!r}); the preview will stay blank.".format(self.port, exc)
+            )
             self._stop.set()
             return
+        # Blank-preview diagnostics (one-shot): a blank Live preview has a few
+        # distinct causes (the Python ZMQ image stream delivers nothing, or
+        # MM's tags lack the index / height-width keys this peek expects). Note
+        # which one is happening and warn ONCE if no frame was peeked a few
+        # seconds in, so a stuck preview names its cause instead of staying a
+        # silent blank panel.
+        peek_err = None
+        no_index = no_hw = stale = offered = 0
+        warned = False
+        t0 = time.time()
         while not self._stop.is_set():
+            # `offered` is a producer-local count; self._read advances only on
+            # the CONSUMER thread (_flush), so it would read 0 here while this
+            # thread is peeking fine but the pipeline is slow to drain.
+            if not warned and offered == 0 and time.time() - t0 > 5.0:
+                warned = True
+                logger.warning(
+                    "live preview peeked no new frames in 5 s "
+                    "(peek_error={!r}, frames_without_index={}, "
+                    "frames_without_height/width={}, repeated_same_frame={}). "
+                    "MM must be actively streaming (native Live or a run) for "
+                    "the preview to show anything; a dead Python ZMQ image "
+                    "stream (pycromanager <-> MM version mismatch), a stalled "
+                    "buffer (same frame repeated), or unexpected image tags "
+                    "are the usual causes.".format(
+                        peek_err, no_index, no_hw, stale
+                    )
+                )
             try:
                 timg = self._core.get_last_tagged_image()
-            except Exception:
+            except Exception as exc:
+                peek_err = exc
                 time.sleep(self.poll_s)
                 continue
             tags = dict(timg.tags)
             idx = self._extract_index(tags)
             if idx is None or idx == self._last_index:
+                if idx is None:
+                    no_index += 1
+                else:
+                    # A valid index that never advances = MM's buffer is not
+                    # streaming new frames (the commonest blank-preview stall).
+                    stale += 1
                 time.sleep(self.poll_s)
                 continue
             hw = self._hw(tags)
             if hw is None:
+                no_hw += 1
                 time.sleep(self.poll_s)
                 continue
             if self._last_index is not None and idx > self._last_index + 1:
@@ -425,7 +488,9 @@ class RamPeekFrameSource(FrameSource):
             self._last_index = idx
             h, w = hw
             arr = np.reshape(np.asarray(timg.pix), (h, w))
+            self.latest_frame = arr
             self._offer(_PeekFrame(idx, arr, tags.get("PositionIndex")))
+            offered += 1
             time.sleep(self.poll_s)
 
     def _offer(self, fr: _PeekFrame) -> None:
@@ -544,6 +609,8 @@ class MockFrameSource(FrameSource):
         self._rng = np.random.default_rng(seed)
         self._read = 0
         self._stop = threading.Event()
+        # Newest generated frame — display tap mirroring RamPeekFrameSource.
+        self.latest_frame = None
         # Deterministic camera info so localize_frames has what it needs.
         self._info = {
             "Baseline": 100,
@@ -604,7 +671,9 @@ class MockFrameSource(FrameSource):
             if not buf:
                 buf_start = i
                 buf_pos = pos
-            buf.append(self._make_frame())
+            frame = self._make_frame()
+            self.latest_frame = frame
+            buf.append(frame)
             if len(buf) >= batch_size:
                 yield Batch(np.stack(buf), buf_start, buf_pos)
                 self._read += len(buf)

@@ -33,3 +33,9 @@ results/**/*.tiff
 # local settings and personal notes out of version control.
 .claude/
 CLAUDE.local.md
+
+# Emulator gate-2 run artifacts (not source)
+results/gate2/emulator_*.json
+
+# Per-machine secrets (monet auth token etc.) — never commit
+.env
