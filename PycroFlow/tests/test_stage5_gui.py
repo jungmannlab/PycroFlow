@@ -305,6 +305,98 @@ class TestMainWindow(unittest.TestCase):
         tab._on_pause_resume()
         svc.resume.assert_called_once()
 
+    def _two_round_tab(self):
+        """An ExperimentTab (mock service) primed with a two-round sequence."""
+        from unittest.mock import MagicMock
+        from PycroFlow.services import ExperimentState
+        from PycroFlow.gui.tabs.experiment_tab import ExperimentTab
+
+        svc = MagicMock(name="service")
+        svc.state = ExperimentState.LOADED
+        svc.protocol_modified = False
+        tab = ExperimentTab(svc, MagicMock(name="bridge"))
+        tab._round_names = ["EGFR", "Tom20"]
+        tab._entries = {
+            "img": [
+                {"$type": "acquire", "message": "round_img-0-EGFR"},
+                {"$type": "acquire", "message": "round_img-1-Tom20"},
+            ],
+            "fluid": [],
+            "illu": [],
+        }
+        tab._round_of = {"fluid": [], "img": [0, 1], "illu": []}
+        return svc, tab
+
+    def test_start_at_round_launches_with_targets(self):
+        from unittest.mock import patch
+        from PycroFlow.gui.tabs import experiment_tab as et
+
+        svc, tab = self._two_round_tab()
+        expected = tab._goto_targets(1)  # the second round
+        with (
+            patch.object(
+                et.QInputDialog,
+                "getItem",
+                return_value=("Round 2: Tom20", True),
+            ),
+            patch.object(
+                et.QMessageBox,
+                "warning",
+                return_value=et.QMessageBox.StandardButton.Yes,
+            ),
+        ):
+            tab._on_start_at_round()
+        svc.start.assert_called_once_with(system_steps=expected)
+
+    def test_start_at_round_cancel_does_not_launch(self):
+        from unittest.mock import patch
+        from PycroFlow.gui.tabs import experiment_tab as et
+
+        svc, tab = self._two_round_tab()
+        # Confirmation declined -> no run starts.
+        with (
+            patch.object(
+                et.QInputDialog,
+                "getItem",
+                return_value=("Round 2: Tom20", True),
+            ),
+            patch.object(
+                et.QMessageBox,
+                "warning",
+                return_value=et.QMessageBox.StandardButton.Cancel,
+            ),
+        ):
+            tab._on_start_at_round()
+        svc.start.assert_not_called()
+        # Dismissing the round picker likewise does nothing.
+        with (
+            patch.object(
+                et.QInputDialog, "getItem", return_value=("", False)
+            ) as pick,
+            patch.object(et.QMessageBox, "warning") as warn,
+        ):
+            tab._on_start_at_round()
+        pick.assert_called_once()
+        warn.assert_not_called()
+        svc.start.assert_not_called()
+
+    def test_start_at_round_button_enabled_only_when_startable(self):
+        from PycroFlow.services import ExperimentState
+
+        svc, tab = self._two_round_tab()
+        # Loaded with >1 round -> offered.
+        tab._refresh_controls(ExperimentState.LOADED)
+        self.assertTrue(tab.start_at_btn.isEnabled())
+        # A single-round sequence has nothing to skip -> not offered.
+        tab._round_names = ["only"]
+        tab._refresh_controls(ExperimentState.LOADED)
+        self.assertFalse(tab.start_at_btn.isEnabled())
+        # Not offered while a run is active (the start index is read once, at
+        # run_protocol entry; a mid-run jump is a separate feature).
+        tab._round_names = ["EGFR", "Tom20"]
+        tab._refresh_controls(ExperimentState.RUNNING)
+        self.assertFalse(tab.start_at_btn.isEnabled())
+
     def test_experiment_tab_reflects_state(self):
         from PycroFlow.examples.demo_protocols import protocol
 

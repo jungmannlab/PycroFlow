@@ -61,6 +61,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Start a run at a chosen round (resume after an abort).** The Run Sequence
+  tab has a new **"Start at round…"** button (offered from loaded / finished /
+  aborted, when the sequence has more than one round): pick a round, confirm a
+  warning that the earlier rounds will be skipped and the sample must already
+  hold that round's state, and the run launches part-way through. The
+  orchestrator reads a per-subsystem start index (`start_protocol(system_steps=…)`
+  → `_consume_start_index`) and, crucially, **pre-fires the cross-subsystem
+  signals the skipped steps would have emitted** (`_preseed_signals`) so a later
+  subsystem waiting on a pre-start signal wakes immediately instead of
+  deadlocking on an emission that now never happens. Skipped fluidic /
+  illumination steps do NOT run — this is an operator-asserted resume, not a
+  replay of the earlier rounds. Normal `Start` is unchanged (empty
+  `system_steps` ⇒ begins at index 0).
 - **Experiment-design cleaning section.** The free-text `cleaning_reservoirs`
   list is replaced by a structured `cleaning` block (`CleaningSettings` in
   `schemas/experiment_design.py`): add/remove **cleaning-round** dropdown rows
