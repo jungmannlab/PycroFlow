@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-04
+
+First release carrying the **Windows installer + release pipeline**, the
+**user-local setups + first-run setup wizard**, the **Help menu** (About /
+License / Check for Updates), **registry setup-provenance stamping**, and the
+**monet 0.6.13** bump — on top of the picasso-1.0 migration and the live slice
+shipped in 0.2.0. Hosted CI now runs a Python 3.11–3.14 matrix.
+
 ### Fixed
 
 - **Laser fail-safe interlock is honest and escalates on failure.** On an
