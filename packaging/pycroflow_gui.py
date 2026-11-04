@@ -109,10 +109,29 @@ def _selfcheck():
 def main():
     home = _user_dir()
     os.makedirs(home, exist_ok=True)
+    # Resolve .env (setup_core.env_path), user setups (configs.user_setups_dir)
+    # and the CWD-relative logs to this persistent dir — NOT the wiped onefile
+    # unpack dir that PycroFlow.__file__ points at when frozen.
+    os.environ.setdefault("PYCROFLOW_HOME", home)
+    # A windowed (console=False) frozen exe double-clicked with no console has
+    # sys.stdout/stderr == None, so logging and print() would crash on the None
+    # stream. Point them at a file in home before anything imports/logs.
+    for _name in ("stdout", "stderr"):
+        if getattr(sys, _name, None) is None:
+            try:
+                setattr(
+                    sys,
+                    _name,
+                    open(
+                        os.path.join(home, "pycroflow-{}.log".format(_name)),
+                        "a",
+                        buffering=1,
+                        encoding="utf-8",
+                    ),
+                )
+            except OSError:
+                setattr(sys, _name, open(os.devnull, "w"))
     try:
-        # So setup_logging's CWD-relative log files and load_env_file's .env
-        # search both resolve to the persistent per-user dir, not the wiped
-        # onefile unpack dir.
         os.chdir(home)
     except OSError:
         pass

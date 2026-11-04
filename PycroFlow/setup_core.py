@@ -36,6 +36,9 @@ ENV_REGISTRY_URL = "PAINT_REGISTRY_URL"
 ENV_REGISTRY_TOKEN = "PAINT_REGISTRY_TOKEN"
 ENV_MONET_CONFIG_PATHS = "MONET_CONFIG_PATHS"
 ENV_SPILL_PORT = "PYCROFLOW_SPILL_PORT"
+#: Default microscope setup the GUI pre-selects on launch (the toolbar combo is
+#: the microscope selector — there is no CLI arg). Written by the wizard.
+ENV_DEFAULT_SETUP = "PYCROFLOW_SETUP"
 
 #: Default template the wizard clones a new setup from (a shipped built-in).
 DEFAULT_TEMPLATE = "Template"
