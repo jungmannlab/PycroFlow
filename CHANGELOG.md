@@ -45,9 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Bump the `monet` pin to `v0.6.10`** (`[hardware]` extra, from `v0.4.2`).
+- **Bump the `monet` pin to `v0.6.13`** (`[hardware]` extra, from `v0.4.2`).
   monet drives the lasers via its in-process API and is co-packaged into the
-  Windows installer, so the frozen `pycroflow-gui.exe` now ships monet 0.6.10.
+  Windows installer, so the frozen `pycroflow-gui.exe` now ships monet 0.6.13.
   PycroFlow's monet surface (`CONFIGS` / `PROTOCOLS` / `LASER_TAG`,
   `control.IlluminationLaserControl`, `io.check_server_auth`, `gui`,
   `beampath.pycrocore`) is unchanged across the bump.
