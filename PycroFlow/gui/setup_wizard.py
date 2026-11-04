@@ -245,6 +245,11 @@ class SetupWizard(QWizard):
                 data = self.page_setup._build()
                 path = setup_core.save_setup(data["setup"], data)
                 self.created_setup = data["setup"]
+                # Record it as the default microscope so the GUI pre-selects it
+                # on the next launch (PycroFlow has no CLI microscope arg).
+                setup_core.write_env(
+                    {setup_core.ENV_DEFAULT_SETUP: data["setup"]}
+                )
                 lines.append(
                     "Saved setup {!r} to {}".format(data["setup"], path)
                 )

@@ -391,6 +391,15 @@ class PycroFlowMainWindow(QMainWindow):
     # --- setup / connection -------------------------------------------
 
     def _init_setup(self):
+        # The toolbar combo is the microscope selector (no CLI arg). A
+        # PYCROFLOW_SETUP env var (e.g. from .env, written by the setup wizard)
+        # picks the default rig on launch; otherwise the first listed setup is
+        # used.
+        default = os.environ.get("PYCROFLOW_SETUP")
+        if default:
+            i = self.setup_combo.findText(default)
+            if i >= 0:
+                self.setup_combo.setCurrentIndex(i)
         if self.setup_combo.count():
             # Selecting index 0 fires currentTextChanged -> _on_setup_changed
             # unless it's already current; load explicitly to be sure.
