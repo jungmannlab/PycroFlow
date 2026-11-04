@@ -51,10 +51,11 @@ jobs:
       # Report every leg's result even if one fails (don't cancel the others).
       fail-fast: false
       matrix:
-        # Python 3.11 is the floor (requires-python>=3.11). 3.12 mirrors the
-        # picasso-registry matrix. Add 3.13/3.14 once picassosr + PyQt6 wheels
-        # for them are confirmed (monet, with lighter deps, already runs them).
-        python-version: ["3.11", "3.12"]
+        # 3.11 is the floor (requires-python>=3.11); 3.11–3.14 mirrors monet.
+        # The newer legs depend on picassosr + PyQt6 (<6.12) having wheels for
+        # that Python — a red leg here means "no wheels yet", drop it until they
+        # land (fail-fast: false keeps the others reporting).
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     env:
       QT_QPA_PLATFORM: offscreen
 
