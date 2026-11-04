@@ -45,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Bump the `monet` pin to `v0.6.10`** (`[hardware]` extra, from `v0.4.2`).
+  monet drives the lasers via its in-process API and is co-packaged into the
+  Windows installer, so the frozen `pycroflow-gui.exe` now ships monet 0.6.10.
+  PycroFlow's monet surface (`CONFIGS` / `PROTOCOLS` / `LASER_TAG`,
+  `control.IlluminationLaserControl`, `io.check_server_auth`, `gui`,
+  `beampath.pycrocore`) is unchanged across the bump.
 - **Cap `PyQt6<6.12` in the `[gui]` extra.** The PyQt6-Qt6 6.12.0 native
   libraries SIGSEGV on the offscreen Qt platform when the event loop is pumped
   with a running `QThread`; stay on 6.11.x until a 6.12.x fixes it.
