@@ -109,12 +109,19 @@ def write_env(updates: dict, path: str | os.PathLike | None = None) -> Path:
     )
     remaining = dict(updates)
     out = []
+    updated = set()
     for line in existing:
         s = line.strip()
         if s and not s.startswith("#") and "=" in s:
             key = s.split("=", 1)[0].strip()
             if key in remaining:
                 out.append("{}={}".format(key, remaining.pop(key)))
+                updated.add(key)
+                continue
+            if key in updated:
+                # A stale duplicate of a key we already rewrote above — drop it
+                # so a (malformed) .env with repeated keys collapses to one line
+                # per key, and the update can't be shadowed by a later dupe.
                 continue
         out.append(line)
     for key, value in remaining.items():

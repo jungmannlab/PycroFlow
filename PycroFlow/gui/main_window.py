@@ -82,6 +82,9 @@ class PycroFlowMainWindow(QMainWindow):
         # (WP-FLUIDICS-CAM). None when the setup declares no cameras;
         # (re)built per setup change.
         self._monitoring = None
+        # In-flight Help ▸ Check-for-Updates worker guard — set before
+        # _build_menu wires the action, so the handler can never read it unset.
+        self._update_worker = None
 
         from PycroFlow import __version__
 
@@ -94,8 +97,6 @@ class PycroFlowMainWindow(QMainWindow):
         self._build_tabs()
         self._build_statusbar()
         self._init_setup()
-        #: in-flight update-check worker (prevents concurrent checks).
-        self._update_worker = None
 
         # --- post-run replay recording (feature: scrub a finished run).
         # A recorder taps the live stream + polls progress/fluid state while a

@@ -76,6 +76,22 @@ class TestEnvReadWrite(_TmpEnv):
         self.assertNotIn("PAINT_REGISTRY_URL=old", body)
         self.assertIn("PYCROFLOW_SPILL_PORT=COM1", body)  # untouched
 
+    def test_write_env_collapses_duplicate_keys(self):
+        # A (malformed) .env with a repeated key: the update rewrites the first
+        # and the stale later duplicate is dropped, so the value can't be
+        # shadowed by the dupe on read.
+        ep = setup_core.env_path()
+        ep.write_text(
+            "PAINT_REGISTRY_URL=old1\nFOO=bar\nPAINT_REGISTRY_URL=old2\n",
+            encoding="utf-8",
+        )
+        setup_core.write_env({setup_core.ENV_REGISTRY_URL: "new"})
+        body = ep.read_text(encoding="utf-8")
+        self.assertEqual(body.count("PAINT_REGISTRY_URL="), 1)
+        self.assertIn("PAINT_REGISTRY_URL=new", body)
+        self.assertNotIn("old2", body)
+        self.assertIn("FOO=bar", body)  # unrelated key untouched
+
     def test_written_file_is_private(self):
         ep = setup_core.write_env({setup_core.ENV_SPILL_PORT: "COM9"})
         mode = stat.S_IMODE(os.stat(ep).st_mode)

@@ -222,25 +222,38 @@ class SetupWizard(QWizard):
         env_updates = {
             k: v.strip() for k, v in env_updates.items() if v.strip()
         }
+        # Each persistence step is guarded: commit() is called from the Qt
+        # summary page's initializePage, so a raise here would break the wizard
+        # UI — report the failure in the summary instead. The two writes are
+        # independent (connectivity .env vs the setup YAML); one failing does
+        # not abort the other.
         if env_updates:
-            path = setup_core.write_env(env_updates)
-            lines.append(
-                "Wrote {} connectivity variable(s) to {}".format(
-                    len(env_updates), path
+            try:
+                path = setup_core.write_env(env_updates)
+                lines.append(
+                    "Wrote {} connectivity variable(s) to {}".format(
+                        len(env_updates), path
+                    )
                 )
-            )
+            except Exception as exc:  # noqa: BLE001 - surfaced, not raised
+                lines.append("Could not write .env: {}".format(exc))
         else:
             lines.append("No connectivity variables set.")
 
         if self.page_setup.create.isChecked():
-            data = self.page_setup._build()
-            path = setup_core.save_setup(data["setup"], data)
-            self.created_setup = data["setup"]
-            lines.append("Saved setup {!r} to {}".format(data["setup"], path))
-            lines.append(
-                "Review the reservoir manifold / tubing in that file before a "
-                "real run."
-            )
+            try:
+                data = self.page_setup._build()
+                path = setup_core.save_setup(data["setup"], data)
+                self.created_setup = data["setup"]
+                lines.append(
+                    "Saved setup {!r} to {}".format(data["setup"], path)
+                )
+                lines.append(
+                    "Review the reservoir manifold / tubing in that file "
+                    "before a real run."
+                )
+            except Exception as exc:  # noqa: BLE001 - surfaced, not raised
+                lines.append("Could not save the setup: {}".format(exc))
         else:
             lines.append("No setup created.")
         return "\n\n".join(lines)

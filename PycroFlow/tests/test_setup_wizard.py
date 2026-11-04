@@ -98,6 +98,23 @@ class TestSetupWizardCommit(unittest.TestCase):
             self.assertFalse(wiz.page_setup.validatePage())
         self.assertGreaterEqual(warn.call_count, 2)
 
+    def test_commit_reports_save_failure_without_raising(self):
+        # commit() runs from the summary page's initializePage — a persistence
+        # failure must be reported in the summary, not raised into the Qt UI.
+        from PycroFlow import setup_core
+
+        wiz = self._wizard()
+        wiz.page_setup.create.setChecked(True)
+        wiz.page_setup.name.setText("FailRig")
+        wiz.page_setup.emulated.setChecked(True)
+        with mock.patch.object(
+            setup_core, "save_setup", side_effect=OSError("disk full")
+        ):
+            summary = wiz.commit()  # must not raise
+        self.assertIn("Could not save the setup", summary)
+        self.assertIn("disk full", summary)
+        self.assertIsNone(wiz.created_setup)
+
     def test_emulated_setup_needs_no_com(self):
         wiz = self._wizard()
         wiz.page_setup.create.setChecked(True)
