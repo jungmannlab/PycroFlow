@@ -127,6 +127,16 @@ class TestSetupDiscovery(unittest.TestCase):
         p = Path(self._tmp) / "elsewhere.yaml"
         self.assertEqual(configs._setup_file(str(p)), p)
 
+    def test_user_setup_path_always_targets_user_dir(self):
+        # Writes never go to the shipped/bundled dir (read-only / MEIPASS temp
+        # when frozen) — a built-in resolves to the user dir for forking.
+        self.assertEqual(
+            configs.user_setup_path("Emulator"),
+            str(Path(self._tmp) / "Emulator.yaml"),
+        )
+        # (contrast: setup_path for a built-in resolves to the package dir)
+        self.assertNotIn(self._tmp, configs.setup_path("Emulator"))
+
     def test_save_setup_roundtrip_and_backup(self):
         data = {"setup": "Saved", "emulated": False, "n": 1}
         dest = configs.save_setup("Saved", data)

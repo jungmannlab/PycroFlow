@@ -194,5 +194,23 @@ class TestConnectivityProbes(_TmpEnv):
         self.assertIsInstance(setup_core.enumerate_serial_ports(), list)
 
 
+class TestComAndSaveDir(unittest.TestCase):
+    def test_normalize_com_port_strips_com_prefix(self):
+        # The Hamilton driver prefixes "COM" itself -> store the bare number.
+        self.assertEqual(setup_core.normalize_com_port("COM3"), "3")
+        self.assertEqual(setup_core.normalize_com_port(" com3 "), "3")
+        self.assertEqual(setup_core.normalize_com_port("3"), "3")
+        self.assertEqual(setup_core.normalize_com_port("COM12"), "12")
+        # A non-COM value (POSIX / unusual) is returned stripped, unchanged.
+        self.assertEqual(
+            setup_core.normalize_com_port("/dev/ttyUSB0"), "/dev/ttyUSB0"
+        )
+
+    def test_default_save_dir_is_under_pycroflow_data(self):
+        d = setup_core.default_save_dir()
+        self.assertEqual(os.path.basename(d), "data")
+        self.assertEqual(os.path.basename(os.path.dirname(d)), "PycroFlow")
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

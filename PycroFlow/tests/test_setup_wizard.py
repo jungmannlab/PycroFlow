@@ -60,8 +60,9 @@ class TestSetupWizardCommit(unittest.TestCase):
         wiz.page_setup.template.setCurrentIndex(i)
         wiz.page_setup.name.setText("MyScope")
         wiz.page_setup.emulated.setChecked(False)
-        wiz.page_setup.com.setCurrentText("7")
+        wiz.page_setup.com.setCurrentText("COM7")  # -> normalized to '7'
         wiz.page_setup.monet_config.setText("MyScopeMonet")
+        wiz.page_conn.monet_token.setText("mtok")
 
         summary = wiz.commit()
 
@@ -70,11 +71,13 @@ class TestSetupWizardCommit(unittest.TestCase):
         env = setup_core.read_env()
         self.assertEqual(env["PAINT_REGISTRY_URL"], "http://reg:8000")
         self.assertEqual(env["PAINT_REGISTRY_TOKEN"], "tok")
+        self.assertEqual(env["PAINT_MONET_TOKEN"], "mtok")
         # The created setup is recorded as the default microscope (.env).
         self.assertEqual(env["PYCROFLOW_SETUP"], "MyScope")
         self.assertIn("MyScope", configs.list_setups())
         loaded = configs.load_setup("MyScope")
         self.assertEqual(loaded["setup"], "MyScope")
+        # Hamilton wants the bare number, not "COM7".
         self.assertEqual(loaded["fluid"]["pumps"]["interface"]["COM"], "7")
         self.assertEqual(loaded["illumination"]["config"], "MyScopeMonet")
 

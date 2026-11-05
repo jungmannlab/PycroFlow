@@ -44,6 +44,20 @@ StateObserver = Callable[[ExperimentState, ExperimentState], None]
 LogObserver = Callable[[str], None]
 
 
+def _run_save_dir(design) -> str:
+    """The run's output dir: the design's ``save_dir``, else the configured
+    default data dir (``PYCROFLOW_SAVE_DIR``, the wizard's data folder), else
+    the cwd. Keeps acquisitions out of the hidden per-user app dir the frozen
+    launcher ``chdir``s to; ``PYCROFLOW_SAVE_DIR`` unset leaves the cwd default
+    so dev/test runs are unaffected.
+    """
+    return (
+        (design or {}).get("save_dir")
+        or os.environ.get("PYCROFLOW_SAVE_DIR")
+        or "."
+    )
+
+
 class ExperimentService:
     """Frontend-facing API for running protocols.
 
@@ -174,7 +188,7 @@ class ExperimentService:
         import PycroFlow
 
         design = self._experiment_design or {}
-        save_dir = os.path.abspath(design.get("save_dir") or ".")
+        save_dir = os.path.abspath(_run_save_dir(design))
         try:
             PycroFlow.redirect_logging(save_dir)
         except Exception as exc:  # never fail a load over logging
@@ -206,7 +220,7 @@ class ExperimentService:
             return []
         stamp = datetime.now().strftime("%y%m%d-%H%M%S")
         base = design.get("base_name") or "experiment"
-        save_dir = os.path.abspath(design.get("save_dir") or ".")
+        save_dir = os.path.abspath(_run_save_dir(design))
         artifacts = [("design", design), ("run_sequence", self._protocol)]
         written = []
         try:
@@ -336,7 +350,7 @@ class ExperimentService:
             return
         design = self._experiment_design or {}
         try:
-            prepare(design.get("save_dir"), design.get("base_name"))
+            prepare(_run_save_dir(design), design.get("base_name"))
         except Exception as exc:  # noqa: BLE001 - never block the run on this
             logger.warning(
                 "could not prepare imaging save dir: {!r}".format(exc)

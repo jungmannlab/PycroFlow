@@ -491,11 +491,15 @@ class WebcamsTab(QWidget):
         ):
             return
         try:
-            path = configs.setup_path(name)
-            with open(path) as f:
+            # Read the current setup (user-local if present, else the shipped
+            # built-in) but WRITE to the user dir — so editing a built-in forks
+            # an editable copy there instead of writing to the read-only /
+            # wiped-on-exit bundled package dir (sys._MEIPASS) in the frozen GUI.
+            with open(configs.setup_path(name)) as f:
                 raw = yaml.safe_load(f) or {}
             self._apply_into(raw.setdefault("monitoring", {}))
-            with open(path, "w") as f:
+            configs.user_setups_dir().mkdir(parents=True, exist_ok=True)
+            with open(configs.user_setup_path(name), "w") as f:
                 yaml.safe_dump(raw, f, sort_keys=False)
         except Exception as exc:
             QMessageBox.critical(

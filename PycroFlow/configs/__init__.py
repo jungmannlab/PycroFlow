@@ -171,13 +171,28 @@ def list_setups():
 
 
 def setup_path(name):
-    """Return the on-disk path to a setup's YAML file.
+    """Return the on-disk path to a setup's YAML file for READING.
 
     ``name`` is a setup basename (resolved user-local-first, see
-    :func:`_setup_file`) or a path. Used by the GUI to write edited values
-    (e.g. camera device indices) back to the file.
+    :func:`_setup_file`) or a path. For *writing* edited values back use
+    :func:`user_setup_path` — a bare built-in resolves here to the shipped
+    package dir, which is read-only (and a wiped temp dir in the frozen GUI).
     """
     return str(_setup_file(name))
+
+
+def user_setup_path(name):
+    """Return the **user-dir** path a setup is written to (never the package).
+
+    Writes always go to :func:`user_setups_dir`, so editing a built-in setup
+    forks an editable copy there (which then shadows the built-in on load) and
+    nothing is ever written to the shipped/bundled dir — which is read-only, or
+    the wiped ``sys._MEIPASS`` unpack dir in the frozen one-file exe. A value
+    that is already a path is returned unchanged.
+    """
+    if Path(name).suffix != "":
+        return str(Path(name))
+    return str(user_setups_dir() / f"{name}.yaml")
 
 
 def load_setup_file(name):

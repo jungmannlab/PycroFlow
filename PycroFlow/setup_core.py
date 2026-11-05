@@ -35,10 +35,46 @@ from PycroFlow.envfile import repo_root_env_path
 ENV_REGISTRY_URL = "PAINT_REGISTRY_URL"
 ENV_REGISTRY_TOKEN = "PAINT_REGISTRY_TOKEN"
 ENV_MONET_CONFIG_PATHS = "MONET_CONFIG_PATHS"
+ENV_MONET_TOKEN = "PAINT_MONET_TOKEN"
 ENV_SPILL_PORT = "PYCROFLOW_SPILL_PORT"
 #: Default microscope setup the GUI pre-selects on launch (the toolbar combo is
 #: the microscope selector — there is no CLI arg). Written by the wizard.
 ENV_DEFAULT_SETUP = "PYCROFLOW_SETUP"
+#: Where user-local setups and acquisition data live (overridable per machine /
+#: pointable at a lab-shared network folder). Written by the wizard.
+ENV_SETUPS_DIR = "PYCROFLOW_SETUPS_DIR"
+ENV_SAVE_DIR = "PYCROFLOW_SAVE_DIR"
+
+
+def default_save_dir():
+    """An accessible default acquisition-output directory (editable later).
+
+    ``%USERPROFILE%\\Documents\\PycroFlow\\data`` on Windows, ``~/PycroFlow/data``
+    elsewhere — a visible, user-writable place, NOT the hidden per-user app dir
+    the frozen launcher chdirs to. The operator can repoint it (e.g. at a lab
+    network drive) in the wizard.
+    """
+    home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    docs = os.path.join(home, "Documents")
+    base = docs if os.path.isdir(docs) else home
+    return os.path.join(base, "PycroFlow", "data")
+
+
+def normalize_com_port(value):
+    """Return the bare serial-port number a Hamilton ``interface.COM`` wants.
+
+    The Hamilton PSD/MVP driver builds the OS port name by prefixing ``COM`` to
+    this value, so it must be the number alone (``'3'``), not ``'COM3'``. The
+    wizard's port picker shows pyserial device names (``COM3``) and operators
+    type either form — strip a leading ``COM`` (case-insensitive) + whitespace
+    so ``'COM3'`` / ``' com3 '`` / ``'3'`` all become ``'3'``. A non-COM value
+    (e.g. a POSIX ``/dev/ttyUSB0`` in tests) is returned stripped, unchanged.
+    """
+    s = str(value).strip()
+    if s[:3].upper() == "COM":
+        return s[3:].strip()
+    return s
+
 
 #: Default template the wizard clones a new setup from (a shipped built-in).
 DEFAULT_TEMPLATE = "Template"
