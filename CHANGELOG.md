@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **QC hand-off degrades cleanly with an outdated registry client.** An older
+  `picasso-registry` `BufferedRegistryClient` has no `mark_ready()`, which made
+  `qc_gate_mark_ready` log a confusing `AttributeError` on **every** FOV. It now
+  detects the missing method, logs a single actionable warning per process
+  ("update picasso-registry"), and disables the cluster hand-off for the
+  session without touching the run.
+
 ## [0.3.1] - 2026-11-04
 
 Hotfix for the v0.3.0 Windows installer: the GUI crashed on first launch.

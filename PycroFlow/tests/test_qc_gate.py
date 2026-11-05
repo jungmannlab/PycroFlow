@@ -159,6 +159,27 @@ class TestQcGateMarkReady(unittest.TestCase):
         self.assertFalse(v["readied"])
         self.assertEqual(reg.calls, 1)
 
+    def test_client_without_mark_ready_degrades_cleanly(self):
+        # An outdated picasso-registry client has no mark_ready(): the gate
+        # must not raise (previously an AttributeError per FOV), the run passes
+        # QC but is not readied, and it degrades quietly.
+        import PycroFlow.live_analysis.qc_gate as qcg
+
+        qcg._WARNED_NO_MARK_READY = False  # reset the once-per-process flag
+
+        class _OldClient:  # no mark_ready attribute at all
+            pass
+
+        v = qc_gate_mark_ready(
+            _OldClient(),
+            acquisition_run_id="run1",
+            metrics={"n_locs": 500},
+            thresholds=QcThresholds(),
+        )
+        self.assertTrue(v["passed"])
+        self.assertFalse(v["readied"])
+        self.assertTrue(qcg._WARNED_NO_MARK_READY)  # warned once
+
     def test_incomplete_coverage_fails_gate(self):
         reg = _RecordingRegistry()
         v = qc_gate_mark_ready(
