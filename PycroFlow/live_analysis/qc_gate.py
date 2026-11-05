@@ -25,6 +25,11 @@ from dataclasses import dataclass
 
 from loguru import logger
 
+# Logged at most once per process: a registry client that predates
+# ``mark_ready`` (an outdated picasso-registry) would otherwise log a confusing
+# AttributeError on EVERY FOV. See qc_gate_mark_ready.
+_WARNED_NO_MARK_READY = False
+
 
 @dataclass
 class QcThresholds:
@@ -188,8 +193,25 @@ def qc_gate_mark_ready(
         # Registry disabled: the gate is a no-op (byte-identical to today).
         return verdict
 
+    # An outdated picasso-registry client has no mark_ready(). That's a
+    # version/config issue, not a per-FOV runtime fault — surface it ONCE with
+    # an actionable message instead of an AttributeError on every FOV, and
+    # degrade cleanly (hand-off disabled; the run is unaffected).
+    mark_ready = getattr(registry, "mark_ready", None)
+    if not callable(mark_ready):
+        global _WARNED_NO_MARK_READY
+        if not _WARNED_NO_MARK_READY:
+            _WARNED_NO_MARK_READY = True
+            logger.warning(
+                "QC gate: the registry client has no mark_ready() — the "
+                "cluster hand-off is DISABLED this session. Update "
+                "picasso-registry (the pinned client predates mark_ready). "
+                "Logged once per process."
+            )
+        return verdict  # readied stays False; run unaffected
+
     try:
-        registry.mark_ready(
+        mark_ready(
             acquisition_run_id,
             analysis_run_id=analysis_run_id,
             detail={"gate": "rule", "metrics": verdict["metrics"]},

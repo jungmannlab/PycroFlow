@@ -44,6 +44,27 @@ StateObserver = Callable[[ExperimentState, ExperimentState], None]
 LogObserver = Callable[[str], None]
 
 
+def _run_save_dir(design, default="."):
+    """The run's output dir: the design's ``save_dir``, else the configured
+    default data dir (``PYCROFLOW_SAVE_DIR``, the wizard's data folder), else
+    ``default``. Keeps acquisitions out of the hidden per-user app dir the
+    frozen launcher ``chdir``s to; ``PYCROFLOW_SAVE_DIR`` unset leaves the cwd
+    default so dev/test runs are unaffected.
+
+    ``default`` is ``"."`` for consumers that resolve a concrete path
+    themselves (logging redirect, artifact write). The imaging ``prepare_savedir``
+    call passes ``default=None`` so an unset save_dir stays falsy and its own
+    ``config['save_dir']`` fallback (the setup's configured acquisition folder)
+    still wins — coercing to ``"."`` here would suppress it and dump raw data in
+    the cwd.
+    """
+    return (
+        (design or {}).get("save_dir")
+        or os.environ.get("PYCROFLOW_SAVE_DIR")
+        or default
+    )
+
+
 class ExperimentService:
     """Frontend-facing API for running protocols.
 
@@ -174,7 +195,7 @@ class ExperimentService:
         import PycroFlow
 
         design = self._experiment_design or {}
-        save_dir = os.path.abspath(design.get("save_dir") or ".")
+        save_dir = os.path.abspath(_run_save_dir(design))
         try:
             PycroFlow.redirect_logging(save_dir)
         except Exception as exc:  # never fail a load over logging
@@ -206,7 +227,7 @@ class ExperimentService:
             return []
         stamp = datetime.now().strftime("%y%m%d-%H%M%S")
         base = design.get("base_name") or "experiment"
-        save_dir = os.path.abspath(design.get("save_dir") or ".")
+        save_dir = os.path.abspath(_run_save_dir(design))
         artifacts = [("design", design), ("run_sequence", self._protocol)]
         written = []
         try:
@@ -336,7 +357,13 @@ class ExperimentService:
             return
         design = self._experiment_design or {}
         try:
-            prepare(design.get("save_dir"), design.get("base_name"))
+            # default=None: an unset save_dir must stay falsy so
+            # prepare_savedir's own config['save_dir'] fallback wins (coercing
+            # to "." would dump raw data in the cwd).
+            prepare(
+                _run_save_dir(design, default=None),
+                design.get("base_name"),
+            )
         except Exception as exc:  # noqa: BLE001 - never block the run on this
             logger.warning(
                 "could not prepare imaging save dir: {!r}".format(exc)

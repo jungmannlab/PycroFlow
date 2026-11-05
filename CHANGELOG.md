@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-05
+
+Rig-feedback hotfix for the v0.3.1 installer: the first on-rig test of the
+installed GUI surfaced four setup-wizard issues (setups written to the wiped
+unpack dir, the Hamilton COM port stored with its `COM` prefix, acquisition
+data defaulting into the hidden per-user app dir, and the monet auth token not
+being captured).
+
+### Fixed
+
+- **Setup-wizard rig fixes (first on-rig test of the installed GUI).**
+  - *Setups saved to an obscure unpack dir.* Editing a built-in setup's
+    cameras in the Webcams tab wrote via `configs.setup_path`, which for a
+    bundled setup resolves to the read-only / wiped `sys._MEIPASS` package dir
+    in the frozen GUI. It now forks-on-write to the user setups dir
+    (`configs.user_setup_path`) and that dir is configurable — the wizard's new
+    "setups folder" field (and `PYCROFLOW_SETUPS_DIR`) can point it at a
+    lab-shared network folder so setups are stored centrally, not lost locally.
+  - *Hamilton COM port stored as `COM3` instead of `3`.* The Hamilton PSD/MVP
+    driver prefixes `COM` itself, so `interface.COM` must be the bare number.
+    The wizard now runs the port field through `setup_core.normalize_com_port`,
+    stripping a leading `COM` (so `COM3` / `com3` / `3` all persist as `3`).
+  - *Acquisition data defaulted into the hidden per-user app dir.* The frozen
+    launcher `chdir`s to `%LOCALAPPDATA%\PycroFlow`, so a relative `save_dir`
+    landed there. A run's output dir now falls back to `PYCROFLOW_SAVE_DIR`
+    when the design omits `save_dir`, and the wizard's new "data (acquisition)
+    folder" field defaults it to a visible `~/Documents/PycroFlow/data` (editable,
+    e.g. to a lab drive). When neither is set, the imaging system's own
+    `config['save_dir']` (the setup's configured acquisition folder) is still
+    honoured before the cwd — the fallback is only widened, never overridden.
+
+### Added
+
+- **Setup wizard: monet auth token + storage-folder fields.** The connectivity
+  page now captures the monet server bearer token (`PAINT_MONET_TOKEN`) and the
+  setups / acquisition-data folders (`PYCROFLOW_SETUPS_DIR` / `PYCROFLOW_SAVE_DIR`,
+  applied to the live process on commit so same-session saves honour them). The
+  monet server URL is intentionally not asked here — it lives in the monet
+  config's `database` field. Documented in `.env.template`.
+
+- **QC hand-off degrades cleanly with an outdated registry client.** An older
+  `picasso-registry` `BufferedRegistryClient` has no `mark_ready()`, which made
+  `qc_gate_mark_ready` log a confusing `AttributeError` on **every** FOV. It now
+  detects the missing method, logs a single actionable warning per process
+  ("update picasso-registry"), and disables the cluster hand-off for the
+  session without touching the run.
+
 ## [0.3.1] - 2026-11-04
 
 Hotfix for the v0.3.0 Windows installer: the GUI crashed on first launch.
