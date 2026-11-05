@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-05
+
+Second rig-feedback hotfix: the installed v0.3.2 GUI still resolved the setups
+folder to the bundled test fixtures (`...\_MEIxxxx\PycroFlow\tests\fixtures\setups`)
+and offered the test-only Mercury/Ibidi rigs as templates (which failed to
+clone). Adds a "Test monet" connectivity probe to the wizard.
+
 ### Fixed
 
 - **Frozen GUI still wrote setups into the bundled test-fixtures dir**
