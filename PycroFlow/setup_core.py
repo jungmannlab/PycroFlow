@@ -349,21 +349,34 @@ def check_monet(
                     )
                 ),
             }
+    # check_server_auth reads the token from PAINT_MONET_TOKEN, so set it for
+    # the probe only — then restore, so a trial token typed here (and not
+    # committed) doesn't linger in the process for later monet calls.
+    _prev_token = os.environ.get(ENV_MONET_TOKEN)
     if token:
         os.environ[ENV_MONET_TOKEN] = token
     try:
         from monet import io as monet_io
 
         res = monet_io.check_server_auth(url, timeout=timeout)
+        # Guard the shape too, so a (contract-breaking) non-dict return can't
+        # escape as an AttributeError — the probe must never raise.
+        res = res if isinstance(res, dict) else {}
+        return {
+            "ok": bool(res.get("ok")),
+            "detail": res.get("detail") or str(res) or "no detail",
+        }
     except Exception as exc:  # noqa: BLE001 - a probe failure isn't fatal
         return {
             "ok": False,
             "detail": "monet server probe failed ({!r})".format(exc),
         }
-    return {
-        "ok": bool(res.get("ok")),
-        "detail": res.get("detail") or str(res),
-    }
+    finally:
+        if token:
+            if _prev_token is None:
+                os.environ.pop(ENV_MONET_TOKEN, None)
+            else:
+                os.environ[ENV_MONET_TOKEN] = _prev_token
 
 
 def validate_setup(data: dict) -> list:
