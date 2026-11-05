@@ -940,6 +940,23 @@ class TestRunSaveDir(unittest.TestCase):
             os.environ.pop("PYCROFLOW_SAVE_DIR", None)
             self.assertEqual(_run_save_dir({}), ".")  # dev/test unaffected
 
+    def test_default_none_preserves_imaging_config_fallback(self):
+        # The imaging prepare_savedir call passes default=None so an unset
+        # save_dir stays falsy and prepare_savedir's own config['save_dir']
+        # fallback wins — coercing to "." would suppress it (raw data -> cwd).
+        import os
+        from unittest import mock
+        from PycroFlow.services.experiment_service import _run_save_dir
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PYCROFLOW_SAVE_DIR", None)
+            self.assertIsNone(_run_save_dir({}, default=None))
+            # env default still wins over the None fallback when set
+            os.environ["PYCROFLOW_SAVE_DIR"] = "/data"
+            self.assertEqual(_run_save_dir({}, default=None), "/data")
+        # an explicit design save_dir always wins regardless of default
+        self.assertEqual(_run_save_dir({"save_dir": "/x"}, default=None), "/x")
+
 
 if __name__ == "__main__":
     unittest.main()

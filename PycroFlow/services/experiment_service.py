@@ -44,17 +44,24 @@ StateObserver = Callable[[ExperimentState, ExperimentState], None]
 LogObserver = Callable[[str], None]
 
 
-def _run_save_dir(design) -> str:
+def _run_save_dir(design, default="."):
     """The run's output dir: the design's ``save_dir``, else the configured
     default data dir (``PYCROFLOW_SAVE_DIR``, the wizard's data folder), else
-    the cwd. Keeps acquisitions out of the hidden per-user app dir the frozen
-    launcher ``chdir``s to; ``PYCROFLOW_SAVE_DIR`` unset leaves the cwd default
-    so dev/test runs are unaffected.
+    ``default``. Keeps acquisitions out of the hidden per-user app dir the
+    frozen launcher ``chdir``s to; ``PYCROFLOW_SAVE_DIR`` unset leaves the cwd
+    default so dev/test runs are unaffected.
+
+    ``default`` is ``"."`` for consumers that resolve a concrete path
+    themselves (logging redirect, artifact write). The imaging ``prepare_savedir``
+    call passes ``default=None`` so an unset save_dir stays falsy and its own
+    ``config['save_dir']`` fallback (the setup's configured acquisition folder)
+    still wins — coercing to ``"."`` here would suppress it and dump raw data in
+    the cwd.
     """
     return (
         (design or {}).get("save_dir")
         or os.environ.get("PYCROFLOW_SAVE_DIR")
-        or "."
+        or default
     )
 
 
@@ -350,7 +357,13 @@ class ExperimentService:
             return
         design = self._experiment_design or {}
         try:
-            prepare(_run_save_dir(design), design.get("base_name"))
+            # default=None: an unset save_dir must stay falsy so
+            # prepare_savedir's own config['save_dir'] fallback wins (coercing
+            # to "." would dump raw data in the cwd).
+            prepare(
+                _run_save_dir(design, default=None),
+                design.get("base_name"),
+            )
         except Exception as exc:  # noqa: BLE001 - never block the run on this
             logger.warning(
                 "could not prepare imaging save dir: {!r}".format(exc)

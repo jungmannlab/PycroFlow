@@ -34,7 +34,9 @@ being captured).
     landed there. A run's output dir now falls back to `PYCROFLOW_SAVE_DIR`
     when the design omits `save_dir`, and the wizard's new "data (acquisition)
     folder" field defaults it to a visible `~/Documents/PycroFlow/data` (editable,
-    e.g. to a lab drive).
+    e.g. to a lab drive). When neither is set, the imaging system's own
+    `config['save_dir']` (the setup's configured acquisition folder) is still
+    honoured before the cwd — the fallback is only widened, never overridden.
 
 ### Added
 
