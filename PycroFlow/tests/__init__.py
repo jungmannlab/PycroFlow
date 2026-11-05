@@ -19,6 +19,7 @@ $ python -m unittest -v
 import atexit
 import os
 import shutil
+import sys
 import tempfile
 
 # Install vendor-SDK mocks BEFORE any test module is discovered/imported, so
@@ -33,11 +34,26 @@ install_hardware_mocks()
 # (only emulated setups + a template are) — they live as test fixtures now.
 # Point setup discovery at them so tests that exercise the non-emulated path
 # (`load_setup('Mercury')` etc.) keep working; this also gives the user-local
-# setup-discovery mechanism real coverage. Set unconditionally for determinism;
-# the user-setups unit tests override it with their own tempdir.
-os.environ["PYCROFLOW_SETUPS_DIR"] = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "fixtures", "setups")
-)
+# setup-discovery mechanism real coverage.
+#
+# CAUTION: production imports this package — `SystemService.load_setup` does
+# `import PycroFlow.tests.emulators` for the shipped Emulator setups — so this
+# assignment must NOT clobber a real app's setups dir (that would redirect it to
+# the bundled, read-only fixtures: the exact bug where a frozen GUI wrote setups
+# to `...\_MEIxxxx\PycroFlow\tests\fixtures\setups`). Guard it:
+#   * never in a frozen (PyInstaller) build — `sys.frozen` is set there; and
+#   * only via setdefault, so an operator/app/.env choice always wins.
+# In a from-source test run `PYCROFLOW_SETUPS_DIR` is unset, so the suite still
+# gets the fixtures deterministically. The GUI entry point (`gui/app.py`)
+# anchors `PYCROFLOW_SETUPS_DIR` to the real user dir before any emulator
+# import, so a pip-installed GUI is covered too.
+if not getattr(sys, "frozen", False):
+    os.environ.setdefault(
+        "PYCROFLOW_SETUPS_DIR",
+        os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "fixtures", "setups")
+        ),
+    )
 
 
 TEST_FIXTURES_DIR = os.path.abspath(
