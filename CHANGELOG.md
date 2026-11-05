@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-05
+
+Rig-feedback hotfix for the v0.3.1 installer: the first on-rig test of the
+installed GUI surfaced four setup-wizard issues (setups written to the wiped
+unpack dir, the Hamilton COM port stored with its `COM` prefix, acquisition
+data defaulting into the hidden per-user app dir, and the monet auth token not
+being captured).
+
 ### Fixed
 
 - **Setup-wizard rig fixes (first on-rig test of the installed GUI).**
