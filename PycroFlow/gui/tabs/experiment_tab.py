@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QPlainTextEdit,
     QFileDialog,
+    QInputDialog,
     QGroupBox,
     QTableWidget,
     QTableWidgetItem,
@@ -68,6 +69,15 @@ _CAN_START = {
     ExperimentState.LOADED,
     ExperimentState.ORCHESTRATING,
     ExperimentState.PAUSED,
+    ExperimentState.FINISHED,
+    ExperimentState.ABORTED,
+}
+# Start-at-round launches a FRESH run that begins partway through the loaded
+# sequence (resume-after-abort / re-run from round N). Only offered from the
+# non-running states — the orchestrator reads its start index once, when the
+# handler threads enter run_protocol, so a mid-run jump is a separate feature.
+_CAN_START_AT_ROUND = {
+    ExperimentState.LOADED,
     ExperimentState.FINISHED,
     ExperimentState.ABORTED,
 }
@@ -244,6 +254,9 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.load_btn = QPushButton("Load run sequence…")
         self.clear_btn = QPushButton("Clear")
         self.start_btn = QPushButton("Start")
+        # Launch a fresh run that begins partway through the sequence (resume
+        # after an abort / re-run from a chosen round).
+        self.start_at_btn = QPushButton("Start at round…")
         # One button toggles Pause/Resume depending on the run state.
         self.pause_resume_btn = QPushButton("Pause")
         self.abort_btn = QPushButton("Abort")
@@ -251,6 +264,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
             self.load_btn,
             self.clear_btn,
             self.start_btn,
+            self.start_at_btn,
             self.pause_resume_btn,
             self.abort_btn,
         ):
@@ -439,6 +453,7 @@ class ExperimentTab(YamlDropMixin, QWidget):
         self.load_btn.clicked.connect(self._on_load)
         self.clear_btn.clicked.connect(self._on_clear)
         self.start_btn.clicked.connect(self._on_start)
+        self.start_at_btn.clicked.connect(self._on_start_at_round)
         self.pause_resume_btn.clicked.connect(self._on_pause_resume)
         self.abort_btn.clicked.connect(self._on_abort)
 
@@ -462,6 +477,9 @@ class ExperimentTab(YamlDropMixin, QWidget):
             self._service.clear_protocol()
 
     def _on_start(self):
+        self._launch_run()
+
+    def _launch_run(self, system_steps=None):
         # Refuse to launch a hand-edited sequence that would hang (orphan /
         # circular wait). Scoped to edited sequences so un-edited runs behave
         # exactly as before (the service applies the same scoping as a
@@ -481,9 +499,52 @@ class ExperimentTab(YamlDropMixin, QWidget):
             )
             return
         try:
-            self._service.start()
+            self._service.start(system_steps=system_steps)
         except Exception as exc:
             QMessageBox.critical(self, "Could not start run", "{}".format(exc))
+
+    def _on_start_at_round(self):
+        # Launch a fresh run that SKIPS everything before a chosen round. The
+        # skipped fluidic/illumination steps do NOT run — the operator asserts
+        # the sample already holds that round's state (resume after an abort).
+        # Skipped cross-subsystem signals are pre-seeded by the orchestrator so
+        # the run doesn't deadlock waiting on an emission that never happens.
+        names = self._round_names
+        if len(names) < 2:
+            return
+        labels = [
+            "Round {}{}".format(r + 1, ": {}".format(n) if n else "")
+            for r, n in enumerate(names)
+        ]
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Start at round",
+            "Begin the run at the start of which round?\n(Rounds before it "
+            "will be skipped — they will NOT run.)",
+            labels,
+            1,  # default to round 2 — starting at round 1 is just Start
+            editable=False,
+        )
+        if not ok:
+            return
+        round_index = labels.index(choice)
+        targets = self._goto_targets(round_index)
+        reply = QMessageBox.warning(
+            self,
+            "Start at {}?".format(choice),
+            "The run will begin at the start of {}.\n\n"
+            "Rounds before it will be SKIPPED — their fluidics, imaging and "
+            "illumination steps will NOT run. Make sure the sample already "
+            "physically holds this round's state (the right imager injected, "
+            "powers set) before continuing.\n\nStart the run here?".format(
+                choice
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._launch_run(system_steps=targets)
 
     def _on_pause_resume(self):
         if self._service.state is ExperimentState.RUNNING:
@@ -503,11 +564,17 @@ class ExperimentTab(YamlDropMixin, QWidget):
         """Load a Run Sequence YAML dropped onto the tab."""
         self.load_protocol_path(path)
 
+    def _can_start_at_round(self, state):
+        """Whether "Start at round…" is offered: a startable state with a
+        choice of rounds (more than one) to begin from."""
+        return state in _CAN_START_AT_ROUND and len(self._round_names) > 1
+
     def _refresh_controls(self, state):
         """Enable/disable + relabel the run controls for the given state."""
         self.load_btn.setEnabled(state in _CAN_LOAD)
         self.clear_btn.setEnabled(state in _CAN_CLEAR)
         self.start_btn.setEnabled(state in _CAN_START)
+        self.start_at_btn.setEnabled(self._can_start_at_round(state))
         self.abort_btn.setEnabled(state in _CAN_ABORT)
         # Centring on the current step only makes sense while one is running.
         self.center_btn.setEnabled(state in _ACTIVE_STATES)
@@ -618,6 +685,12 @@ class ExperimentTab(YamlDropMixin, QWidget):
             (design.get("fluid") or {}).get("settings") or {}
         ).get("reservoir_names") or {}
         self._populate_goto_combo()
+        # _round_names is only known now; refresh the start-at-round button
+        # (its enablement depends on the round count, and _refresh_controls
+        # runs before this on the LOADED transition, with stale names).
+        self.start_at_btn.setEnabled(
+            self._can_start_at_round(self._service.state)
+        )
         self._refresh_durations(protocol)
         self._overall_sw.reset()
         self._round_sw.reset()

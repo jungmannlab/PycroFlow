@@ -29,6 +29,16 @@ from PycroFlow.tests._mock_hardware import install_hardware_mocks
 
 install_hardware_mocks()
 
+# The real-rig setups (Mercury, Ibidi) are no longer shipped in the package
+# (only emulated setups + a template are) — they live as test fixtures now.
+# Point setup discovery at them so tests that exercise the non-emulated path
+# (`load_setup('Mercury')` etc.) keep working; this also gives the user-local
+# setup-discovery mechanism real coverage. Set unconditionally for determinism;
+# the user-setups unit tests override it with their own tempdir.
+os.environ["PYCROFLOW_SETUPS_DIR"] = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "fixtures", "setups")
+)
+
 
 TEST_FIXTURES_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, "TestData")

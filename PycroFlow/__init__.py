@@ -182,7 +182,12 @@ def setup_logging(
             diagnose=False,
             serialize=False,
         )
-    logger.add(sys.stderr, format=_LOG_FORMAT, level=stderr_level)
+    # A windowed (``console=False``) PyInstaller build double-clicked with no
+    # console has ``sys.stderr is None``; loguru rejects a None sink
+    # ("Cannot log to objects of type 'NoneType'"), so only add the stderr sink
+    # when there is a real stream (the file sinks above are unaffected).
+    if sys.stderr is not None:
+        logger.add(sys.stderr, format=_LOG_FORMAT, level=stderr_level)
     _LOGGING_CONFIGURED = True
     install_excepthooks()
 

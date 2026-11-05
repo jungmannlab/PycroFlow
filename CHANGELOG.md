@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-04
+
+Hotfix for the v0.3.0 Windows installer: the GUI crashed on first launch.
+
+### Fixed
+
+- **Installed GUI crashed on first launch** (`Cannot log to objects of type
+  'NoneType'`). A windowed (`console=False`) PyInstaller exe double-clicked with
+  no console has `sys.stderr is None`, and `setup_logging` tried to add it as a
+  loguru sink. The stderr sink is now skipped when there's no real stream (file
+  logs unaffected), and the frozen launcher (`packaging/pycroflow_gui.py`) also
+  redirects a `None` `sys.stdout`/`sys.stderr` to a file in the per-user dir so
+  `print()` can't crash startup either.
+- **Frozen GUI wrote `.env` / resolved setups to the wiped unpack dir.** The
+  launcher now sets `PYCROFLOW_HOME` (not just `chdir`), so `setup_core.env_path`
+  and `configs.user_setups_dir` both resolve to the persistent per-user dir —
+  the setup wizard's `.env` + setups now land where the app reads them.
+
+### Added
+
+- **`PYCROFLOW_SETUP` — default microscope on launch.** The GUI pre-selects the
+  setup named by `PYCROFLOW_SETUP` (the toolbar combo is the microscope
+  selector; there is no CLI arg), and the setup wizard records the setup it
+  creates there — so a fresh install connects to the right rig next launch
+  (like monet's `MONET_MICROSCOPE`). Documented in `.env.template`.
+
+## [0.3.0] - 2026-11-04
+
+First release carrying the **Windows installer + release pipeline**, the
+**user-local setups + first-run setup wizard**, the **Help menu** (About /
+License / Check for Updates), **registry setup-provenance stamping**, and the
+**monet 0.6.13** bump — on top of the picasso-1.0 migration and the live slice
+shipped in 0.2.0. Hosted CI now runs a Python 3.11–3.14 matrix.
+
 ### Fixed
 
 - **QC hand-off degrades cleanly with an outdated registry client.** An older
@@ -52,6 +86,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Bump the `monet` pin to `v0.6.13`** (`[hardware]` extra, from `v0.4.2`).
+  monet drives the lasers via its in-process API and is co-packaged into the
+  Windows installer, so the frozen `pycroflow-gui.exe` now ships monet 0.6.13.
+  PycroFlow's monet surface (`CONFIGS` / `PROTOCOLS` / `LASER_TAG`,
+  `control.IlluminationLaserControl`, `io.check_server_auth`, `gui`,
+  `beampath.pycrocore`) is unchanged across the bump.
 - **Cap `PyQt6<6.12` in the `[gui]` extra.** The PyQt6-Qt6 6.12.0 native
   libraries SIGSEGV on the offscreen Qt platform when the event loop is pumped
   with a running `QThread`; stay on 6.11.x until a 6.12.x fixes it.
@@ -68,6 +108,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Registry setup stamping (dataset ↔ rig-config provenance).** On a run with
+  live analysis, each `acquisition_run` record now references the active
+  microscope setup: `microscope_id` (the setup name), `config_yaml` (the full
+  setup YAML, verbatim), and `extra.setup_sha256` (a SHA-256 "version" of that
+  YAML) — so a dataset in picasso-registry points at the exact, content-addressed
+  rig config that produced it, even though setups are now user-local and
+  uncommitted. Computed once per run (`registry_payload.setup_acquisition_fields`,
+  from `configs.setup_path`) and best-effort (unknown/unreadable setup ⇒ no
+  stamp, never blocks a run). A deduplicating `/setup_config` registry endpoint
+  (so many runs reference one versioned row instead of repeating the YAML) is a
+  planned follow-up in picasso-registry.
+- **Help menu — About / License / Check for Updates (monet-style).** The GUI
+  main window gains a **Help** menu: *About PycroFlow* (version, © Jungmann Lab
+  MPI of Biochemistry, author, clickable GitHub link), *License* (the full
+  `LICENSE.md` in a scrollable dialog, with a pointer fallback for frozen
+  builds), and *Check for Updates…* — a new `PycroFlow.updates` module queries
+  the public GitHub Releases API for the latest `vX.Y.Z` tag and compares it to
+  the installed `__version__` (PEP 440 via `packaging`, numeric-tuple fallback).
+  The check runs off the GUI thread (`run_in_background`), never raises (offline
+  → a friendly warning with the Releases link), and never nags an untagged /
+  editable source build. Pairs with the new installer + release pipeline.
+- **First-run setup wizard (monet-style onboarding).** A Qt wizard
+  (`gui/setup_wizard.py` over the headless, testable `setup_core.py`) guides a
+  fresh install through cross-project **connectivity** (picasso-registry
+  URL/token with a "Test registry" probe, monet config paths, spill-sensor port
+  → written to a private, gitignored, `0600` `.env`) and creating a **microscope
+  setup** by cloning a shipped `Template.yaml` and naming it for the rig (saved
+  user-local via `configs.save_setup`). It auto-opens once on an unconfigured
+  machine (`setup_core.first_run()` — no `.env` and no user setups) and is
+  re-runnable from the toolbar's **"Setup Wizard…"** action; creating a setup
+  refreshes + selects it in the setup combo. The deeper hardware topology (full
+  reservoir manifold + tubing) is cloned from the template as-is for now — the
+  wizard says to review it in the saved YAML. Builds on the user-local setup
+  storage below.
+- **User-local microscope setups (community-friendly configuration).** A real
+  setup describes one lab's specific rig, so setups are no longer committed to
+  the package. `configs.user_setups_dir()` resolves a per-user directory
+  (`PYCROFLOW_SETUPS_DIR` env override → `<PYCROFLOW_HOME>/setups` →
+  `%LOCALAPPDATA%\PycroFlow\setups` on Windows / `$XDG_CONFIG_HOME/PycroFlow/setups`
+  on POSIX); `configs.list_setups()` returns the **union** of the shipped
+  built-ins and the user-local setups; `configs.load_setup()` /
+  `configs.setup_path()` resolve **user-local-first** (a user setup shadows a
+  built-in of the same name); and new `configs.save_setup(name, data)` writes a
+  setup into the user dir atomically (with a `.bak` backup) — the write seam the
+  upcoming setup wizard will use. Only the emulated setups (`Emulator`,
+  `EmulatorCam`, `IbidiEmulator`) still ship; the former committed real rigs
+  `Mercury` / `Ibidi` moved to `tests/fixtures/setups/` (discovered via
+  `PYCROFLOW_SETUPS_DIR` in the test bootstrap) so the non-emulated path keeps
+  its coverage. First step toward the monet-style setup wizard. **Existing rigs:
+  copy your `<name>.yaml` into the new user setups dir (it is no longer shipped
+  in the wheel).**
+- **Tag-triggered Windows release pipeline (installer + portable exe).** A new
+  `Release — Windows GUI installer` workflow (`.github/workflows/release-windows.yml`)
+  fires on a `vX.Y.Z` tag push (or manual `workflow_dispatch` dry run): it
+  installs `.[gui,hardware,monitoring]`, freezes the GUI into a one-file
+  `pycroflow-gui.exe` with PyInstaller (`packaging/pycroflow-gui.spec` +
+  `packaging/pycroflow_gui.py` launcher — sets a persistent per-user dir for
+  `.env`/logs, bundles the embedded monet tab and the hardware SDKs, and exposes
+  `--selfcheck` so CI verifies the frozen bundle imports headlessly), wraps it
+  in an Inno Setup installer (`packaging/pycroflow-gui.iss` → per-user Start-menu
+  install, no admin), and attaches both to the GitHub Release for the tag. This
+  converges PycroFlow onto monet's packaging route (the two are the Full-
+  Automation Windows rig-control GUIs; PycroFlow embeds monet's window as a tab)
+  rather than picasso-workflow's cross-platform conda `constructor` route. The
+  installer shows the project licence on its first page.
+- **BSD 2-clause licence (`LICENSE.md`).** Adds the project licence file (the
+  same BSD 2-clause text as the sibling `monet` repo, © Heinrich Grabmayr) and
+  corrects the package metadata to match it — `pyproject.toml` previously
+  declared `license = {text = "MIT"}` with an MIT classifier but shipped no
+  licence file; it now points at `LICENSE.md` with the BSD classifier.
+- **Start a run at a chosen round (resume after an abort).** The Run Sequence
+  tab has a new **"Start at round…"** button (offered from loaded / finished /
+  aborted, when the sequence has more than one round): pick a round, confirm a
+  warning that the earlier rounds will be skipped and the sample must already
+  hold that round's state, and the run launches part-way through. The
+  orchestrator reads a per-subsystem start index (`start_protocol(system_steps=…)`
+  → `_consume_start_index`) and, crucially, **pre-fires the cross-subsystem
+  signals the skipped steps would have emitted** (`_preseed_signals`) so a later
+  subsystem waiting on a pre-start signal wakes immediately instead of
+  deadlocking on an emission that now never happens. Skipped fluidic /
+  illumination steps do NOT run — this is an operator-asserted resume, not a
+  replay of the earlier rounds. Normal `Start` is unchanged (empty
+  `system_steps` ⇒ begins at index 0).
 - **Experiment-design cleaning section.** The free-text `cleaning_reservoirs`
   list is replaced by a structured `cleaning` block (`CleaningSettings` in
   `schemas/experiment_design.py`): add/remove **cleaning-round** dropdown rows

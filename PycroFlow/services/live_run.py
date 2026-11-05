@@ -94,6 +94,10 @@ class LiveRunCoordinator:
         self._experiment_id: str | None = None
         self._camera_info: dict = {}
         self._options: dict = {}
+        # Setup-provenance fields (microscope_id / config_yaml / sha256) stamped
+        # onto each FOV's acquisition_run; computed once per run from the active
+        # setup. Empty when no setup / unreadable (stamping is best-effort).
+        self._setup_acq_fields: dict = {}
         # Per-FOV pipeline: the acquisition thread enqueues (cfg, name)
         # tasks; one consumer thread runs them in order (see module
         # docstring). _last_cfg is the most recently enqueued config — the
@@ -204,6 +208,13 @@ class LiveRunCoordinator:
         self._experiment_id = self._log_experiment(
             design, setup_name, sequence_modified
         )
+        # Content-hash the active setup once; stamped onto each acquisition_run
+        # so a dataset references the exact rig config that produced it.
+        from PycroFlow.live_analysis.registry_payload import (
+            setup_acquisition_fields,
+        )
+
+        self._setup_acq_fields = setup_acquisition_fields(setup_name)
         # One consumer for the whole run: FOVs never overlap, and the
         # acquisition thread never joins anything.
         self._fov_tasks = queue.Queue()
@@ -279,6 +290,7 @@ class LiveRunCoordinator:
         self._seam_client = None
         self._registry = None
         self._experiment_id = None
+        self._setup_acq_fields = {}
         self._fov_tasks = None
         self._fov_loop = None
         self._last_cfg = None
@@ -387,6 +399,10 @@ class LiveRunCoordinator:
         save_dir = acquisition_config.get("save_dir")
         if save_dir:
             acquisition_fields["raw_data_path"] = save_dir
+        # Setup provenance (microscope_id / config_yaml / setup_sha256), computed
+        # once per run; the acquisition_run id is the run_id, so re-stamping it
+        # each FOV is an idempotent upsert of the same values.
+        acquisition_fields.update(self._setup_acq_fields)
         cfg = build_fov_config(
             opts,
             camera_info=self._camera_info,

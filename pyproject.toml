@@ -7,14 +7,14 @@ name = "PycroFlow"
 dynamic = ["version"]
 description = "Microscopy and Fluid automation coordination"
 readme = "README.md"
-license = { text = "MIT" }
+license = { file = "LICENSE.md" }
 requires-python = ">=3.11"
 keywords = ["pycromanager", "microscopy", "fluid-automation", "exchange-paint"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Operating System :: Microsoft :: Windows :: Windows 10",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: BSD License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
 ]
@@ -69,13 +69,13 @@ hardware = [
     "pycromanager>=1.0,<2",
     # The T3 laser interlock (PycroFlow.illumination) controls lasers via monet's
     # in-process API (`import monet`) -- the safe path for a fail-safe (no network
-    # hop). monet is NOT on PyPI (git tag v0.4.2, like the registry dep, C40); pin
+    # hop). monet is NOT on PyPI (git tag v0.6.13, like the registry dep, C40); pin
     # the released tag with [hardware] so its laser SDKs resolve. A fresh acq-PC
     # env caught the missing dep (`ModuleNotFoundError: monet`) -- it was masked in
     # the editable dev container where monet is installed. (monet[hardware]'s SDKs
     # overlap this extra's; pip dedups. A later cleanup could fold this extra's
     # laser SDKs into monet[hardware].)
-    "monet[hardware] @ git+https://github.com/jungmannlab/monet.git@v0.4.2",
+    "monet[hardware] @ git+https://github.com/jungmannlab/monet.git@v0.6.13",
     "PyHamiltonPSD==1.1.0",
     "ThorlabsPM100>=1.2.2",
     "pyvisa>=1.15",
