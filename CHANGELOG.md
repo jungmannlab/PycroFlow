@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **QC hand-off degrades cleanly with an outdated registry client.** An older
+  `picasso-registry` `BufferedRegistryClient` has no `mark_ready()`, which made
+  `qc_gate_mark_ready` log a confusing `AttributeError` on **every** FOV. It now
+  detects the missing method, logs a single actionable warning per process
+  ("update picasso-registry"), and disables the cluster hand-off for the
+  session without touching the run.
+
 ## [0.3.1] - 2026-11-04
 
 Hotfix for the v0.3.0 Windows installer: the GUI crashed on first launch.
@@ -42,13 +51,6 @@ License / Check for Updates), **registry setup-provenance stamping**, and the
 shipped in 0.2.0. Hosted CI now runs a Python 3.11–3.14 matrix.
 
 ### Fixed
-
-- **QC hand-off degrades cleanly with an outdated registry client.** An older
-  `picasso-registry` `BufferedRegistryClient` has no `mark_ready()`, which made
-  `qc_gate_mark_ready` log a confusing `AttributeError` on **every** FOV. It now
-  detects the missing method, logs a single actionable warning per process
-  ("update picasso-registry"), and disables the cluster hand-off for the
-  session without touching the run.
 
 - **Laser fail-safe interlock is honest and escalates on failure.** On an
   abort where a dead beampath device (Thorlabs KDC101 `TL_NO_RESPONSE`)
