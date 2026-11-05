@@ -242,8 +242,11 @@ class TestConnectivityProbes(_TmpEnv):
                 v = setup_core.check_monet(token="mtok")
         self.assertTrue(v["ok"])
         self.assertEqual(calls["url"], "https://monet:8002")
+        # the token is visible to the probe...
         self.assertEqual(calls["token"], "mtok")
         self.assertIn("authed", v["detail"])
+        # ...but does not linger in the process afterwards (it was unset before).
+        self.assertIsNone(os.environ.get(setup_core.ENV_MONET_TOKEN))
 
     def test_enumerate_serial_ports_returns_list(self):
         self.assertIsInstance(setup_core.enumerate_serial_ports(), list)
