@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Frozen GUI still wrote setups into the bundled test-fixtures dir**
+  (`...\_MEIxxxx\PycroFlow\tests\fixtures\setups`), and offered the test-only
+  `Mercury`/`Ibidi` rigs as templates (which then failed to clone). Root cause:
+  production code imports `PycroFlow.tests.emulators` for the shipped Emulator
+  setups, and the test package's `__init__` **unconditionally** repointed
+  `PYCROFLOW_SETUPS_DIR` at its fixtures — clobbering the whole process. That
+  side effect is now guarded (never under a frozen build; `setdefault` so an
+  operator/`.env`/app choice always wins), the GUI entry point anchors
+  `PYCROFLOW_SETUPS_DIR` to the real per-user dir before any emulator import
+  (covers pip installs too), and the PyInstaller bundle no longer ships the
+  `tests/` data at all. The from-source test suite still gets its fixtures
+  deterministically.
+
+### Added
+
+- **Setup wizard: "Test monet" connectivity probe.** Alongside "Test registry",
+  the connectivity page now probes the monet power server
+  (`setup_core.check_monet` → `monet.io.check_server_auth`: `GET /health` then
+  `/auth/whoami` with `PAINT_MONET_TOKEN`). The server URL is auto-discovered
+  from the loaded monet config's `database` field (not re-entered); monet
+  configs backed by a local file report OK with "no server to probe".
+
 ## [0.3.2] - 2026-11-05
 
 Rig-feedback hotfix for the v0.3.1 installer: the first on-rig test of the
