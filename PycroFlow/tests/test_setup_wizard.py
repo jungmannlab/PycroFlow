@@ -120,6 +120,23 @@ class TestSetupWizardCommit(unittest.TestCase):
         self.assertIn("disk full", summary)
         self.assertIsNone(wiz.created_setup)
 
+    def test_monet_test_button_reports_result(self):
+        # The connectivity page exposes a "Test monet" probe alongside the
+        # registry one; clicking it runs setup_core.check_monet and shows the
+        # verdict. Mock the probe so the test needs no monet/server.
+        wiz = self._wizard()
+        wiz.page_conn.monet_token.setText("mtok")
+        with mock.patch.object(
+            setup_core,
+            "check_monet",
+            return_value={"ok": True, "detail": "reachable + authed"},
+        ) as probe:
+            wiz.page_conn._on_test_monet()
+        probe.assert_called_once()
+        self.assertEqual(probe.call_args.kwargs.get("token"), "mtok")
+        self.assertIn("✓", wiz.page_conn._monet_test_result.text())
+        self.assertIn("authed", wiz.page_conn._monet_test_result.text())
+
     def test_emulated_setup_needs_no_com(self):
         wiz = self._wizard()
         wiz.page_setup.create.setChecked(True)

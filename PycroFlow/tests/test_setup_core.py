@@ -190,6 +190,64 @@ class TestConnectivityProbes(_TmpEnv):
             self.assertFalse(setup_core.check_monet_config("Nope")["ok"])
         self.assertFalse(setup_core.check_monet_config("")["ok"])
 
+    def test_monet_not_importable(self):
+        # A clean ImportError path (no monet) is reported, never raised.
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _no_monet(name, *a, **k):
+            if name == "monet" or name.startswith("monet."):
+                raise ImportError("no monet")
+            return real_import(name, *a, **k)
+
+        with mock.patch.dict(sys.modules, {}, clear=False):
+            sys.modules.pop("monet", None)
+            with mock.patch.object(builtins, "__import__", _no_monet):
+                v = setup_core.check_monet()
+        self.assertFalse(v["ok"])
+        self.assertIn("not importable", v["detail"])
+
+    def test_monet_local_database_reports_ok_without_probe(self):
+        # monet importable, configs use a local file database -> OK, no server
+        # probe attempted.
+        fake_monet = types.SimpleNamespace(
+            CONFIGS={"Scope": {"database": "../power_database.xlsx"}}
+        )
+        with mock.patch.dict(sys.modules, {"monet": fake_monet}):
+            v = setup_core.check_monet()
+        self.assertTrue(v["ok"])
+        self.assertIn("no server to probe", v["detail"])
+
+    def test_monet_server_probe_uses_discovered_url_and_token(self):
+        # A config with an http database -> check_monet probes it via
+        # monet.io.check_server_auth, exporting the token first.
+        calls = {}
+
+        def _check_server_auth(server_url, timeout=10):
+            calls["url"] = server_url
+            calls["token"] = os.environ.get(setup_core.ENV_MONET_TOKEN)
+            return {"ok": True, "detail": "reachable + authed"}
+
+        fake_io = types.SimpleNamespace(check_server_auth=_check_server_auth)
+        fake_monet = types.SimpleNamespace(
+            CONFIGS={"Scope": {"database": "https://monet:8002"}},
+            io=fake_io,  # real monet exposes `io` as an attribute post-import
+        )
+        with mock.patch.dict(
+            sys.modules, {"monet": fake_monet, "monet.io": fake_io}
+        ):
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(setup_core.ENV_MONET_TOKEN, None)
+                v = setup_core.check_monet(token="mtok")
+        self.assertTrue(v["ok"])
+        self.assertEqual(calls["url"], "https://monet:8002")
+        # the token is visible to the probe...
+        self.assertEqual(calls["token"], "mtok")
+        self.assertIn("authed", v["detail"])
+        # ...but does not linger in the process afterwards (it was unset before).
+        self.assertIsNone(os.environ.get(setup_core.ENV_MONET_TOKEN))
+
     def test_enumerate_serial_ports_returns_list(self):
         self.assertIsInstance(setup_core.enumerate_serial_ports(), list)
 

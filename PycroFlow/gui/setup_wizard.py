@@ -105,12 +105,31 @@ class _ConnectivityPage(QWizardPage):
         row.addWidget(self._test_result)
         form.addRow(row)
 
+        monet_row = QHBoxLayout()
+        self._monet_test_btn = QPushButton("Test monet")
+        self._monet_test_result = QLabel("")
+        self._monet_test_btn.clicked.connect(self._on_test_monet)
+        monet_row.addWidget(self._monet_test_btn)
+        monet_row.addWidget(self._monet_test_result)
+        form.addRow(monet_row)
+
     def _on_test(self):
         v = setup_core.check_registry(
             self.registry_url.text().strip(),
             self.registry_token.text().strip() or None,
         )
         self._test_result.setText(("✓ " if v["ok"] else "✗ ") + v["detail"])
+
+    def _on_test_monet(self):
+        # The monet server URL lives in a monet config's `database` field, so
+        # check_monet auto-discovers it from the loaded configs; we pass the
+        # token being configured here.
+        v = setup_core.check_monet(
+            token=self.monet_token.text().strip() or None,
+        )
+        self._monet_test_result.setText(
+            ("✓ " if v["ok"] else "✗ ") + v["detail"]
+        )
 
 
 class _SetupPage(QWizardPage):

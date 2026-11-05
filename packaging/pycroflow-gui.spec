@@ -73,7 +73,16 @@ except Exception:
 # Package data: PycroFlow's YAML configs/setups/examples (resolved by
 # Path(__file__).parent at runtime) and monet's bundled examples. matplotlib
 # data is pulled because the [hardware] stack imports it.
-datas = collect_data_files("PycroFlow")
+#
+# Drop the test package's data (the relocated real-rig fixtures under
+# PycroFlow/tests/): dead weight in a GUI bundle, and shipping
+# tests/fixtures/setups/*.yaml made them discoverable as setup templates in the
+# frozen app (and `_MEIxxxx\...\tests\fixtures\setups` leaked into the wizard).
+datas = [
+    (src, dest)
+    for (src, dest) in collect_data_files("PycroFlow")
+    if "tests" not in dest.replace("\\", "/").split("/")
+]
 for _pkg in ("monet", "matplotlib"):
     try:
         datas += collect_data_files(_pkg)

@@ -291,6 +291,94 @@ def check_monet_config(name: str | None) -> dict:
     }
 
 
+def check_monet(
+    server_url: str | None = None,
+    token: str | None = None,
+    timeout: float = 5.0,
+) -> dict:
+    """Probe monet connectivity (best-effort; never raises).
+
+    The analogue of :func:`check_registry` for the monet power server. The
+    monet server URL is not entered in the wizard — it lives in a monet
+    config's ``database`` field — so with no explicit ``server_url`` this
+    auto-discovers one from the loaded ``monet.CONFIGS`` (the first config whose
+    ``database`` is an ``http(s)`` URL) and probes it via
+    :func:`monet.io.check_server_auth` (``GET /health`` then ``/auth/whoami``,
+    using ``PAINT_MONET_TOKEN``). When monet is importable but every config uses
+    a local file database (no server), that is reported as OK — monet itself
+    loaded and there is nothing to reach.
+
+    Parameters
+    ----------
+    server_url : str, optional
+        Explicit monet server URL; auto-discovered from the configs if omitted.
+    token : str, optional
+        Bearer token to probe with; exported as ``PAINT_MONET_TOKEN`` (what the
+        monet client reads) before the probe — the same value the wizard
+        persists on commit.
+    timeout : float
+        Per-request timeout for the server probe.
+
+    Returns
+    -------
+    dict
+        ``{'ok': bool, 'detail': str}``.
+    """
+    try:
+        import monet
+    except Exception as exc:  # noqa: BLE001 - monet is optional/absent
+        return {
+            "ok": False,
+            "detail": "monet not importable ({!r})".format(exc),
+        }
+    url = server_url
+    if not url:
+        configs_map = getattr(monet, "CONFIGS", {}) or {}
+        for cfg in configs_map.values():
+            db = cfg.get("database") if isinstance(cfg, dict) else None
+            if isinstance(db, str) and db.startswith(("http://", "https://")):
+                url = db
+                break
+        if not url:
+            return {
+                "ok": True,
+                "detail": (
+                    "monet loaded ({} config(s)); none use a server database "
+                    "(local file) — no server to probe".format(
+                        len(configs_map)
+                    )
+                ),
+            }
+    # check_server_auth reads the token from PAINT_MONET_TOKEN, so set it for
+    # the probe only — then restore, so a trial token typed here (and not
+    # committed) doesn't linger in the process for later monet calls.
+    _prev_token = os.environ.get(ENV_MONET_TOKEN)
+    if token:
+        os.environ[ENV_MONET_TOKEN] = token
+    try:
+        from monet import io as monet_io
+
+        res = monet_io.check_server_auth(url, timeout=timeout)
+        # Guard the shape too, so a (contract-breaking) non-dict return can't
+        # escape as an AttributeError — the probe must never raise.
+        res = res if isinstance(res, dict) else {}
+        return {
+            "ok": bool(res.get("ok")),
+            "detail": res.get("detail") or str(res) or "no detail",
+        }
+    except Exception as exc:  # noqa: BLE001 - a probe failure isn't fatal
+        return {
+            "ok": False,
+            "detail": "monet server probe failed ({!r})".format(exc),
+        }
+    finally:
+        if token:
+            if _prev_token is None:
+                os.environ.pop(ENV_MONET_TOKEN, None)
+            else:
+                os.environ[ENV_MONET_TOKEN] = _prev_token
+
+
 def validate_setup(data: dict) -> list:
     """Return a list of human-readable problems with a setup dict (empty = ok).
 

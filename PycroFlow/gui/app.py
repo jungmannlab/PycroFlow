@@ -50,6 +50,22 @@ def main(argv=None):
 
     load_env_file()
 
+    # Pin the setups dir to the resolved per-user location BEFORE anything can
+    # import PycroFlow.tests.emulators (SystemService does, for the shipped
+    # Emulator setups) — that import runs the test package's __init__, which
+    # would otherwise point setup discovery at the bundled read-only fixtures.
+    # setdefault: an operator's .env `PYCROFLOW_SETUPS_DIR` (loaded just above)
+    # or an exported shell value always wins; otherwise we use the per-user dir
+    # (`<PYCROFLOW_HOME>/setups` when frozen, `%LOCALAPPDATA%\PycroFlow\setups`
+    # / XDG otherwise).
+    import os
+
+    from PycroFlow import configs
+
+    os.environ.setdefault(
+        "PYCROFLOW_SETUPS_DIR", str(configs.user_setups_dir())
+    )
+
     app = QApplication(argv if argv is not None else sys.argv)
     # V0.8 look & feel across the whole acquisition GUI (Fusion + dark/gold QSS),
     # so the Quality tab and every other tab match the live operator frontend.
