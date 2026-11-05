@@ -3185,7 +3185,6 @@ class TestWebcamsTab(unittest.TestCase):
         tab.set_run_lock(False)
 
     def test_save_writes_block_to_yaml(self):
-        import shutil
         import tempfile
         import unittest.mock as mock
 
@@ -3195,12 +3194,13 @@ class TestWebcamsTab(unittest.TestCase):
         tab, svc = self._tab()
         tab._rows[0]["device"].setValue(4)
         tab._output_edit.setText("/data/mycam")
-        # Copy the shipped setup so we never overwrite the real file.
-        src = configs.setup_path("EmulatorCam")
-        tmp = os.path.join(tempfile.mkdtemp(), "EmulatorCam.yaml")
-        shutil.copy(src, tmp)
+        # Editing a built-in forks an editable copy into the user setups dir
+        # (never the read-only / MEIPASS-wiped bundled package dir). Isolate
+        # that dir to a tempdir and assert the edit lands at user_setup_path,
+        # leaving the shipped built-in untouched.
+        udir = tempfile.mkdtemp()
         with (
-            mock.patch.object(configs, "setup_path", return_value=tmp),
+            mock.patch.dict(os.environ, {"PYCROFLOW_SETUPS_DIR": udir}),
             mock.patch.object(
                 QMessageBox,
                 "question",
@@ -3208,10 +3208,17 @@ class TestWebcamsTab(unittest.TestCase):
             ),
         ):
             tab._save()
-        with open(tmp) as f:
+            dest = configs.user_setup_path("EmulatorCam")
+        self.assertEqual(os.path.dirname(dest), udir)
+        with open(dest) as f:
             written = _yaml.safe_load(f)
         self.assertEqual(written["monitoring"]["cameras"][0]["device"], 4)
         self.assertEqual(written["monitoring"]["output_dir"], "/data/mycam")
+        # The shipped built-in is left as-is (fork-on-write, not in-place) —
+        # read the package file directly so a user-dir shadow can't mask it.
+        with open(configs._SETUP_DIR / "EmulatorCam.yaml") as f:
+            shipped = _yaml.safe_load(f)
+        self.assertEqual(shipped["monitoring"]["cameras"][0]["device"], 0)
 
 
 if __name__ == "__main__":

@@ -923,5 +923,23 @@ class TestSystemService(unittest.TestCase):
         svc.fill_tubings()  # must not raise
 
 
+class TestRunSaveDir(unittest.TestCase):
+    """_run_save_dir: design wins, else PYCROFLOW_SAVE_DIR, else cwd."""
+
+    def test_precedence(self):
+        import os
+        from unittest import mock
+        from PycroFlow.services.experiment_service import _run_save_dir
+
+        self.assertEqual(_run_save_dir({"save_dir": "/explicit"}), "/explicit")
+        with mock.patch.dict(os.environ, {"PYCROFLOW_SAVE_DIR": "/data"}):
+            self.assertEqual(_run_save_dir({}), "/data")
+            # an explicit design save_dir still wins over the env default
+            self.assertEqual(_run_save_dir({"save_dir": "/x"}), "/x")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PYCROFLOW_SAVE_DIR", None)
+            self.assertEqual(_run_save_dir({}), ".")  # dev/test unaffected
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -15,6 +15,8 @@ the saved YAML (a schema editor for it is future work); the page says so.
 
 from __future__ import annotations
 
+import os
+
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -74,11 +76,26 @@ class _ConnectivityPage(QWizardPage):
         self.monet_paths = QLineEdit(
             env.get(setup_core.ENV_MONET_CONFIG_PATHS, "")
         )
+        self.monet_token = QLineEdit(env.get(setup_core.ENV_MONET_TOKEN, ""))
+        self.monet_token.setEchoMode(QLineEdit.EchoMode.Password)
         self.spill_port = QLineEdit(env.get(setup_core.ENV_SPILL_PORT, ""))
+        # Directories — default to the per-user location, but editable to a
+        # lab-shared network/pool path so setups + data live centrally.
+        self.setups_dir = QLineEdit(
+            env.get(setup_core.ENV_SETUPS_DIR, "")
+            or str(configs.user_setups_dir())
+        )
+        self.save_dir = QLineEdit(
+            env.get(setup_core.ENV_SAVE_DIR, "")
+            or setup_core.default_save_dir()
+        )
         form.addRow("picasso-registry URL", self.registry_url)
         form.addRow("registry bearer token", self.registry_token)
         form.addRow("monet config path(s)", self.monet_paths)
+        form.addRow("monet token", self.monet_token)
         form.addRow("spill-sensor port", self.spill_port)
+        form.addRow("setups folder", self.setups_dir)
+        form.addRow("data (acquisition) folder", self.save_dir)
 
         row = QHBoxLayout()
         self._test_btn = QPushButton("Test registry")
@@ -155,8 +172,12 @@ class _SetupPage(QWizardPage):
             "illumination.config": self.monet_config.text().strip() or None,
         }
         if not self.emulated.isChecked():
+            com = self.com.currentText().strip()
+            # The Hamilton driver prefixes "COM" itself, so store the bare
+            # number ('3'), not 'COM3' (pyserial's device name / what an
+            # operator types).
             overrides["fluid.pumps.interface.COM"] = (
-                self.com.currentText().strip() or None
+                setup_core.normalize_com_port(com) if com else None
             )
         return setup_core.clone_setup(
             self.template.currentText(),
@@ -217,7 +238,10 @@ class SetupWizard(QWizard):
             setup_core.ENV_REGISTRY_URL: self.page_conn.registry_url.text(),
             setup_core.ENV_REGISTRY_TOKEN: self.page_conn.registry_token.text(),
             setup_core.ENV_MONET_CONFIG_PATHS: self.page_conn.monet_paths.text(),
+            setup_core.ENV_MONET_TOKEN: self.page_conn.monet_token.text(),
             setup_core.ENV_SPILL_PORT: self.page_conn.spill_port.text(),
+            setup_core.ENV_SETUPS_DIR: self.page_conn.setups_dir.text(),
+            setup_core.ENV_SAVE_DIR: self.page_conn.save_dir.text(),
         }
         env_updates = {
             k: v.strip() for k, v in env_updates.items() if v.strip()
@@ -237,6 +261,12 @@ class SetupWizard(QWizard):
                 )
             except Exception as exc:  # noqa: BLE001 - surfaced, not raised
                 lines.append("Could not write .env: {}".format(exc))
+            # Apply the directory choices to THIS process so the setup saved
+            # below lands in the chosen setups folder (write_env only persists
+            # to .env, which is otherwise read on the next launch).
+            for key in (setup_core.ENV_SETUPS_DIR, setup_core.ENV_SAVE_DIR):
+                if env_updates.get(key):
+                    os.environ[key] = env_updates[key]
         else:
             lines.append("No connectivity variables set.")
 
