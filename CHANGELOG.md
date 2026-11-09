@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Step subtitles on monitor movies.** The two monitoring recordings are now
+  captioned, like movie subtitles, with the current Run-Sequence step and how
+  long it has been running — so a recording can be read back against the
+  protocol. The webcam monitoring AVIs get the caption composited onto each tile
+  (the controller tracks the fluid handler's current step and feeds the capture
+  subprocess), and the fluorescence "fluid step monitor" acquisition
+  (`monitoring: true` acquire) gets it burned into its frames in
+  `image_process_fn`. Scientific acquisitions are never touched. Shared,
+  dependency-light overlay helper (`monitoring/overlay.py`, Pillow).
+
 ## [0.3.3] - 2026-11-05
 
 Second rig-feedback hotfix: the installed v0.3.2 GUI still resolved the setups
