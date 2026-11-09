@@ -18,6 +18,10 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QFrame,
+    QGraphicsPixmapItem,
+    QGraphicsScene,
+    QGraphicsSimpleTextItem,
+    QGraphicsView,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -262,14 +266,126 @@ class QcAtAGlance(QWidget):
             self.advisor_text.setToolTip("")
 
 
+class ZoomPanView(QGraphicsView):
+    """Pan/zoom image view for the live overview.
+
+    Shows one pixmap (the native-resolution frame, with boxes already drawn) in
+    a :class:`QGraphicsScene`. The mouse wheel zooms about the cursor, left-drag
+    pans (hand cursor), and the public methods drive Fit / 1:1 / step-zoom from
+    the toolbar buttons. A fresh frame re-fits the view only until the operator
+    first zooms or pans, so the ~2 Hz thumbnail stream never fights a chosen
+    view; :meth:`fit` re-arms auto-fit.
+    """
+
+    double_clicked = pyqtSignal()
+
+    _MIN_SCALE = 0.02
+    _MAX_SCALE = 80.0
+    _WHEEL_STEP = 1.25
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._scene = QGraphicsScene(self)
+        self.setScene(self._scene)
+        self._item = QGraphicsPixmapItem()
+        self._item.setTransformationMode(
+            Qt.TransformationMode.SmoothTransformation
+        )
+        self._scene.addItem(self._item)
+        self._text = QGraphicsSimpleTextItem("no frame yet")
+        self._text.setBrush(QColor("#888888"))
+        self._scene.addItem(self._text)
+        # Auto-fit each new frame until the operator takes control of the view.
+        self._user_zoomed = False
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setTransformationAnchor(
+            QGraphicsView.ViewportAnchor.AnchorUnderMouse
+        )
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        self.setRenderHints(QPainter.RenderHint.SmoothPixmapTransform)
+        self.setFrameShape(QFrame.Shape.Box)
+        self.setMinimumHeight(160)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+
+    # -- content -----------------------------------------------------------
+    def set_pixmap(self, pixmap: QPixmap) -> None:
+        was_empty = self._item.pixmap().isNull()
+        self._text.setVisible(False)
+        self._item.setPixmap(pixmap)
+        self._item.setVisible(True)
+        self._scene.setSceneRect(self._item.boundingRect())
+        if was_empty or not self._user_zoomed:
+            self.fit()
+
+    def set_text(self, text: str) -> None:
+        self._item.setVisible(False)
+        self._item.setPixmap(QPixmap())
+        self._text.setText(text)
+        self._text.setVisible(True)
+        self._scene.setSceneRect(self._text.boundingRect())
+        self._user_zoomed = False
+
+    # -- zoom / pan --------------------------------------------------------
+    def fit(self) -> None:
+        if not self._item.pixmap().isNull():
+            self.fitInView(self._item, Qt.AspectRatioMode.KeepAspectRatio)
+        self._user_zoomed = False
+
+    def reset_actual_size(self) -> None:
+        """Show the frame at 1:1 (one frame pixel per screen pixel)."""
+        self.resetTransform()
+        self._user_zoomed = True
+
+    def zoom(self, factor: float) -> None:
+        self._apply_scale(factor)
+
+    def _apply_scale(self, factor: float) -> None:
+        cur = self.transform().m11()
+        if cur <= 0:
+            return
+        target = cur * factor
+        # Clamp so the view can't vanish or explode past sane bounds.
+        if target < self._MIN_SCALE:
+            factor = self._MIN_SCALE / cur
+        elif target > self._MAX_SCALE:
+            factor = self._MAX_SCALE / cur
+        self.scale(factor, factor)
+        self._user_zoomed = True
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if self._item.pixmap().isNull():
+            return
+        delta = event.angleDelta().y()
+        if delta == 0:
+            return
+        self._apply_scale(
+            self._WHEEL_STEP if delta > 0 else 1.0 / self._WHEEL_STEP
+        )
+        event.accept()
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        self.double_clicked.emit()
+        super().mouseDoubleClickEvent(event)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().resizeEvent(event)
+        # Keep a not-yet-touched view framed as the panel is resized.
+        if not self._user_zoomed:
+            self.fit()
+
+
 class OverviewZoom(QWidget):
     """Always-visible Overview + Zoom: contrast, magnifier, pop-out.
 
     Renders the thumbnail carried on the ``thumbnail`` seam kind. Two-handle
     contrast + Auto (display-only, applied to the shown image), a display-only
-    magnifier readout, a scale bar label, and a double-click pop-out. Drag-ROI
-    and click-to-move-zoom are stubbed as display-only interactions here (the
-    zoomed re-render round-trips through the service in a later WP-4 run).
+    magnifier readout, a scale bar label, and a double-click pop-out. The image
+    sits in a :class:`ZoomPanView` so the operator can zoom (wheel or the −/+
+    buttons) and pan (left-drag); Fit frames the whole image and 1:1 shows it at
+    actual pixel size. Any zoom/pan the operator applies is preserved across
+    incoming frames until Fit re-arms auto-fit.
     """
 
     popout_requested = pyqtSignal()
@@ -324,14 +440,38 @@ class OverviewZoom(QWidget):
         head.addWidget(self.ignore_pct)
         layout.addLayout(head)
 
-        self.image = QLabel("no frame yet")
-        self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image.setMinimumHeight(160)
-        self.image.setFrameShape(QFrame.Shape.Box)
-        self.image.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-        )
+        self.image = ZoomPanView()
+        self.image.double_clicked.connect(self.popout_requested)
         layout.addWidget(self.image, 1)
+
+        # Zoom controls: step buttons mirror the mouse-wheel zoom; Fit frames
+        # the whole image (re-arming auto-fit on new frames); 1:1 shows actual
+        # pixels. Panning is left-drag on the view.
+        zoom_row = QHBoxLayout()
+        zoom_row.addWidget(QLabel("zoom"))
+        self.zoom_out_btn = QPushButton("−")
+        self.zoom_in_btn = QPushButton("+")
+        self.fit_btn = QPushButton("Fit")
+        self.one_to_one_btn = QPushButton("1:1")
+        self.zoom_out_btn.setFixedWidth(28)
+        self.zoom_in_btn.setFixedWidth(28)
+        self.zoom_out_btn.setToolTip("Zoom out")
+        self.zoom_in_btn.setToolTip("Zoom in")
+        self.fit_btn.setToolTip("Fit the whole frame to the view")
+        self.one_to_one_btn.setToolTip("Show at actual pixel size (1:1)")
+        self.zoom_out_btn.clicked.connect(lambda: self.image.zoom(1.0 / 1.25))
+        self.zoom_in_btn.clicked.connect(lambda: self.image.zoom(1.25))
+        self.fit_btn.clicked.connect(self.image.fit)
+        self.one_to_one_btn.clicked.connect(self.image.reset_actual_size)
+        for b in (
+            self.zoom_out_btn,
+            self.zoom_in_btn,
+            self.fit_btn,
+            self.one_to_one_btn,
+        ):
+            zoom_row.addWidget(b)
+        zoom_row.addStretch()
+        layout.addLayout(zoom_row)
 
         # Two-handle contrast (min/max display window).
         contrast = QHBoxLayout()
@@ -381,7 +521,7 @@ class OverviewZoom(QWidget):
         if data is not None and shape is not None:
             self._set_image_from_bytes(data, shape, payload.get("dtype"))
         elif shape is not None:
-            self.image.setText("frame {}".format(shape))
+            self.image.set_text("frame {}".format(shape))
         pixelsize = payload.get("pixelsize_nm")
         if pixelsize and shape is not None:
             self.scale_bar.setText(
@@ -402,7 +542,7 @@ class OverviewZoom(QWidget):
             else:
                 self._render()
         except Exception:
-            self.image.setText("frame {}".format(shape))
+            self.image.set_text("frame {}".format(shape))
 
     def _render(self) -> None:
         raw = getattr(self, "_raw", None)
@@ -424,13 +564,9 @@ class OverviewZoom(QWidget):
         if self.boxes_cb.isChecked() and self._boxes:
             display = QPixmap(self._pixmap)
             self._draw_boxes(display)
-        self.image.setPixmap(
-            display.scaled(
-                self.image.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        # Hand the native-resolution pixmap (boxes already drawn) to the view,
+        # which owns the scaling so the operator's zoom/pan is preserved.
+        self.image.set_pixmap(display)
         self.magnifier.setText("magnifier: {}x{}".format(w, h))
 
     def _draw_boxes(self, pixmap) -> None:
@@ -498,4 +634,4 @@ class OverviewZoom(QWidget):
         super().mouseDoubleClickEvent(event)
 
 
-__all__ = ["QcAtAGlance", "OverviewZoom", "QC_METRICS"]
+__all__ = ["QcAtAGlance", "OverviewZoom", "ZoomPanView", "QC_METRICS"]
