@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Per-FOV super-resolution render saved after each acquisition.** When live
+  analysis runs, the FOV's accumulated localizations are rendered (picasso) into
+  a super-resolution PNG and written next to the raw movie (`<movie>_render.png`)
+  at FOV end — a quick retrospective visual without re-rendering offline.
+  Best-effort (never blocks or breaks a run) and configurable via the
+  `live_analysis` block (`save_render` default on, `render_oversampling`,
+  `render_max_edge`). The path is surfaced on `FovResult.render_path`.
+
 ## [0.3.3] - 2026-11-05
 
 Second rig-feedback hotfix: the installed v0.3.2 GUI still resolved the setups

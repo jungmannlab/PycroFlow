@@ -356,6 +356,48 @@ class TestEndToEndSlice(unittest.TestCase):
             self.assertGreater(res.metrics["n_locs"], 0)
             self.assertEqual(res.metrics["n_frames"], 200)
 
+    def test_render_path_flows_through_when_enabled(self):
+        # save_render=True threads a render PNG path onto FovResult. The heavy
+        # picasso render itself is stubbed (exercised in the lab/CI, not here);
+        # this checks run_fov calls the render over the ACCUMULATED locs and
+        # surfaces the path.
+        from unittest.mock import patch
+
+        svc = LiveAnalysisService()
+        svc.start_experiment()
+        with tempfile.TemporaryDirectory() as d:
+            cfg = FovConfig(
+                source_kind="mock",
+                source_kwargs={
+                    "n_frames": 100,
+                    "height": 48,
+                    "width": 48,
+                    "seed": 5,
+                },
+                localize_params=_LOC_PARAMS,
+                batch_size=50,
+                n_workers=1,
+                use_processes=False,
+                pixelsize_nm=130.0,
+                save_render=True,
+                movie_source_path=d,
+            )
+            captured = {}
+
+            def fake_save(locs, out_path, **kw):
+                captured["n"] = len(locs)
+                with open(out_path, "wb") as f:
+                    f.write(b"png")
+                return out_path
+
+            with patch(
+                "PycroFlow.live_analysis.render.save_render_png", fake_save
+            ):
+                res = svc.run_fov(cfg)
+            self.assertIsNotNone(res.render_path)
+            self.assertTrue(os.path.exists(res.render_path))
+            self.assertGreater(captured["n"], 0)
+
     def test_property_no_subsampling(self):
         # The authoritative reduction covers EVERY frame, and a clean finish is
         # reconciled: frames_read == frames_localized, not partial.
