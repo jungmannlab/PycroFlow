@@ -431,6 +431,38 @@ class TestMainWindow(unittest.TestCase):
         # The parameter box labels which list the step came from.
         self.assertIn("Fluid", tab.step_param_label.text())
 
+    def test_param_edit_refreshes_duration_estimate(self):
+        import copy
+        from PycroFlow.examples.demo_protocols import protocol
+
+        w = self._build()
+        tab = w.run_sequence_tab
+        tab._service.load_protocol(copy.deepcopy(protocol))
+        # Find an img acquire step (carries a frame-count duration term).
+        entries = tab._service.protocol["img"]["protocol_entries"]
+        row = next(
+            i for i, e in enumerate(entries) if e.get("$type") == "acquire"
+        )
+        tab.step_lists["img"].setCurrentRow(row)
+        before = tab._total_duration
+        self.assertFalse(tab._service.protocol_modified)
+
+        # Bump the frame count in the parameter box and apply.
+        shown = {
+            tab.step_table.item(r, 0).text(): r
+            for r in range(tab.step_table.rowCount())
+        }
+        frames_row = shown["frames"]
+        old_frames = int(entries[row]["frames"])
+        tab.step_table.item(frames_row, 1).setText(str(old_frames * 10))
+        tab._on_apply()
+
+        # The edit landed in the protocol, the estimate grew, and the run is
+        # now flagged modified.
+        self.assertEqual(entries[row]["frames"], old_frames * 10)
+        self.assertGreater(tab._total_duration, before)
+        self.assertTrue(tab._service.protocol_modified)
+
     def test_sequence_edit_add_delete_move_and_modified_flag(self):
         import copy
         from PycroFlow.examples.demo_protocols import protocol

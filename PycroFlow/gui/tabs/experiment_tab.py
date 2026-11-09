@@ -1485,6 +1485,14 @@ class ExperimentTab(YamlDropMixin, QWidget):
         # Re-render from the stored entry so displayed text and the cached
         # value types reflect what was actually written.
         self._on_step_selected(self._current_sys, row)
+        # A parameter edit (e.g. an acquire step's frames / t_exp) changes the
+        # duration estimate and, like a structural edit, makes the run a
+        # non-faithful instance — refresh the estimates + modified badge so the
+        # ETA/total track the edit instead of going stale.
+        self._service.mark_protocol_modified()
+        self._refresh_durations()
+        self._update_total_estimate_label()
+        self._update_modified_badge()
 
     # --- structural sequence editing (add / duplicate / delete / move)
 

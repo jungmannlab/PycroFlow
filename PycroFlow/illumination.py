@@ -40,6 +40,12 @@ class IlluminationSystem(AbstractSystem):
         """
         self._paused = False
         self._monet_setup = setup
+        # monet's laser control, built lazily on first use (_ensure_monet).
+        # Initialised to None so the attribute ALWAYS exists: when the monet
+        # build fails (e.g. a dead Thorlabs beampath device), the fail-safe
+        # interlock (all_off / beampath_close) sees a clean ``None`` instead of
+        # a confusing ``AttributeError: no attribute 'instrument'``.
+        self.instrument = None
 
     def set_laser(self, laser):
         """Set the current laser and activate it.
@@ -121,6 +127,11 @@ class IlluminationSystem(AbstractSystem):
 
     def beampath_open(self):
         """open shutter and set the correct light path positions"""
+        if self.instrument is None:
+            logger.warning(
+                "beampath_open: laser control (monet) is not loaded"
+            )
+            return
         try:
             self.instrument.beampath.positions = self.mprotocol["beampath"][
                 self.instrument.curr_laser
@@ -140,6 +151,15 @@ class IlluminationSystem(AbstractSystem):
         touched. Returning a bool (and catching the dead-device error too)
         makes the safety report honest.
         """
+        if self.instrument is None:
+            # monet never built (e.g. a dead Thorlabs beampath device took the
+            # whole build down). Report plainly instead of as a cryptic
+            # AttributeError so the operator knows the shutter was NOT actuated.
+            logger.error(
+                "beampath_close: CANNOT close the shutter — laser control "
+                "(monet) is not loaded. The shutter was not actuated."
+            )
+            return False
         try:
             self.instrument.beampath.positions = self.mprotocol["beampath"][
                 "end"
@@ -327,7 +347,10 @@ class IlluminationSystem(AbstractSystem):
             mprotocol = None
         self.mprotocol = mprotocol
 
-        if not hasattr(self, "instrument"):
+        # ``is None`` (not ``hasattr``): ``__init__`` now pre-sets
+        # ``self.instrument = None``, so a hasattr check would wrongly skip the
+        # build. None also means a *previous* build failed — so this retries it.
+        if self.instrument is None:
             self.instrument = mco.IlluminationLaserControl(
                 mconfig, auto_enable_lasers=False
             )
