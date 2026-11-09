@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-FOV super-resolution render saved after each acquisition.** When live
+  analysis runs, the FOV's accumulated localizations are rendered (picasso) into
+  a super-resolution PNG and written next to the raw movie (`<movie>_render.png`)
+  at FOV end — a quick retrospective visual without re-rendering offline.
+  Best-effort (never blocks or breaks a run) and configurable via the
+  `live_analysis` block (`save_render` default on, `render_oversampling`,
+  `render_max_edge`). The path is surfaced on `FovResult.render_path`.
 - **Zoom & pan in the live Overview.** The Overview/Zoom image is now a
   pannable, zoomable view: scroll the mouse wheel (or the −/+ buttons) to zoom
   about the cursor, left-drag to pan, **Fit** to frame the whole image, and
