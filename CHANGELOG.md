@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A dropped ibidi USB link could hang a run indefinitely (multi-day stall).**
+  The multiplexer's serial port was opened with a read `timeout` but no
+  `write_timeout`, so pyserial left writes blocking forever. When the USB link
+  dropped mid-run (e.g. USB selective-suspend), the next valve write hung the
+  fluid thread inside `Serial.write()` — the command never raised, the existing
+  retry→abort path never engaged, and the whole run deadlocked silently (the
+  imaging thread parked on a `done flushing` signal the frozen fluid thread
+  would never emit). The port now opens with a bounded `write_timeout` (default
+  5 s, overridable), so a dead link raises after its retries and propagates to a
+  loud orchestration abort instead of hanging.
+
 ## [0.3.3] - 2026-11-05
 
 Second rig-feedback hotfix: the installed v0.3.2 GUI still resolved the setups
