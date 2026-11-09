@@ -572,3 +572,32 @@ class IbidiRetryTest(unittest.TestCase):
         self.assertEqual(mx._serial._writes, 4)
         # The original timeout is preserved as the cause (not swallowed).
         self.assertIsInstance(ctx.exception.__cause__, SerialTimeoutException)
+
+    def test_open_serial_sets_write_timeout(self):
+        """The real port is opened with a bounded write_timeout, so a write to
+        a dead/suspended link raises (feeding the retry/abort path) instead of
+        blocking the calling thread forever."""
+        import unittest.mock as mock
+
+        import PycroFlow.ibidi_multiplexer as mod
+
+        captured = {}
+
+        class _RecSerial:
+            def __init__(self, *a, **k):
+                captured.update(k)
+
+            def close(self):
+                pass
+
+        with mock.patch.object(mod, "Serial", _RecSerial):
+            # Default: a non-None write_timeout is always set.
+            mx = IbidiMultiplexer("7", connect=False)
+            mx._port = "COM7"
+            mx._open_serial()
+            self.assertIsNotNone(captured.get("write_timeout"))
+            # Explicit override is honored.
+            mx2 = IbidiMultiplexer("7", connect=False, write_timeout=5.0)
+            mx2._port = "COM7"
+            mx2._open_serial()
+        self.assertEqual(captured.get("write_timeout"), 5.0)
