@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Zoom & pan in the live Overview.** The Overview/Zoom image is now a
+  pannable, zoomable view: scroll the mouse wheel (or the −/+ buttons) to zoom
+  about the cursor, left-drag to pan, **Fit** to frame the whole image, and
+  **1:1** for actual pixel size. A zoom/pan you set is preserved across incoming
+  frames (the ~2 Hz thumbnail stream no longer snaps the view back) until Fit
+  re-arms auto-fit. Contrast, auto-stretch, the boxes overlay, and double-click
+  pop-out are unchanged.
 ### Fixed
 
 - **Editing a Run Sequence step parameter left the duration estimate stale.**

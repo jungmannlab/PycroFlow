@@ -679,3 +679,93 @@ class TestAutoContrastIgnore(_QtTestCase):
         self.assertFalse(panel.auto_btn.isChecked())
         panel._set_image_from_bytes(dim.tobytes(), dim.shape, "uint16")
         self.assertEqual(panel.black.value(), 42)
+
+
+class _FakeWheel:
+    """Minimal stand-in for a QWheelEvent (just what wheelEvent reads)."""
+
+    def __init__(self, dy):
+        from PyQt6.QtCore import QPoint
+
+        self._d = QPoint(0, dy)
+
+    def angleDelta(self):  # noqa: N802 (mimics Qt API)
+        return self._d
+
+    def accept(self):
+        pass
+
+
+class TestOverviewZoomPan(_QtTestCase):
+    """The Overview image view zooms (wheel + buttons) and pans."""
+
+    def _panel_with_frame(self, n=64):
+        import numpy as np
+        from PycroFlow.gui.live.panels import OverviewZoom
+
+        panel = OverviewZoom()
+        self._alive.append(panel)
+        frame = np.zeros((n, n), dtype=np.uint16)
+        panel._on_thumbnail(
+            {"data": frame.tobytes(), "shape": frame.shape, "dtype": "uint16"}
+        )
+        return panel
+
+    def test_frame_populates_the_view(self):
+        panel = self._panel_with_frame()
+        self.assertFalse(panel.image._item.pixmap().isNull())
+
+    def test_zoom_buttons_change_scale(self):
+        panel = self._panel_with_frame()
+        before = panel.image.transform().m11()
+        panel.zoom_in_btn.click()
+        after = panel.image.transform().m11()
+        self.assertGreater(after, before)
+        self.assertTrue(panel.image._user_zoomed)
+        panel.zoom_out_btn.click()
+        self.assertLess(panel.image.transform().m11(), after)
+
+    def test_wheel_zooms(self):
+        panel = self._panel_with_frame()
+        before = panel.image.transform().m11()
+        panel.image.wheelEvent(_FakeWheel(120))
+        self.assertGreater(panel.image.transform().m11(), before)
+
+    def test_fit_rearms_autofit_and_one_to_one(self):
+        panel = self._panel_with_frame()
+        panel.zoom_in_btn.click()
+        self.assertTrue(panel.image._user_zoomed)
+        panel.fit_btn.click()
+        self.assertFalse(panel.image._user_zoomed)
+        panel.one_to_one_btn.click()
+        # 1:1 is the identity transform (one frame px per screen px).
+        self.assertAlmostEqual(panel.image.transform().m11(), 1.0, places=5)
+        self.assertTrue(panel.image._user_zoomed)
+
+    def test_user_zoom_preserved_across_new_frames(self):
+        import numpy as np
+
+        panel = self._panel_with_frame()
+        panel.zoom_in_btn.click()
+        scale = panel.image.transform().m11()
+        # A fresh frame must NOT refit (would fight the operator's zoom).
+        frame = np.zeros((64, 64), dtype=np.uint16)
+        panel._on_thumbnail(
+            {"data": frame.tobytes(), "shape": frame.shape, "dtype": "uint16"}
+        )
+        self.assertAlmostEqual(panel.image.transform().m11(), scale, places=5)
+
+    def test_zoom_is_clamped(self):
+        panel = self._panel_with_frame()
+        for _ in range(50):
+            panel.image.zoom(2.0)
+        self.assertLessEqual(
+            panel.image.transform().m11(), panel.image._MAX_SCALE + 1e-6
+        )
+
+    def test_double_click_requests_popout(self):
+        panel = self._panel_with_frame()
+        fired = []
+        panel.popout_requested.connect(lambda: fired.append(True))
+        panel.image.double_clicked.emit()
+        self.assertEqual(fired, [True])
