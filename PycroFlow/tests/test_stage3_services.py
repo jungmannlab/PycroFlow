@@ -102,6 +102,23 @@ class TestExperimentService(unittest.TestCase):
             ],
         )
 
+    def test_reload_while_loaded_renotifies_observers(self):
+        # Regression: a re-translate/re-load over an already-loaded protocol is
+        # LOADED -> LOADED; observers (the Run Sequence view) must still fire so
+        # the displayed steps refresh instead of going stale.
+        from PycroFlow.examples.demo_protocols import protocol
+
+        svc = ExperimentService()
+        svc.load_protocol(protocol)
+        self.assertEqual(svc.state, ExperimentState.LOADED)
+        transitions = []
+        svc.add_state_observer(lambda o, n: transitions.append((o, n)))
+        svc.load_protocol(dict(protocol))
+        self.assertEqual(
+            transitions,
+            [(ExperimentState.LOADED, ExperimentState.LOADED)],
+        )
+
     def test_log_observer_fires(self):
         from PycroFlow.examples.demo_protocols import protocol
 
