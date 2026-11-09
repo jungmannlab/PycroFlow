@@ -140,6 +140,11 @@ class IbidiMultiplexer(_ValveABC):
     switch_delay : float, default: 0.01
         Seconds between consecutive single-valve commands in the sequential
         path, spreading the actuation current. Ignored when batching.
+    write_timeout : float or None, default: 5.0
+        Serial *write* timeout in seconds. Bounds how long a single valve
+        write blocks before raising, so a dead/suspended USB link aborts the
+        run (via the retry path) instead of hanging the fluid thread forever.
+        ``None`` restores pyserial's block-forever behaviour.
     """
 
     def __init__(
