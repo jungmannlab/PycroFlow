@@ -549,15 +549,18 @@ class LiveAnalysisService:
         if not getattr(cfg, "save_render", False):
             return None
         try:
-            locs = metrics.accumulated_locs()
-            if locs is None or len(locs) == 0:
-                logger.info("live render: no localizations; skipped")
-                return None
+            # Resolve the destination BEFORE concatenating the locs: on the
+            # read-only MM-preview path there is never an output dir, so this
+            # skips a wasted full concat of the accumulated localizations.
             out_path = self._render_output_path(cfg)
             if out_path is None:
                 logger.info(
                     "live render: no movie_source_path/archive_dir; skipped"
                 )
+                return None
+            locs = metrics.accumulated_locs()
+            if locs is None or len(locs) == 0:
+                logger.info("live render: no localizations; skipped")
                 return None
             from PycroFlow.live_analysis.render import save_render_png
 
