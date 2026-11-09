@@ -447,6 +447,45 @@ class TestCaptureServicePerRound(unittest.TestCase):
             self.assertEqual(frames[0].shape, (90, 240, 3))
 
 
+class TestCaptureSubtitle(unittest.TestCase):
+    """A ``step`` control command captions the recorded/live tiles."""
+
+    def _service(self):
+        from PycroFlow.monitoring.capture_service import CaptureService
+
+        d = tempfile.mkdtemp()
+        out = os.path.join(d, "clips")
+        os.makedirs(out)
+        ctl = os.path.join(d, "ctl")
+        os.makedirs(ctl)
+        return CaptureService(
+            _mon_config(out),
+            control_dir=ctl,
+            run_id="SUB",
+            mode="emulator",
+        )
+
+    def test_step_command_sets_and_overlays_subtitle(self):
+        svc = self._service()
+        self.assertIsNone(svc._subtitle_label)
+        svc._handle(
+            {"cmd": "step", "label": "inject Imager 1", "protocol_step": 3}
+        )
+        self.assertEqual(svc._subtitle_label, "inject Imager 1")
+
+        tile = np.zeros((90, 240, 3), dtype=np.uint8)
+        out = svc._with_subtitle(tile)
+        self.assertEqual(out.shape, tile.shape)
+        # Subtitle burned into the bottom bar; the top is untouched.
+        self.assertGreater(int(out.sum()), 0)
+        self.assertEqual(int(out[:40].sum()), 0)
+
+    def test_no_subtitle_returns_tile_unchanged(self):
+        svc = self._service()
+        tile = np.full((90, 240, 3), 7, dtype=np.uint8)
+        self.assertIs(svc._with_subtitle(tile), tile)
+
+
 # --------------------------------------------------------------------------
 # Test B: registry index round-trip
 # --------------------------------------------------------------------------
@@ -571,6 +610,62 @@ class TestControllerRoundBinding(unittest.TestCase):
         proto = _build_proto(_small_config(n_imagers=2, initial=None))
         svc = _emulated_service(proto)
         self.assertIsNone(attach_monitoring(svc, {"emulated": True}))
+
+
+class TestControllerSubtitleFeed(unittest.TestCase):
+    """The controller tracks the fluid step and emits ``step`` commands."""
+
+    def _controller(self, step_idx):
+        import types
+
+        fluid_handler = types.SimpleNamespace(
+            get_current_protocol_iter=lambda arg=None: step_idx
+        )
+        orch = types.SimpleNamespace(fluid_handler=fluid_handler)
+        proto = {
+            "fluid": {
+                "protocol_entries": [
+                    {"$type": "inject", "reservoir_id": 2, "volume": 100.0},
+                    {"$type": "incubate", "duration": 60.0},
+                ]
+            }
+        }
+        svc = types.SimpleNamespace(
+            protocol=proto,
+            orchestrator=orch,
+            experiment_design=None,
+            add_state_observer=lambda *a: None,
+        )
+        cfg = MonitoringConfig(
+            cameras=[CameraConfig("pump", 0)], output_dir="/x"
+        )
+        return MonitoringController(svc, cfg, mode="emulator")
+
+    def test_fluid_step_label(self):
+        ctrl = self._controller(0)
+        self.assertTrue(ctrl._fluid_step_label(0).startswith("inject"))
+        self.assertEqual(ctrl._fluid_step_label(1), "incubate")
+        self.assertIsNone(ctrl._fluid_step_label(None))
+        self.assertIsNone(ctrl._fluid_step_label(99))
+
+    def test_poll_emits_step_command_on_change(self):
+        import threading
+
+        ctrl = self._controller(1)
+        ctrl._started = True
+        t = threading.Thread(target=ctrl._step_poll_loop, daemon=True)
+        t.start()
+        time.sleep(0.45)
+        ctrl._step_poll_stop.set()
+        t.join(timeout=2.0)
+
+        cmds = []
+        while not ctrl._queue.empty():
+            cmds.append(ctrl._queue.get_nowait())
+        steps = [c for c in cmds if c.get("cmd") == "step"]
+        self.assertTrue(steps)
+        self.assertEqual(steps[0]["protocol_step"], 1)
+        self.assertEqual(steps[0]["label"], "incubate")
 
 
 class TestOutputDirResolution(unittest.TestCase):

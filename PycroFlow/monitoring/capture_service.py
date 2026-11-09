@@ -196,6 +196,10 @@ class CaptureService:
         )
         self._live_fps = min(max(1, config.fps), 5)
         self._last_live = 0.0
+        # Subtitle feed (current Run-Sequence step + elapsed), set by ``step``
+        # control commands and composited onto every recorded/live tile.
+        self._subtitle_label: Optional[str] = None
+        self._subtitle_start: float = 0.0
         # Create the pool dir before opening the registry buffer sqlite in it:
         # output_dir defaults to a fresh <save_dir>/fluidics_cam, so without
         # this the buffer connect fails and indexing is silently disabled.
@@ -271,10 +275,17 @@ class CaptureService:
             )
         elif kind == "round_end":
             self._close_clip(cmd.get("protocol_step_end"))
+        elif kind == "step":
+            self._set_subtitle(cmd.get("label"))
         elif kind == "stop":
             self._stop.set()
         else:
             logger.warning("monitoring: unknown control command {!r}", cmd)
+
+    def _set_subtitle(self, label: Optional[str]) -> None:
+        """Start a new subtitle; elapsed is counted from this arrival."""
+        self._subtitle_label = label
+        self._subtitle_start = time.monotonic()
 
     # -- recording -------------------------------------------------------
     def _open_clip(
@@ -332,6 +343,7 @@ class CaptureService:
         if not (due_record or due_live):
             return
         tile = compose([t.get_latest() for t in self._threads], self._layout)
+        tile = self._with_subtitle(tile)
         if due_record:
             try:
                 self._writer.write(tile)
@@ -343,6 +355,26 @@ class CaptureService:
         if due_live:
             self._publish_live(tile)
             self._last_live = now
+
+    def _with_subtitle(self, tile):
+        """Composite the current step subtitle onto a tile. Best-effort: any
+        overlay failure returns the un-captioned tile (never drops a frame)."""
+        if not self._subtitle_label:
+            return tile
+        try:
+            from PycroFlow.monitoring.overlay import (
+                burn_subtitle_rgb,
+                subtitle_text,
+            )
+
+            text = subtitle_text(
+                self._subtitle_label,
+                time.monotonic() - self._subtitle_start,
+            )
+            return burn_subtitle_rgb(tile, text)
+        except Exception as exc:  # pragma: no cover - best-effort
+            logger.warning("monitoring: subtitle overlay failed ({!r})", exc)
+            return tile
 
     def _publish_live(self, tile) -> None:
         """Write the (downscaled) tile to the live-preview file. Best-effort:

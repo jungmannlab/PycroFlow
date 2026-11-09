@@ -276,6 +276,9 @@ class ImagingSystem(AbstractSystem):
         # folder itself is only created lazily at the first acquire.
         self._position_count = None
         self._savedir_ready = False
+        # Subtitle state for the fluorescence "fluid step monitor" movie; set
+        # per acquire entry (monitoring only) and read in image_process_fn.
+        self._monitor_overlay = None
 
     def execute_protocol_entry(self, i):
         """execute protocol entry i"""
@@ -284,6 +287,15 @@ class ImagingSystem(AbstractSystem):
             logger.debug(
                 "executing protocol entry {:d}: {:s}".format(i, str(pentry))
             )
+            # Caption monitor movies (never scientific acquisitions) with the
+            # step name + elapsed, burned into the frames like subtitles.
+            if pentry.get("monitoring"):
+                self._monitor_overlay = {
+                    "label": pentry.get("name") or "fluid monitor",
+                    "start": time.time(),
+                }
+            else:
+                self._monitor_overlay = None
             # Resolve + create this run's folder on the first acquire (if the
             # run-start hook didn't already), so config['save_dir'] below is the
             # real run folder. Idempotent within a run via _savedir_ready.
@@ -739,6 +751,29 @@ class ImagingSystem(AbstractSystem):
             print(f"resuming after {t_pause:.1f} s of pausing.")
 
         self.curr_frame += 1
+
+        # Burn the step subtitle into monitor-movie frames only (gated by the
+        # per-entry flag set in execute_protocol_entry); scientific
+        # acquisitions are returned untouched. Best-effort — an overlay failure
+        # must never stop the MDA, so the raw frame is still saved.
+        overlay = getattr(self, "_monitor_overlay", None)
+        if overlay is not None:
+            try:
+                from PycroFlow.monitoring.overlay import (
+                    burn_subtitle_gray,
+                    subtitle_text,
+                )
+
+                img = burn_subtitle_gray(
+                    img,
+                    subtitle_text(
+                        overlay["label"], time.time() - overlay["start"]
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001 - never kill the MDA
+                logger.warning(
+                    "monitor subtitle overlay failed ({!r})".format(exc)
+                )
 
         return (img, meta)
 
