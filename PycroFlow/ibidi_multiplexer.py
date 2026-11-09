@@ -88,6 +88,17 @@ DEFAULT_SWITCH_DELAY = 0.01
 DEFAULT_COMMAND_RETRIES = 3
 DEFAULT_RETRY_DELAY = 0.3
 
+# Serial WRITE timeout (seconds). Without this, pyserial leaves ``write_timeout``
+# at ``None`` (block forever), so a write to a USB-suspended / unplugged ibidi
+# hangs the calling thread indefinitely — the command never raises, the retry /
+# abort path below never engages, and the whole run deadlocks silently (observed
+# as a multi-day stall at an inject step after the keep-alive logged the link had
+# dropped). A bounded write timeout makes a dead link RAISE instead, so the
+# command exhausts its retries and propagates to a loud orchestration abort.
+# ibidi commands are a few dozen bytes, so a legitimate write never approaches
+# this; overridable via the setup's ``multiplexer:`` block.
+DEFAULT_WRITE_TIMEOUT = 5.0
+
 # Keep-alive: a background read-only ping (``ID``) sent when the link has been
 # idle this many seconds, so the USB-serial port never idles long enough for
 # Windows USB selective-suspend (or the device's own sleep) to drop it mid-run.
@@ -145,6 +156,7 @@ class IbidiMultiplexer(_ValveABC):
         command_retries=DEFAULT_COMMAND_RETRIES,
         retry_delay=DEFAULT_RETRY_DELAY,
         keepalive_interval=DEFAULT_KEEPALIVE_INTERVAL,
+        write_timeout=DEFAULT_WRITE_TIMEOUT,
         **kwargs,
     ):
         self.address = address
@@ -161,6 +173,11 @@ class IbidiMultiplexer(_ValveABC):
         self._port = None
         self._baud = baud
         self._timeout = timeout
+        # Bounded write timeout so a dead/suspended link raises instead of
+        # blocking the calling thread forever (see DEFAULT_WRITE_TIMEOUT).
+        self._write_timeout = (
+            float(write_timeout) if write_timeout is not None else None
+        )
 
         # Keep-alive (see DEFAULT_KEEPALIVE_INTERVAL): a daemon thread pings the
         # device over idle gaps so the USB link can't be suspended out from
@@ -231,6 +248,7 @@ class IbidiMultiplexer(_ValveABC):
             self._port,
             baudrate=self._baud,
             timeout=self._timeout,
+            write_timeout=self._write_timeout,
             exclusive=True,
         )
 
