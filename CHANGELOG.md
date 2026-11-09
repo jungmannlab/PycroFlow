@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Laser interlock reported a cryptic `AttributeError` when monet never built.**
+  `IlluminationSystem.instrument` was only created on a successful lazy monet
+  build, so when the build failed (e.g. a dead Thorlabs beampath device), the
+  T3 fail-safe (`all_off` / `beampath_close`) hit
+  `AttributeError: 'IlluminationSystem' object has no attribute 'instrument'`.
+  `__init__` now initialises `self.instrument = None`, `beampath_open` /
+  `beampath_close` guard it explicitly (the latter now logs *"CANNOT close the
+  shutter — laser control is not loaded; the shutter was not actuated"* instead
+  of a raw attribute error), and the lazy-build guard switched from `hasattr`
+  to `is None` so construction (and retry-after-failure) still runs. The
+  fail-safe outcome is unchanged (it already reported honestly and escalated to
+  CRITICAL) — the failure is now legible. NOTE: when the shared monet build
+  fails on one dead device, software still cannot disable the lasers at all;
+  physically switch them off / block the beam, and treat a repeatedly dropping
+  Thorlabs/USB device like the ibidi link (disable USB selective-suspend).
+
 ## [0.3.3] - 2026-11-05
 
 Second rig-feedback hotfix: the installed v0.3.2 GUI still resolved the setups

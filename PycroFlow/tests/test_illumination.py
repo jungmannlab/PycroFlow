@@ -201,6 +201,12 @@ class ProtocolDispatchTest(unittest.TestCase):
 
 
 class LazyMonetTest(unittest.TestCase):
+    def test_instrument_initialized_to_none(self):
+        # The attribute ALWAYS exists from construction, so the fail-safe
+        # interlock never hits a raw "no attribute 'instrument'" AttributeError
+        # when the monet build has not run / failed.
+        self.assertIsNone(IlluminationSystem().instrument)
+
     def test_assign_protocol_does_not_load_monet(self):
         # _assign_protocol must not open the lasers — so translating a design
         # (which builds the orchestrator) never touches hardware.
@@ -251,6 +257,13 @@ class AllOffFailSafeTest(unittest.TestCase):
     def test_beampath_close_returns_false_when_unactuatable(self):
         isy = _make_system()
         isy.mprotocol = {"beampath": {}}  # no "end" -> KeyError
+        self.assertFalse(isy.beampath_close())
+
+    def test_beampath_close_false_without_instrument_no_raise(self):
+        # Dead / never-built monet (the observed case: a dead Thorlabs beampath
+        # device): the shutter cannot be actuated. beampath_close must report
+        # False cleanly — not raise, not a cryptic missing-attribute error.
+        isy = IlluminationSystem()  # instrument is None
         self.assertFalse(isy.beampath_close())
 
     def test_all_off_disables_all_and_reports_shutter_closed(self):
