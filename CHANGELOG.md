@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Editing a Run Sequence step parameter left the duration estimate stale.**
+  Applying an edit in the parameter box (e.g. an acquire step's `frames` /
+  `t_exp`) mutated the protocol but never recomputed the estimates, so the
+  sequence-duration/ETA label kept the old value until a reload or run start.
+  `_on_apply` now refreshes the durations + total estimate and flags the run
+  modified, matching the structural-edit path.
+
 ## [0.3.3] - 2026-11-05
 
 Second rig-feedback hotfix: the installed v0.3.2 GUI still resolved the setups
