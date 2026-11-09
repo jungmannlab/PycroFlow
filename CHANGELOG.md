@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Editing a Run Sequence step parameter left the duration estimate stale.**
+  Applying an edit in the parameter box (e.g. an acquire step's `frames` /
+  `t_exp`) mutated the protocol but never recomputed the estimates, so the
+  sequence-duration/ETA label kept the old value until a reload or run start.
+  `_on_apply` now refreshes the durations + total estimate and flags the run
+  modified, matching the structural-edit path.
 - **Re-translating an edited design left the Run Sequence stale.** Translating a
   design that was already translated is a `LOADED -> LOADED` state change, which
   `ExperimentService._set_state` swallowed, so the Run Sequence tab never
