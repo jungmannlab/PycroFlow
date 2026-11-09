@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Re-translating an edited design left the Run Sequence stale.** Translating a
+  design that was already translated is a `LOADED -> LOADED` state change, which
+  `ExperimentService._set_state` swallowed, so the Run Sequence tab never
+  repopulated (clearing first was the workaround). `load_protocol` now forces the
+  state notification, so a re-translate/re-load always refreshes the view.
 - **Laser interlock reported a cryptic `AttributeError` when monet never built.**
   `IlluminationSystem.instrument` was only created on a successful lazy monet
   build, so when the build failed (e.g. a dead Thorlabs beampath device), the
