@@ -287,7 +287,10 @@ class ExperimentService:
         # A freshly loaded/translated protocol is pristine until edited.
         self._protocol_modified = False
         self._build_orchestrator()
-        self._set_state(ExperimentState.LOADED)
+        # force=True: a re-translate/re-load over an already-loaded sequence is
+        # LOADED -> LOADED, so observers must be notified unconditionally for
+        # the Run Sequence view to repopulate with the new steps.
+        self._set_state(ExperimentState.LOADED, force=True)
 
     @property
     def protocol_modified(self) -> bool:
@@ -726,10 +729,16 @@ class ExperimentService:
         if self._orchestrator is None:
             raise RuntimeError("no protocol loaded; call load_protocol first")
 
-    def _set_state(self, new_state: ExperimentState) -> None:
+    def _set_state(
+        self, new_state: ExperimentState, force: bool = False
+    ) -> None:
         with self._lock:
             old, self._state = self._state, new_state
-        if old is new_state:
+        # ``force`` re-emits even when the state is unchanged, so observers
+        # that mirror the loaded protocol (the Run Sequence tab) refresh on a
+        # re-load/re-translate -- which is LOADED -> LOADED and would otherwise
+        # be swallowed here, leaving the view stale.
+        if old is new_state and not force:
             return
         logger.debug(
             "ExperimentService: {} -> {}".format(old.value, new_state.value)

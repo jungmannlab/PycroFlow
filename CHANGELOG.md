@@ -18,6 +18,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`monitoring: true` acquire) gets it burned into its frames in
   `image_process_fn`. Scientific acquisitions are never touched. Shared,
   dependency-light overlay helper (`monitoring/overlay.py`, Pillow).
+- **Per-FOV super-resolution render saved after each acquisition.** When live
+  analysis runs, the FOV's accumulated localizations are rendered (picasso) into
+  a super-resolution PNG and written next to the raw movie (`<movie>_render.png`)
+  at FOV end — a quick retrospective visual without re-rendering offline.
+  Best-effort (never blocks or breaks a run) and configurable via the
+  `live_analysis` block (`save_render` default on, `render_oversampling`,
+  `render_max_edge`). The path is surfaced on `FovResult.render_path`.
+- **Zoom & pan in the live Overview.** The Overview/Zoom image is now a
+  pannable, zoomable view: scroll the mouse wheel (or the −/+ buttons) to zoom
+  about the cursor, left-drag to pan, **Fit** to frame the whole image, and
+  **1:1** for actual pixel size. A zoom/pan you set is preserved across incoming
+  frames (the ~2 Hz thumbnail stream no longer snaps the view back) until Fit
+  re-arms auto-fit. Contrast, auto-stretch, the boxes overlay, and double-click
+  pop-out are unchanged.
+### Fixed
+
+- **Editing a Run Sequence step parameter left the duration estimate stale.**
+  Applying an edit in the parameter box (e.g. an acquire step's `frames` /
+  `t_exp`) mutated the protocol but never recomputed the estimates, so the
+  sequence-duration/ETA label kept the old value until a reload or run start.
+  `_on_apply` now refreshes the durations + total estimate and flags the run
+  modified, matching the structural-edit path.
+- **Re-translating an edited design left the Run Sequence stale.** Translating a
+  design that was already translated is a `LOADED -> LOADED` state change, which
+  `ExperimentService._set_state` swallowed, so the Run Sequence tab never
+  repopulated (clearing first was the workaround). `load_protocol` now forces the
+  state notification, so a re-translate/re-load always refreshes the view.
+- **Laser interlock reported a cryptic `AttributeError` when monet never built.**
+  `IlluminationSystem.instrument` was only created on a successful lazy monet
+  build, so when the build failed (e.g. a dead Thorlabs beampath device), the
+  T3 fail-safe (`all_off` / `beampath_close`) hit
+  `AttributeError: 'IlluminationSystem' object has no attribute 'instrument'`.
+  `__init__` now initialises `self.instrument = None`, `beampath_open` /
+  `beampath_close` guard it explicitly (the latter now logs *"CANNOT close the
+  shutter — laser control is not loaded; the shutter was not actuated"* instead
+  of a raw attribute error), and the lazy-build guard switched from `hasattr`
+  to `is None` so construction (and retry-after-failure) still runs. The
+  fail-safe outcome is unchanged (it already reported honestly and escalated to
+  CRITICAL) — the failure is now legible. NOTE: when the shared monet build
+  fails on one dead device, software still cannot disable the lasers at all;
+  physically switch them off / block the beam, and treat a repeatedly dropping
+  Thorlabs/USB device like the ibidi link (disable USB selective-suspend).
+- **A dropped ibidi USB link could hang a run indefinitely (multi-day stall).**
+  The multiplexer's serial port was opened with a read `timeout` but no
+  `write_timeout`, so pyserial left writes blocking forever. When the USB link
+  dropped mid-run (e.g. USB selective-suspend), the next valve write hung the
+  fluid thread inside `Serial.write()` — the command never raised, the existing
+  retry→abort path never engaged, and the whole run deadlocked silently (the
+  imaging thread parked on a `done flushing` signal the frozen fluid thread
+  would never emit). The port now opens with a bounded `write_timeout` (default
+  5 s, overridable), so a dead link raises after its retries and propagates to a
+  loud orchestration abort instead of hanging.
 
 ## [0.3.3] - 2026-11-05
 

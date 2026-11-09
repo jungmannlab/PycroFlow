@@ -122,6 +122,20 @@ class RunningMetrics:
             self._locs = pd.concat(self._chunks, ignore_index=True)
         return self._locs
 
+    def accumulated_locs(self) -> "pd.DataFrame | None":
+        """Return the full accumulated localizations (all batches), or None.
+
+        Thread-safe. Used at FOV teardown to render the super-resolution image;
+        the drain has stopped by then, so the returned table is complete.
+        """
+        with self._lock:
+            return self._concat()
+
+    def info(self):
+        """The picasso metadata provided via :meth:`set_info` (or None)."""
+        with self._lock:
+            return self._info
+
     def _maybe_nena(self, force: bool) -> None:
         """(Re)compute NeNA under the throttle, or unconditionally if ``force``.
 
