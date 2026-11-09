@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Re-translating an edited design left the Run Sequence stale.** Translating a
+  design that was already translated is a `LOADED -> LOADED` state change, which
+  `ExperimentService._set_state` swallowed, so the Run Sequence tab never
+  repopulated (clearing first was the workaround). `load_protocol` now forces the
+  state notification, so a re-translate/re-load always refreshes the view.
+
 ## [0.3.3] - 2026-11-05
 
 Second rig-feedback hotfix: the installed v0.3.2 GUI still resolved the setups
