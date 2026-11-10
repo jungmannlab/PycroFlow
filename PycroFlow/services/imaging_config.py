@@ -85,5 +85,10 @@ def build_fov_config(
         queue_size=options.get("queue_size", 8),
         use_processes=options.get("use_processes", use_processes),
         pixelsize_nm=(camera_info or {}).get("Pixelsize"),
+        # Save a super-resolution render per FOV (on by default on the live
+        # pipelines; the preview path no-ops for lack of an output dir).
+        save_render=options.get("save_render", True),
+        render_oversampling=options.get("render_oversampling", 8),
+        render_max_edge=options.get("render_max_edge", 4096),
         **fov_config_fields,
     )

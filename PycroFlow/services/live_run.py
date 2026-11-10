@@ -35,8 +35,11 @@ byte-identical to a pre-WP-LIVE-INT run):
 Tuning rides the same ``config['live_analysis']`` dict: ``localize_params``,
 ``batch_size``, ``n_workers``, ``queue_size``, ``use_processes``,
 ``first_frame_timeout_s``, ``max_pending_frames`` (the tap's RAM-backlog
-bound), and ``archive_dir`` (enables the C15 raw-movie archive move per FOV;
-unset = movies stay in the acquisition save_dir, logged once per run).
+bound), ``archive_dir`` (enables the C15 raw-movie archive move per FOV;
+unset = movies stay in the acquisition save_dir, logged once per run), and the
+per-FOV super-resolution render (``save_render`` — default on —,
+``render_oversampling``, ``render_max_edge``; the PNG lands beside the raw
+movie, best-effort).
 
 Laser interlock (T3/C21) in the orchestrated context: the service runs with
 ``interlock_per_fov=False`` — abort/error engage immediately, and teardown

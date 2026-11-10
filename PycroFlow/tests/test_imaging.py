@@ -139,6 +139,65 @@ class TestImaging(unittest.TestCase):
         )
         self.assertTrue(os.path.isfile(pfs_log))
 
+    def test_monitoring_acquire_arms_subtitle_overlay(self):
+        """A monitoring acquire entry arms the frame subtitle; a plain one
+        does not."""
+        isy = pim.ImagingSystem(_make_config())
+        proto = _make_protocol()
+        proto["protocol_entries"] = [
+            {
+                "$type": "acquire",
+                "frames": 5,
+                "t_exp": 100,
+                "message": "round_monitor-x",
+                "name": "imager1 (wash monitor)",
+                "monitoring": True,
+            },
+            {"$type": "acquire", "frames": 5, "t_exp": 100, "message": "sci"},
+        ]
+        isy._assign_protocol(proto)
+        # Stub the actual recording — we only care about the overlay arming.
+        isy.do_all_recodrings = lambda *a, **k: None
+        isy.prepare_savedir = lambda *a, **k: None
+        isy._savedir_ready = True
+
+        isy.execute_protocol_entry(0)
+        self.assertIsNotNone(isy._monitor_overlay)
+        self.assertEqual(
+            isy._monitor_overlay["label"], "imager1 (wash monitor)"
+        )
+        # A subsequent scientific acquire disarms it.
+        isy.execute_protocol_entry(1)
+        self.assertIsNone(isy._monitor_overlay)
+
+    def test_image_process_fn_overlays_monitor_frames_only(self):
+        """image_process_fn burns the subtitle into monitor frames and leaves
+        scientific frames byte-identical."""
+        import time
+        import queue
+        import numpy as np
+
+        isy = pim.ImagingSystem(_make_config())
+        isy._assign_protocol(_make_protocol())
+        isy.curr_frame = 1  # skip the every-100th-frame PFS branch
+        frame = np.zeros((64, 64), dtype=np.uint16)
+
+        # No overlay armed -> the frame is returned untouched.
+        isy._monitor_overlay = None
+        out, _ = isy.image_process_fn(frame.copy(), {}, queue.Queue())
+        self.assertTrue(np.array_equal(out, frame))
+
+        # Overlay armed -> a subtitle is burned into the bottom of the frame.
+        isy._monitor_overlay = {
+            "label": "imager1 (wash monitor)",
+            "start": time.time(),
+        }
+        out2, _ = isy.image_process_fn(frame.copy(), {}, queue.Queue())
+        self.assertEqual(out2.shape, frame.shape)
+        self.assertEqual(out2.dtype, frame.dtype)
+        self.assertFalse(np.array_equal(out2, frame))
+        self.assertTrue(np.array_equal(out2[:30], frame[:30]))  # top untouched
+
 
 if __name__ == "__main__":
     unittest.main()

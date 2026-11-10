@@ -136,6 +136,13 @@ class FovConfig:
     # hard-coded). None uses permissive defaults; the gate marks the dataset
     # ready for cluster hand-off iff the final metrics pass.
     qc_thresholds: QcThresholds | None = None
+    # Save a super-resolution render of the FOV's localizations at end-of-FOV
+    # (a quick retrospective visual beside the raw movie). Off by default for a
+    # bare FovConfig so the standalone/golden path is unchanged; the GUI /
+    # orchestrated path enables it via build_fov_config.
+    save_render: bool = False
+    render_oversampling: int = 8
+    render_max_edge: int = 4096
 
 
 @dataclass
@@ -161,6 +168,9 @@ class FovResult:
     # WP-9 hand-off QC verdict (passed / reasons / metrics / readied), or None
     # when the gate didn't run (no acquisition_run record was posted).
     qc: dict | None = None
+    # Path of the super-resolution render written at FOV end, or None when the
+    # render is disabled / there was nothing to render.
+    render_path: str | None = None
 
     @property
     def partial(self) -> bool:
@@ -317,6 +327,7 @@ class LiveAnalysisService:
         archive_result = None
         registry_ids = None
         qc_verdict = None
+        render_path = None
 
         def _on_result(res: LocalizeResult) -> None:
             # Drain-thread sink: fold locs into the running metrics and push.
@@ -458,6 +469,10 @@ class LiveAnalysisService:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("archive step raised: {!r}".format(exc))
 
+            # Save a super-resolution render of the FOV (best-effort, config-
+            # gated); a quick retrospective visual beside the raw movie.
+            render_path = self._maybe_render(cfg, metrics)
+
             # Post the per-FOV registry record (best-effort; never blocks).
             # Coverage provenance rides on the record so partial coverage is
             # explicit, never silent: frames_read vs frames_localized, a
@@ -521,7 +536,71 @@ class LiveAnalysisService:
             coverage=coverage,
             abort_generation=abort_generation,
             qc=qc_verdict,
+            render_path=render_path,
         )
+
+    def _maybe_render(self, cfg: "FovConfig", metrics: RunningMetrics):
+        """Render the FOV's accumulated locs to a PNG beside the movie.
+
+        Best-effort: disabled unless ``cfg.save_render``; a no-op (logged) when
+        there are no localizations or no output directory; never raises, so a
+        render problem can't break acquisition.
+        """
+        if not getattr(cfg, "save_render", False):
+            return None
+        try:
+            # Resolve the destination BEFORE concatenating the locs: on the
+            # read-only MM-preview path there is never an output dir, so this
+            # skips a wasted full concat of the accumulated localizations.
+            out_path = self._render_output_path(cfg)
+            if out_path is None:
+                logger.info(
+                    "live render: no movie_source_path/archive_dir; skipped"
+                )
+                return None
+            locs = metrics.accumulated_locs()
+            if locs is None or len(locs) == 0:
+                logger.info("live render: no localizations; skipped")
+                return None
+            from PycroFlow.live_analysis.render import save_render_png
+
+            path = save_render_png(
+                locs,
+                out_path,
+                info=metrics.info(),
+                pixelsize_nm=cfg.pixelsize_nm,
+                oversampling=getattr(cfg, "render_oversampling", 8),
+                max_edge=getattr(cfg, "render_max_edge", 4096),
+            )
+            if path:
+                logger.info("live render saved: {}".format(path))
+            return path
+        except Exception as exc:  # noqa: BLE001 - never break acquisition
+            logger.warning("live render failed: {!r}".format(exc))
+            return None
+
+    @staticmethod
+    def _render_output_path(cfg: "FovConfig"):
+        """Where to write the FOV render: beside the raw movie, else archive.
+
+        Returns None when neither a movie path nor an archive dir is known.
+        """
+        import os
+
+        src = cfg.movie_source_path
+        if src:
+            if os.path.isdir(src):
+                base_dir, stem = src, (
+                    os.path.basename(os.path.normpath(src)) or "fov"
+                )
+            else:
+                base_dir = os.path.dirname(src) or "."
+                stem = os.path.splitext(os.path.basename(src))[0] or "fov"
+        elif cfg.archive_dir:
+            base_dir, stem = cfg.archive_dir, "fov"
+        else:
+            return None
+        return os.path.join(base_dir, "{}_render.png".format(stem))
 
     # -- internals ----------------------------------------------------------
     def _push_metrics(self, run_id, metrics: RunningMetrics, backend) -> None:

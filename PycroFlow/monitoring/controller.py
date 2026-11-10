@@ -108,6 +108,14 @@ class MonitoringController:
         self._writer_stop = threading.Event()
         self._seq = 0
 
+        # Subtitle feed: a light poll thread tracks the fluid handler's current
+        # Run-Sequence step and emits a ``step`` command (label + stamp) when it
+        # changes, so the capture process can caption each clip with the step
+        # being performed and its elapsed time.
+        self._step_poll_thread: Optional[threading.Thread] = None
+        self._step_poll_stop = threading.Event()
+        self._last_emitted_step: Optional[int] = None
+
         self._started = False
         self._spawned = False
         self._active = False  # a round window is currently open
@@ -215,11 +223,57 @@ class MonitoringController:
                 self._registry.add_observer(self._on_signal)
             if self._open_at_start:
                 self._open()
+        # Start the subtitle feed (best-effort; a failure never stops the run).
+        if self._spawned:
+            self._step_poll_stop.clear()
+            self._last_emitted_step = None
+            self._step_poll_thread = threading.Thread(
+                target=self._step_poll_loop, name="cam-step-poll", daemon=True
+            )
+            self._step_poll_thread.start()
         logger.info(
             "monitoring: recording {} exchange leg(s), run {}",
             len(self._follows),
             self.run_id,
         )
+
+    def _step_poll_loop(self) -> None:
+        """Emit a ``step`` command whenever the fluid step index changes.
+
+        Runs on its own daemon thread while recording; reads are best-effort and
+        never raise (monitoring must not disturb the run). Elapsed time is
+        measured in the capture process from the command's arrival.
+        """
+        while not self._step_poll_stop.wait(0.3):
+            if not self._started:
+                break
+            idx = self._current_fluid_step()
+            if idx is None or idx == self._last_emitted_step:
+                continue
+            self._last_emitted_step = idx
+            self._emit(
+                {
+                    "cmd": "step",
+                    "protocol_step": idx,
+                    "label": self._fluid_step_label(idx),
+                    "t_utc": datetime.now(timezone.utc).strftime(
+                        "%Y%m%dT%H%M%SZ"
+                    ),
+                }
+            )
+
+    def _fluid_step_label(self, idx: Optional[int]) -> Optional[str]:
+        """A short human label for fluid step ``idx`` (None if unavailable)."""
+        try:
+            proto = self._svc.protocol or {}
+            entries = (proto.get("fluid") or {}).get("protocol_entries") or []
+            if idx is None or not (0 <= idx < len(entries)):
+                return None
+            from PycroFlow.protocols.describe import action_label
+
+            return action_label(entries[idx])
+        except Exception:  # pragma: no cover - defensive
+            return None
 
     @property
     def output_dir(self) -> Optional[str]:
@@ -410,6 +464,8 @@ class MonitoringController:
             if self._active:
                 self._close()
             spawned = self._spawned
+        # Stop the subtitle poll (outside the lock; the loop checks _started).
+        self._step_poll_stop.set()
         # Outside the lock: tell the child to stop and reap it (may block).
         try:
             if spawned:
@@ -430,6 +486,9 @@ class MonitoringController:
         self._writer_stop.set()
         if self._writer_thread is not None:
             self._writer_thread.join(timeout=2.0)
+        if self._step_poll_thread is not None:
+            self._step_poll_thread.join(timeout=2.0)
+            self._step_poll_thread = None
         proc, self._proc = self._proc, None
         if proc is not None:
             try:
