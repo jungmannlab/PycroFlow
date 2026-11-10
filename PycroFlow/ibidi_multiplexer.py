@@ -108,7 +108,7 @@ DEFAULT_WRITE_TIMEOUT = 5.0
 # never touched). A brief drop/replug thus resumes the run transparently instead
 # of aborting it; a truly dead device still aborts after this window (never the
 # old multi-day hang). 0 / None disables auto-reconnect (immediate raise after
-# retries). Overridable via the setup's ``multiplexer:`` block.
+# retries). Overridable via the setup's ``hamilton.ibidi:`` block.
 DEFAULT_RECONNECT_TIMEOUT = 120.0
 
 # Keep-alive: a background read-only ping (``ID``) sent when the link has been
@@ -210,6 +210,11 @@ class IbidiMultiplexer(_ValveABC):
         self._reconnect_timeout = float(reconnect_timeout or 0)
         self._usb_id = None
         self._reconnect_lock = threading.Lock()
+        # True only between a successful connect() and close(): gates auto-
+        # reconnect so it never fires during the initial handshake (a wedged
+        # device would otherwise hang connect() for the whole window) nor after
+        # a deliberate close.
+        self._connected = False
 
         # Keep-alive (see DEFAULT_KEEPALIVE_INTERVAL): a daemon thread pings the
         # device over idle gaps so the USB link can't be suspended out from
@@ -267,6 +272,8 @@ class IbidiMultiplexer(_ValveABC):
         # device if it re-enumerates to a different COM port (safe: it never
         # opens a port that isn't this device).
         self._record_usb_identity()
+        # Handshake done: arm auto-reconnect for subsequent commands.
+        self._connected = True
         self._start_keepalive()
 
     def _open_serial(self):
@@ -339,6 +346,9 @@ class IbidiMultiplexer(_ValveABC):
         the whole shutdown. Takes ``self._lock`` so it can't swap the handle
         out from under an in-flight :meth:`_command` on another thread.
         """
+        # Disarm auto-reconnect first so a concurrent command-path recovery
+        # won't try to re-open the port we are about to drop.
+        self._connected = False
         # Stop the keep-alive before touching the handle so its ping can't race
         # the close (it goes through _command, which takes _lock).
         self._stop_keepalive()
@@ -425,21 +435,15 @@ class IbidiMultiplexer(_ValveABC):
             except Exception as exc:  # noqa: BLE001 - keep the thread alive
                 logger.warning(
                     "ibidi keep-alive got no response on {} ({!r}); the link "
-                    "may have dropped (USB suspend / unplug)".format(
+                    "may have dropped (USB suspend / unplug). The next real "
+                    "command will attempt to reconnect.".format(
                         self._port, exc
                     )
                 )
-                # Self-heal an idle drop so the NEXT real command finds the link
-                # already back (bounded; interruptible by close()). Best-effort.
-                if self._reconnect_timeout:
-                    try:
-                        self._recover_link()
-                    except Exception as e2:  # noqa: BLE001 - never die here
-                        logger.warning(
-                            "ibidi keep-alive reconnect failed: {!r}".format(
-                                e2
-                            )
-                        )
+                # NB: the keep-alive deliberately does NOT run _recover_link
+                # itself — that can take up to reconnect_timeout, which would
+                # outlive _stop_keepalive()'s bounded join and race close()'s
+                # self._serial teardown. Recovery is the next real command's job.
             self._last_activity = time.monotonic()
 
     # -- low-level command ----------------------------------------------------
@@ -490,9 +494,15 @@ class IbidiMultiplexer(_ValveABC):
             except SerialException as exc:
                 last_exc = exc
         # Retries exhausted: the link looks genuinely dropped. Try a bounded
-        # auto-reconnect (never for the cheap keep-alive probe), then one more
-        # command before conceding to a loud abort.
-        if retries != 0 and self._reconnect_timeout and self._recover_link():
+        # auto-reconnect (never for the cheap keep-alive probe, nor during the
+        # initial connect handshake), then one more command before conceding to
+        # a loud abort.
+        if (
+            retries != 0
+            and self._reconnect_timeout
+            and self._connected
+            and self._recover_link()
+        ):
             try:
                 return self._write_read(cmd, payload)
             except SerialException as exc:
@@ -508,9 +518,13 @@ class IbidiMultiplexer(_ValveABC):
 
         The single serial-IO primitive, shared by :meth:`_command`'s retry loop
         and the reconnect probe (:meth:`_try_relink`) so neither re-implements
-        the framing. Raises :class:`~serial.SerialException` on any serial fault.
+        the framing. Raises :class:`~serial.SerialException` on any serial fault
+        (including a concurrent :meth:`close` that dropped the handle — a clean
+        error rather than an ``AttributeError`` on ``None``).
         """
         with self._lock:
+            if self._serial is None:
+                raise SerialException("ibidi port is not open")
             reset = getattr(self._serial, "reset_input_buffer", None)
             if callable(reset):
                 reset()
@@ -603,6 +617,11 @@ class IbidiMultiplexer(_ValveABC):
         for port in self._relink_candidates():
             try:
                 with self._lock:
+                    # close() nulls self._serial; a drop leaves a (stale) handle.
+                    # So ``None`` here means we were closed mid-recovery — bail
+                    # rather than resurrect the handle after close.
+                    if self._serial is None and self._connected is False:
+                        return False
                     if self._serial is not None:
                         try:
                             self._serial.close()

@@ -651,6 +651,7 @@ class IbidiReconnectTest(unittest.TestCase):
         mx = IbidiMultiplexer("7", connect=False, **kw)
         mx._port = "COM7"
         mx._serial = _ReconnSerial()  # 'dropped' link (writes time out)
+        mx._connected = True  # a previously-connected device
         return mx
 
     def test_command_recovers_via_reconnect(self):
@@ -703,6 +704,43 @@ class IbidiReconnectTest(unittest.TestCase):
             cands = mx._relink_candidates()
         # Same port first, then the matched device — NEVER the foreign COM3.
         self.assertEqual(cands, ["COM7", "COM9"])
+
+    def test_no_recovery_before_connect_handshake(self):
+        # During the initial connect()/identify(), _connected is False, so a
+        # wedged device raises fast instead of hanging the whole window.
+        import unittest.mock as mock
+        from serial import SerialException
+
+        mx = self._mx(reconnect_timeout=120)
+        mx._connected = False  # as during the connect handshake
+        with mock.patch.object(
+            mx, "_recover_link", side_effect=AssertionError("must not recover")
+        ):
+            with self.assertRaises(SerialException):
+                mx._command("ID")
+
+    def test_write_read_raises_cleanly_after_close(self):
+        # close() sets self._serial = None; a concurrent _write_read must raise
+        # SerialException, not AttributeError on None.
+        from serial import SerialException
+
+        mx = self._mx()
+        mx._serial = None
+        with self.assertRaises(SerialException):
+            mx._write_read("ID", b"ID;")
+
+    def test_relink_does_not_resurrect_handle_after_close(self):
+        # If close() nulled the handle + disarmed, _try_relink bails rather than
+        # re-opening the port after close.
+        import unittest.mock as mock
+        import PycroFlow.ibidi_multiplexer as mod
+
+        mx = self._mx()
+        mx._serial = None
+        mx._connected = False  # close() ran
+        with mock.patch.object(mod, "Serial") as serial_cls:
+            self.assertFalse(mx._try_relink())
+        serial_cls.assert_not_called()  # never re-opened the port
 
     def test_record_usb_identity_matches_connected_port(self):
         import unittest.mock as mock
