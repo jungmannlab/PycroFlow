@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-11-10
+
+### Added
+
+- **ibidi multiplexer auto-reconnects a dropped USB link.** When a valve/pump
+  command's retries are exhausted (the link genuinely dropped), the driver now
+  tries to re-establish it for up to `reconnect_timeout` seconds (default 120,
+  configurable via the setup's `ibidi:` block) before giving up — first on the
+  same COM port (covers USB selective-suspend / a transient glitch) and then by
+  re-discovering the **same USB device** on a possibly-new port (matched by
+  VID/PID/serial, so no other instrument is ever touched). A brief drop/replug
+  now **resumes the run transparently** instead of aborting it; the keep-alive
+  also self-heals an idle drop before the next command. A truly dead device
+  still aborts after the window (never the old multi-day hang). Set
+  `reconnect_timeout: 0` to disable.
+
 ## [0.3.4] - 2026-11-10
 
 ### Added
