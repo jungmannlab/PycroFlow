@@ -99,6 +99,18 @@ DEFAULT_RETRY_DELAY = 0.3
 # this; overridable via the setup's ``multiplexer:`` block.
 DEFAULT_WRITE_TIMEOUT = 5.0
 
+# Auto-reconnect window (seconds). When a command's normal retries are exhausted
+# (the link has genuinely dropped), keep trying to re-establish it for this long
+# before giving up and raising (-> a loud orchestration abort). Recovery tries
+# the same COM port first (covers USB selective-suspend / a transient glitch,
+# where the port number is unchanged) and then re-discovers the SAME USB device
+# on a possibly-new port (match by VID/PID/serial, so other instruments are
+# never touched). A brief drop/replug thus resumes the run transparently instead
+# of aborting it; a truly dead device still aborts after this window (never the
+# old multi-day hang). 0 / None disables auto-reconnect (immediate raise after
+# retries). Overridable via the setup's ``multiplexer:`` block.
+DEFAULT_RECONNECT_TIMEOUT = 120.0
+
 # Keep-alive: a background read-only ping (``ID``) sent when the link has been
 # idle this many seconds, so the USB-serial port never idles long enough for
 # Windows USB selective-suspend (or the device's own sleep) to drop it mid-run.
@@ -145,6 +157,14 @@ class IbidiMultiplexer(_ValveABC):
         write blocks before raising, so a dead/suspended USB link aborts the
         run (via the retry path) instead of hanging the fluid thread forever.
         ``None`` restores pyserial's block-forever behaviour.
+    reconnect_timeout : float, default: 120.0
+        Auto-reconnect window in seconds. After a command's retries are
+        exhausted, the driver keeps trying to re-establish a dropped link for
+        this long (same port first, then the same USB device on a new port)
+        before giving up and raising — so a brief drop/replug resumes the run
+        transparently while a truly dead device still aborts (never hangs).
+        ``0`` disables auto-reconnect. Raise it to tolerate a longer
+        operator replug; lower it to abort sooner.
     """
 
     def __init__(
@@ -162,6 +182,7 @@ class IbidiMultiplexer(_ValveABC):
         retry_delay=DEFAULT_RETRY_DELAY,
         keepalive_interval=DEFAULT_KEEPALIVE_INTERVAL,
         write_timeout=DEFAULT_WRITE_TIMEOUT,
+        reconnect_timeout=DEFAULT_RECONNECT_TIMEOUT,
         **kwargs,
     ):
         self.address = address
@@ -183,6 +204,12 @@ class IbidiMultiplexer(_ValveABC):
         self._write_timeout = (
             float(write_timeout) if write_timeout is not None else None
         )
+        # Auto-reconnect: window to recover a dropped link before raising, the
+        # remembered USB identity (VID, PID, serial) for safe re-discovery on a
+        # new COM port, and a guard so only one recovery runs at a time.
+        self._reconnect_timeout = float(reconnect_timeout or 0)
+        self._usb_id = None
+        self._reconnect_lock = threading.Lock()
 
         # Keep-alive (see DEFAULT_KEEPALIVE_INTERVAL): a daemon thread pings the
         # device over idle gaps so the USB link can't be suspended out from
@@ -236,6 +263,10 @@ class IbidiMultiplexer(_ValveABC):
                     self._port, self.channels
                 )
             )
+        # Remember the USB device identity so auto-reconnect can re-find THIS
+        # device if it re-enumerates to a different COM port (safe: it never
+        # opens a port that isn't this device).
+        self._record_usb_identity()
         self._start_keepalive()
 
     def _open_serial(self):
@@ -398,6 +429,17 @@ class IbidiMultiplexer(_ValveABC):
                         self._port, exc
                     )
                 )
+                # Self-heal an idle drop so the NEXT real command finds the link
+                # already back (bounded; interruptible by close()). Best-effort.
+                if self._reconnect_timeout:
+                    try:
+                        self._recover_link()
+                    except Exception as e2:  # noqa: BLE001 - never die here
+                        logger.warning(
+                            "ibidi keep-alive reconnect failed: {!r}".format(
+                                e2
+                            )
+                        )
             self._last_activity = time.monotonic()
 
     # -- low-level command ----------------------------------------------------
@@ -415,6 +457,12 @@ class IbidiMultiplexer(_ValveABC):
         keep-alive probe passes ``retries=0`` so a dead link can't hold the
         lock through a multi-second reopen storm (which would block real
         commands and defeat :meth:`close`'s join).
+
+        When the retries are exhausted and auto-reconnect is enabled, a bounded
+        link recovery is attempted (:meth:`_recover_link`) before giving up, so
+        a dropped/replugged link resumes the command transparently rather than
+        aborting the run. The keep-alive probe (``retries=0``) skips recovery
+        here — the keep-alive loop runs it itself over idle gaps.
         """
         if self._serial is None:
             raise RuntimeError("ibidi multiplexer is not connected")
@@ -438,18 +486,15 @@ class IbidiMultiplexer(_ValveABC):
                 # may be transient on the existing connection).
                 self._reopen()
             try:
-                with self._lock:
-                    reset = getattr(self._serial, "reset_input_buffer", None)
-                    if callable(reset):
-                        reset()
-                    self._serial.write(payload)
-                    raw = self._serial.read_until(TERMINATOR.encode())
-                reply = raw.decode(errors="replace").strip()
-                logger.debug("ibidi {!r} -> {!r}".format(cmd, reply))
-                # Real traffic resets the idle clock so the keep-alive only
-                # pings over genuine gaps.
-                self._last_activity = time.monotonic()
-                return reply
+                return self._write_read(cmd, payload)
+            except SerialException as exc:
+                last_exc = exc
+        # Retries exhausted: the link looks genuinely dropped. Try a bounded
+        # auto-reconnect (never for the cheap keep-alive probe), then one more
+        # command before conceding to a loud abort.
+        if retries != 0 and self._reconnect_timeout and self._recover_link():
+            try:
+                return self._write_read(cmd, payload)
             except SerialException as exc:
                 last_exc = exc
         raise SerialException(
@@ -457,6 +502,26 @@ class IbidiMultiplexer(_ValveABC):
                 cmd, n_retries + 1, last_exc
             )
         ) from last_exc
+
+    def _write_read(self, cmd, payload):
+        """One write + read_until under the port lock; returns the reply.
+
+        The single serial-IO primitive, shared by :meth:`_command`'s retry loop
+        and the reconnect probe (:meth:`_try_relink`) so neither re-implements
+        the framing. Raises :class:`~serial.SerialException` on any serial fault.
+        """
+        with self._lock:
+            reset = getattr(self._serial, "reset_input_buffer", None)
+            if callable(reset):
+                reset()
+            self._serial.write(payload)
+            raw = self._serial.read_until(TERMINATOR.encode())
+        reply = raw.decode(errors="replace").strip()
+        logger.debug("ibidi {!r} -> {!r}".format(cmd, reply))
+        # Real traffic resets the idle clock so the keep-alive only pings over
+        # genuine gaps.
+        self._last_activity = time.monotonic()
+        return reply
 
     def _reopen(self):
         """Close and reopen the serial port for a retry (best effort).
@@ -483,6 +548,128 @@ class IbidiMultiplexer(_ValveABC):
                         self._port, exc
                     )
                 )
+
+    # -- auto-reconnect -------------------------------------------------------
+    def _record_usb_identity(self):
+        """Remember the connected port's USB identity (VID, PID, serial).
+
+        Used by auto-reconnect to re-find THIS device if it comes back on a
+        different COM port. Best-effort: ``None`` when the identity is not
+        enumerable (then recovery only retries the same port).
+        """
+        self._usb_id = None
+        try:
+            from serial.tools import list_ports
+
+            for p in list_ports.comports():
+                if p.device == self._port:
+                    if p.vid is not None or p.serial_number:
+                        self._usb_id = (p.vid, p.pid, p.serial_number)
+                    break
+        except Exception as exc:  # noqa: BLE001 - identity is best-effort
+            logger.debug("ibidi USB identity lookup failed: {!r}".format(exc))
+
+    def _relink_candidates(self):
+        """Ports to try when re-establishing the link, safest first.
+
+        The current/last-known port first (a selective-suspend or transient
+        glitch keeps the same COM number), then any port whose USB identity
+        matches the one recorded at connect (re-enumeration to a NEW number).
+        Only this device's ports are ever returned, so a blind reconnect can
+        never open — and disturb — another instrument on the rig.
+        """
+        candidates = []
+        if self._port:
+            candidates.append(self._port)
+        if self._usb_id is not None:
+            try:
+                from serial.tools import list_ports
+
+                for p in list_ports.comports():
+                    key = (p.vid, p.pid, p.serial_number)
+                    if key == self._usb_id and p.device not in candidates:
+                        candidates.append(p.device)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("ibidi port rescan failed: {!r}".format(exc))
+        return candidates
+
+    def _try_relink(self):
+        """One pass at restoring the link: open a candidate port + verify ``MX``.
+
+        Returns True on success (``self._port`` updated to the live port). Never
+        raises — a failed candidate is skipped so the next one is tried.
+        """
+        probe = ("ID" + TERMINATOR + self.line_ending).encode()
+        for port in self._relink_candidates():
+            try:
+                with self._lock:
+                    if self._serial is not None:
+                        try:
+                            self._serial.close()
+                        except Exception:  # noqa: BLE001 - best-effort close
+                            pass
+                    self._serial = Serial(
+                        port,
+                        baudrate=self._baud,
+                        timeout=self._timeout,
+                        write_timeout=self._write_timeout,
+                        exclusive=True,
+                    )
+                # Probe directly (no retries/recovery) to avoid recursion.
+                if DEVICE_ID in self._write_read("ID", probe):
+                    self._port = port
+                    return True
+            except SerialException:
+                continue
+        return False
+
+    def _recover_link(self):
+        """Try to restore a dropped link, bounded by ``reconnect_timeout``.
+
+        Retries :meth:`_try_relink` with a short backoff until it succeeds or
+        the window expires; returns whether the link is back. Only one recovery
+        runs at a time (``_reconnect_lock``). Interruptible by :meth:`close`
+        (``_ka_stop``) and by an orchestration abort (``abort_flag``) so neither
+        is held up by a dead device.
+        """
+        # Nothing to ever try (no known port and no recorded USB identity) —
+        # don't spin out the whole window.
+        if self._port is None and self._usb_id is None:
+            return False
+        with self._reconnect_lock:
+            start = time.monotonic()
+            delay = max(self.retry_delay, 0.5)
+            attempt = 0
+            while (time.monotonic() - start) < self._reconnect_timeout:
+                if self._ka_stop.is_set() or self.abort_flag.is_set():
+                    return False
+                attempt += 1
+                logger.warning(
+                    "ibidi link lost; reconnecting (attempt {}, {:.0f}/{:.0f}s)"
+                    "...".format(
+                        attempt,
+                        time.monotonic() - start,
+                        self._reconnect_timeout,
+                    )
+                )
+                if self._try_relink():
+                    logger.info(
+                        "ibidi link restored on {} after {:.0f}s".format(
+                            self._port, time.monotonic() - start
+                        )
+                    )
+                    return True
+                # Interruptible sleep: close() wakes this immediately.
+                if self._ka_stop.wait(delay):
+                    return False
+                delay = min(delay * 1.5, 5.0)
+            logger.error(
+                "ibidi link did not recover within {:.0f}s — giving up; the "
+                "run will abort. Check the USB cable/port.".format(
+                    self._reconnect_timeout
+                )
+            )
+            return False
 
     @staticmethod
     def _ok(reply):

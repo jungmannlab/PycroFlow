@@ -601,3 +601,118 @@ class IbidiRetryTest(unittest.TestCase):
             mx2._port = "COM7"
             mx2._open_serial()
         self.assertEqual(captured.get("write_timeout"), 5.0)
+
+
+class _ReconnSerial:
+    """Serial stub whose writes time out until it is marked ``healthy``.
+
+    A fresh instance is 'dropped' (writes raise); the reopen during reconnect
+    hands back a healthy one. ``read_until`` returns ``reply`` (``MX;`` so the
+    reconnect ID probe succeeds)."""
+
+    def __init__(self, *a, **k):
+        self.healthy = False
+        self.writes = 0
+
+    def write(self, data):
+        self.writes += 1
+        if not self.healthy:
+            from serial import SerialTimeoutException
+
+            raise SerialTimeoutException("Write timeout")
+
+    def read_until(self, expected=b";", size=None):
+        return b"MX;"
+
+    def reset_input_buffer(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class _Port:
+    def __init__(self, device, vid, pid, serial_number):
+        self.device = device
+        self.vid = vid
+        self.pid = pid
+        self.serial_number = serial_number
+
+
+class IbidiReconnectTest(unittest.TestCase):
+    """Auto-reconnect: a dropped link recovers transparently (same port or the
+    same USB device on a new port), and still aborts after the window."""
+
+    def _mx(self, **kw):
+        from PycroFlow.ibidi_multiplexer import IbidiMultiplexer
+
+        kw.setdefault("command_retries", 0)
+        kw.setdefault("retry_delay", 0)
+        mx = IbidiMultiplexer("7", connect=False, **kw)
+        mx._port = "COM7"
+        mx._serial = _ReconnSerial()  # 'dropped' link (writes time out)
+        return mx
+
+    def test_command_recovers_via_reconnect(self):
+        import unittest.mock as mock
+        import PycroFlow.ibidi_multiplexer as mod
+
+        mx = self._mx(reconnect_timeout=5)
+        healthy = _ReconnSerial()
+        healthy.healthy = True
+        # The reopen during recovery hands back a working device.
+        with mock.patch.object(mod, "Serial", return_value=healthy):
+            reply = mx._command("ID")
+        self.assertIn("MX", reply)  # command completed, no raise
+        self.assertIs(mx._serial, healthy)  # relinked to the live handle
+
+    def test_dropped_link_raises_after_reconnect_window(self):
+        import unittest.mock as mock
+        from serial import SerialException
+        import PycroFlow.ibidi_multiplexer as mod
+
+        mx = self._mx(reconnect_timeout=0.3)
+        # Reopen always fails -> link never recovers -> window expires -> raise
+        # (so the orchestrator still aborts a genuinely dead device).
+        with mock.patch.object(
+            mod, "Serial", side_effect=SerialException("x")
+        ):
+            with self.assertRaises(SerialException):
+                mx._command("SET:Valve:3:0")
+
+    def test_reconnect_disabled_raises_immediately(self):
+        from serial import SerialException, SerialTimeoutException
+
+        mx = self._mx(reconnect_timeout=0)  # auto-reconnect off
+        with self.assertRaises(SerialException) as ctx:
+            mx._command("SET:Valve:3:0")
+        self.assertIsInstance(ctx.exception.__cause__, SerialTimeoutException)
+        self.assertEqual(mx._serial.writes, 1)  # no recovery attempted
+
+    def test_relink_candidates_same_port_first_then_matching_device_only(self):
+        import unittest.mock as mock
+        from serial.tools import list_ports
+
+        mx = self._mx()
+        mx._usb_id = (0x1234, 0x5678, "SER123")
+        ports = [
+            _Port("COM9", 0x1234, 0x5678, "SER123"),  # same device, new port
+            _Port("COM3", 0x1111, 0x2222, "OTHER"),  # a DIFFERENT instrument
+        ]
+        with mock.patch.object(list_ports, "comports", return_value=ports):
+            cands = mx._relink_candidates()
+        # Same port first, then the matched device — NEVER the foreign COM3.
+        self.assertEqual(cands, ["COM7", "COM9"])
+
+    def test_record_usb_identity_matches_connected_port(self):
+        import unittest.mock as mock
+        from serial.tools import list_ports
+
+        mx = self._mx()
+        ports = [
+            _Port("COM3", 0x1111, 0x2222, "OTHER"),
+            _Port("COM7", 0x1234, 0x5678, "SER123"),
+        ]
+        with mock.patch.object(list_ports, "comports", return_value=ports):
+            mx._record_usb_identity()
+        self.assertEqual(mx._usb_id, (0x1234, 0x5678, "SER123"))
