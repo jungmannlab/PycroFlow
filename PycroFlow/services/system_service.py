@@ -504,10 +504,10 @@ class SystemService:
 
         Describes what the clean procedure would operate on so the dialog can
         offer per-reservoir choices: which reservoirs to clean (each with the
-        volume injected during the run and the tubing dead-volume to its
-        inlet), which cleaning liquids are available, and the design defaults.
-        Reads cached attributes only (no serial I/O). ``None`` when no fluid
-        system is connected.
+        planned inject volume from the protocol and the tubing dead-volume to
+        its inlet), which cleaning liquids are available, and the design
+        defaults. Reads cached attributes only (no serial I/O). ``None`` when
+        no fluid system is connected.
 
         Returns
         -------
@@ -524,7 +524,13 @@ class SystemService:
         rounds = cfg.get("cleaning_rounds") or getattr(
             fs, "cleaning_reservoirs", []
         )
-        rounds = list(rounds or [])
+        # ``cleaning_reservoirs`` is a list in the assembled config, but a raw
+        # legacy config may carry it as a {pos: entry} dict (clean_tubings
+        # handles that too); take its values so both shapes yield tank entries.
+        if isinstance(rounds, dict):
+            rounds = list(rounds.values())
+        else:
+            rounds = list(rounds or [])
         clean_ids = set(fs._resolve_cleaning_reservoir_ids(rounds))
         names = getattr(fs, "_reservoir_names", {}) or {}
         # Reverse special_names ({name: id}) so a reservoir wired only under a

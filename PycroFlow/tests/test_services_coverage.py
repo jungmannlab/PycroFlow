@@ -249,6 +249,36 @@ class SystemServiceTest(unittest.TestCase):
     def test_cleaning_plan_none_without_fluid(self):
         self.assertIsNone(SystemService().cleaning_plan())
 
+    def test_cleaning_plan_handles_dict_cleaning_reservoirs(self):
+        # A raw legacy config may carry cleaning_reservoirs as a {pos: entry}
+        # dict (no cleaning block); cleaning_plan must read its values, not
+        # its keys, when resolving the cleaning tanks.
+        class _FakeFluid:
+            cleaning_config = {}
+            cleaning_reservoirs = {0: "h2o"}
+            special_names = {"h2o": 9}
+            _reservoir_names = {1: "R1"}
+            reservoir_totals = {}
+            reservoir_a = {1: None, 9: None}
+
+            def _resolve_cleaning_reservoir_ids(self, rounds):
+                return [
+                    self.special_names.get(r, r) if isinstance(r, str) else r
+                    for r in rounds
+                ]
+
+            def _calc_vol_to_inlet(self, rid):
+                return 5.0
+
+        plan = SystemService(fluid_system=_FakeFluid()).cleaning_plan()
+        # Tank 9 (resolved from the dict's "h2o" value) is excluded; only the
+        # real reservoir 1 is offered.
+        self.assertEqual([r["id"] for r in plan["reservoirs"]], [1])
+        self.assertEqual(
+            plan["cleaning_rounds"],
+            [{"entry": "h2o", "id": 9, "name": "h2o"}],
+        )
+
     def test_illumination_commands_delegate(self):
         illu = MagicMock()
         svc = SystemService(illumination_system=illu)

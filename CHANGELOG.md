@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field seeds the dialog's loaded-volume column. When no fluid system/design is
   connected the old simple confirm + whole-system clean still applies.
 
+### Changed
+
+- **A cleaning `pre_empty_volume` of `0` now skips the pre-empty** (matching the
+  field's long-standing "Blank or 0 skips the pre-empty" tooltip). Previously a
+  literal `0` still pumped each reservoir's tubing dead-volume; it now skips the
+  pre-empty entirely. Leave the field blank or `0` for no pre-empty.
+
 ## [0.3.5] - 2026-11-10
 
 ### Added

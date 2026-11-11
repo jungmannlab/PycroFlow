@@ -3392,6 +3392,36 @@ class TestCleaningDialog(unittest.TestCase):
         dlg = CleaningDialog(plan)
         self.assertEqual(sorted(dlg.selections()["res_to_clean"]), [1, 2])
 
+    def test_ok_disabled_when_all_liquids_unchecked(self):
+        from PyQt6.QtWidgets import QDialogButtonBox
+
+        # Liquids are configured, so a clean must use at least one — a
+        # pre-empty-only run would clean nothing. Deselecting every liquid
+        # disables OK even though a reservoir and pump-out are set.
+        dlg = self._dialog()
+        dlg._rows[0]["mode"].setCurrentText("Custom")
+        dlg._rows[0]["spin"].setValue(50)
+        for cb, _ in dlg._liquid_boxes:
+            cb.setChecked(False)
+        ok = dlg._buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self.assertFalse(ok.isEnabled())
+
+    def test_pre_empty_only_allowed_without_cleaning_liquids(self):
+        from PyQt6.QtWidgets import QDialogButtonBox
+        from PycroFlow.gui.widgets.clean_dialog import CleaningDialog
+
+        # With no cleaning liquids configured at all, a pre-empty-only run is
+        # the only possible action, so a non-zero pump-out stays valid.
+        plan = self._plan()
+        plan["cleaning_rounds"] = []
+        plan["default_pre_empty"] = 50.0
+        dlg = CleaningDialog(plan)
+        ok = dlg._buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self.assertTrue(ok.isEnabled())
+        sel = dlg.selections()
+        self.assertEqual(sel["cleaning_reservoirs"], [])
+        self.assertEqual(sel["pre_empty_volumes"], {1: 50.0})
+
 
 if __name__ == "__main__":
     unittest.main()

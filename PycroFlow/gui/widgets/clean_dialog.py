@@ -149,9 +149,11 @@ class CleaningDialog(QDialog):
             )
             table.setItem(row, _COL_CLEAN, check)
 
-            label = res.get("name") or "Reservoir {}".format(res.get("id"))
-            if res.get("name"):
-                label = "{} ({})".format(res["name"], res.get("id"))
+            name = res.get("name")
+            if name:
+                label = "{} ({})".format(name, res.get("id"))
+            else:
+                label = "Reservoir {}".format(res.get("id"))
             table.setItem(row, _COL_NAME, self._readonly_item(label))
 
             injected = res.get("injected") or 0
@@ -241,7 +243,10 @@ class CleaningDialog(QDialog):
                 spin.setEnabled(True)
                 spin.setToolTip("Volume loaded into this reservoir")
                 # Prefill the loaded volume from the design default once.
-                if not spin.property("_touched") and self._default_load:
+                if (
+                    not spin.property("_touched")
+                    and self._default_load is not None
+                ):
                     spin.setValue(float(self._default_load))
                     spin.setProperty("_touched", True)
             else:  # custom
@@ -266,9 +271,13 @@ class CleaningDialog(QDialog):
         rows = self._checked_rows()
         if not rows:
             return False
-        any_liquid = bool(self._checked_liquids())
-        any_pumpout = any(self._pumpout_for(r) > 0 for r in rows)
-        return any_liquid or any_pumpout
+        # When cleaning liquids are configured, a "Clean" run must use at
+        # least one — otherwise it would silently pre-empty only and clean
+        # nothing. With no liquids configured at all, allow a pre-empty-only
+        # run (the only possible action).
+        if self._liquid_boxes:
+            return bool(self._checked_liquids())
+        return any(self._pumpout_for(r) > 0 for r in rows)
 
     # -- result ---------------------------------------------------------
 
