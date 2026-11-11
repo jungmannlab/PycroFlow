@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-11-11
+
+### Added
+
+- **Clean-tubings options dialog.** Triggering "Clean tubings" from the Fluid
+  tab now opens a per-run dialog instead of a bare confirm. The operator can
+  pick **which reservoirs to clean** (the reservoirs the loaded run used are
+  pre-checked; unused wired reservoirs are listed and can be added, and any
+  reservoir can be deselected), set a **per-reservoir pump-out volume** before
+  cleaning — *Default* (the design's single pre-empty volume), *Calculated*
+  (`loaded − injected`, from an editable per-reservoir loaded volume), or a
+  *Custom* value — and choose **which cleaning liquids** to use (all on by
+  default). Backs onto new `clean_tubings(res_to_clean=…, max_reservoir_vol={…})`
+  support in `LegacyArchitecture` (per-reservoir pre-empty) and a
+  `SystemService.cleaning_plan()` that describes what the procedure would
+  operate on. A new optional `cleaning.default_reservoir_load` experiment-design
+  field seeds the dialog's loaded-volume column. When no fluid system/design is
+  connected the old simple confirm + whole-system clean still applies.
+
+### Changed
+
+- **A cleaning `pre_empty_volume` of `0` now skips the pre-empty** (matching the
+  field's long-standing "Blank or 0 skips the pre-empty" tooltip). Previously a
+  literal `0` still pumped each reservoir's tubing dead-volume; it now skips the
+  pre-empty entirely. Leave the field blank or `0` for no pre-empty.
+
 ## [0.3.5] - 2026-11-10
 
 ### Added

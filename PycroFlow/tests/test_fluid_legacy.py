@@ -9,6 +9,7 @@ pause/resume/abort/stop lifecycle) that those tests don't reach.
 
 import threading
 import unittest
+from unittest.mock import patch
 
 import PycroFlow.pyHamilton as ham
 from PycroFlow.hamilton_components import ReservoirDict
@@ -233,6 +234,69 @@ class LegacyArchitectureTest(unittest.TestCase):
         # so the reservoir routing can't clobber the requested 'out' valve.
         self.assertIn(1, routed)
         self.assertNotIn(0, routed)
+
+    # --- cleaning: reservoir selection + per-reservoir pre-empty ---------
+
+    def test_clean_tubings_res_to_clean_override(self):
+        # Only the explicitly listed reservoir's path is cleaned.
+        with patch.object(self.la, "_clean_tubings_chain") as chain:
+            self.la.clean_tubings(
+                cleaning_reservoirs=[3],
+                res_to_clean=[0],
+                mode="chain",
+                confirm=False,
+            )
+        chain.assert_called_once()
+        # signature: (cleaning_reservoirs, res_to_clean, extra_vol, ...)
+        self.assertEqual(chain.call_args.args[1], [0])
+
+    def test_clean_tubings_res_to_clean_filters_tanks_and_unwired(self):
+        # Cleaning tanks and ids that aren't wired are dropped from the list.
+        with patch.object(self.la, "_clean_tubings_chain") as chain:
+            self.la.clean_tubings(
+                cleaning_reservoirs=[3],
+                res_to_clean=[0, 1, 3, 99],
+                mode="chain",
+                confirm=False,
+            )
+        self.assertEqual(chain.call_args.args[1], [0, 1])
+
+    def test_clean_tubings_empty_res_to_clean_raises(self):
+        with self.assertRaises(ValueError):
+            self.la.clean_tubings(
+                cleaning_reservoirs=[3], res_to_clean=[3], confirm=False
+            )
+
+    def test_clean_tubings_forwards_pre_empty_dict(self):
+        pre_empty = {0: 50, 1: 0}
+        with (
+            patch.object(self.la, "_clean_tubings_pre_empty") as pre,
+            patch.object(self.la, "_clean_tubings_chain"),
+        ):
+            self.la.clean_tubings(
+                cleaning_reservoirs=[3],
+                max_reservoir_vol=pre_empty,
+                mode="chain",
+                confirm=False,
+            )
+        pre.assert_called_once()
+        self.assertEqual(pre.call_args.args[1], pre_empty)
+
+    def test_pre_empty_per_reservoir_skips_zero(self):
+        # A reservoir mapped to 0 (or missing) is not pre-emptied; a positive
+        # one pumps dead-volume + its leftover.
+        with (
+            patch.object(self.la, "_calc_vol_to_inlet", return_value=10),
+            patch.object(self.la, "_pump") as pump,
+            patch.object(self.la, "flush_pump_out") as fpo,
+        ):
+            self.la._clean_tubings_pre_empty(
+                [0, 1], {0: 100, 1: 0}, velocity=1000, delay=0
+            )
+        pump.assert_called_once()
+        self.assertEqual(pump.call_args.kwargs["pickup_res"], 0)
+        self.assertEqual(pump.call_args.args[1], 110)  # dead(10) + 100
+        fpo.assert_called_once()
 
     # --- lifecycle -------------------------------------------------------
 
