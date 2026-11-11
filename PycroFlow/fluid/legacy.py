@@ -1249,6 +1249,7 @@ class LegacyArchitecture(AbstractSystem):
         max_reservoir_vol=None,
         confirm=True,
         flush_out_strokes=None,
+        res_to_clean=None,
     ):
         """Clean all tubings by pumping cleaning liquids through paths.
 
@@ -1257,6 +1258,11 @@ class LegacyArchitecture(AbstractSystem):
         cleaning_reservoirs : list of int
             Reservoir IDs connected to cleaning liquid tanks, in the order
             they should be used for cleaning.
+        res_to_clean : list of int or str, optional
+            Explicit subset of reservoirs (ids or special names) whose paths
+            to clean. ``None`` (the default) cleans every wired reservoir bar
+            the cleaning tanks. Entries that are not wired, or that name a
+            cleaning tank, are dropped.
         confirm : bool, default: True
             Block on a terminal ``input()`` confirmation before starting.
             Pass ``False`` from a GUI (which must confirm via its own dialog),
@@ -1284,11 +1290,14 @@ class LegacyArchitecture(AbstractSystem):
             pushes it out the needle, and extracts; more thorough but uses
             more liquid. ``None`` picks ``'chain'`` when the config's
             ``reuse_cleaning_liquid`` is true, else ``'individual'``.
-        max_reservoir_vol : int or None
+        max_reservoir_vol : int, dict, or None
             Maximum volume in ul that a reservoir may contain from a previous
             protocol. If set (config ``pre_empty_volume``), each reservoir is
             emptied (up to this volume) through the needle before cleaning
-            begins. If None, the pre-emptying step is skipped.
+            begins. If None, the pre-emptying step is skipped. May also be a
+            ``{reservoir_id: volume}`` mapping for a per-reservoir pre-empty
+            (the GUI clean dialog passes this); reservoirs mapped to ``None``
+            or a non-positive value are not pre-emptied.
         flush_out_strokes : int or None
             Extraction strokes the output pump makes per expelled path (config
             ``flush_out_strokes``; default 1).
@@ -1394,7 +1403,24 @@ class LegacyArchitecture(AbstractSystem):
                 "settings to reservoir ids (e.g. [12]) or special names "
                 "(e.g. ['h2o']) that are defined in special_names."
             )
-        res_to_clean = self._reservoirs_to_clean(cleaning_reservoirs)
+        # Reservoirs to clean: the explicit override (ids/names, dropping any
+        # that aren't wired or that name a cleaning tank) or, by default, every
+        # wired reservoir bar the cleaning tanks.
+        if res_to_clean is None:
+            res_to_clean = self._reservoirs_to_clean(cleaning_reservoirs)
+        else:
+            cleaning_set = set(cleaning_reservoirs)
+            wired = set(self.reservoir_a.keys())
+            res_to_clean = [
+                rid
+                for rid in self._resolve_cleaning_reservoir_ids(res_to_clean)
+                if rid in wired and rid not in cleaning_set
+            ]
+        if not res_to_clean:
+            raise ValueError(
+                "No reservoirs to clean — the selection is empty (or resolved "
+                "only to cleaning tanks / unwired ids)."
+            )
 
         logger.debug(
             f"Starting clean_tubings (mode={mode}). "
@@ -1402,10 +1428,11 @@ class LegacyArchitecture(AbstractSystem):
             f"Reservoirs to clean: {res_to_clean}"
         )
         print("Starting tubing cleaning procedure.")
-        print(
-            f"Make sure no reservoirs have more than {max_reservoir_vol} ul"
-            "volume left. Replace with empty reservoirs otherwise."
-        )
+        if not isinstance(max_reservoir_vol, dict):
+            print(
+                f"Make sure no reservoirs have more than {max_reservoir_vol} "
+                "ul volume left. Replace with empty reservoirs otherwise."
+            )
         print(
             "Make sure input and output needles are in the same "
             "container (fluidly connected)."
@@ -1479,15 +1506,24 @@ class LegacyArchitecture(AbstractSystem):
         cleaning. For each reservoir, pump up to max_reservoir_vol
         from the reservoir out through the input needle, then extract
         with the output needle.
+
+        ``max_reservoir_vol`` may be a scalar (the same leftover volume for
+        every reservoir) or a ``{reservoir_id: volume}`` mapping for a
+        per-reservoir pre-empty; a reservoir mapped to ``None`` or a
+        non-positive volume (or missing from the mapping) is skipped.
         """
         logger.debug(f"Pre-emptying reservoirs (max {max_reservoir_vol} ul)")
-        print(
-            f"Emptying leftover liquid from reservoirs "
-            f"(up to {max_reservoir_vol} ul each)"
-        )
+        print("Emptying leftover liquid from reservoirs")
 
         for res_id in res_to_clean:
-            vol = self._calc_vol_to_inlet(res_id) + max_reservoir_vol
+            if isinstance(max_reservoir_vol, dict):
+                per_res_vol = max_reservoir_vol.get(res_id)
+            else:
+                per_res_vol = max_reservoir_vol
+            if not per_res_vol or per_res_vol <= 0:
+                logger.debug(f"  Skipping reservoir {res_id} (no pre-empty)")
+                continue
+            vol = self._calc_vol_to_inlet(res_id) + per_res_vol
             logger.debug(f"  Emptying reservoir {res_id} ({vol} ul)")
 
             # Push from reservoir out through the sample needle (pump_a to

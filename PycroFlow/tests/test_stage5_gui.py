@@ -2376,7 +2376,7 @@ class TestFluidTab(unittest.TestCase):
 
         worker.set_synchronous(False)
 
-    def _tab(self, reservoir_ids=(1, 3, 8, 20)):
+    def _tab(self, reservoir_ids=(1, 3, 8, 20), cleaning_plan=None):
         from unittest.mock import MagicMock
         from PycroFlow.gui.tabs.fluid_tab import FluidTab
 
@@ -2384,6 +2384,10 @@ class TestFluidTab(unittest.TestCase):
         svc.fluid_system = object()
         # The manual valve dropdown is filled from the setup's manifold.
         svc.reservoir_ids.return_value = list(reservoir_ids)
+        # No per-reservoir plan by default -> _on_clean takes the simple
+        # confirm + whole-system fallback (the dialog branch is covered
+        # separately and by TestCleaningDialog).
+        svc.cleaning_plan.return_value = cleaning_plan
         return FluidTab(svc), svc
 
     def test_fill_calls_service(self):
@@ -2431,6 +2435,57 @@ class TestFluidTab(unittest.TestCase):
         ):
             tab._on_clean()
         svc.clean_tubings.assert_called_once()
+
+    def test_clean_opens_dialog_and_forwards_selections(self):
+        from unittest.mock import patch
+        from PyQt6.QtWidgets import QDialog
+        from PycroFlow.gui.tabs import fluid_tab as ft
+
+        plan = {
+            "reservoirs": [
+                {
+                    "id": 1,
+                    "name": "R1",
+                    "used": True,
+                    "injected": 0.0,
+                    "dead_vol": 10.0,
+                }
+            ],
+            "cleaning_rounds": [{"entry": "h2o", "id": 9, "name": "h2o"}],
+            "default_pre_empty": None,
+            "default_load": None,
+        }
+        tab, svc = self._tab(cleaning_plan=plan)
+        sel = {
+            "res_to_clean": [1],
+            "cleaning_reservoirs": ["h2o"],
+            "pre_empty_volumes": {1: 0.0},
+        }
+        # Stand in for the dialog: accept and return our selection.
+        with patch.object(ft, "CleaningDialog", autospec=True) as fake:
+            fake.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            fake.return_value.selections.return_value = sel
+            tab._on_clean()
+        svc.clean_tubings.assert_called_once_with(**sel)
+
+    def test_clean_dialog_cancel_does_nothing(self):
+        from unittest.mock import patch
+        from PyQt6.QtWidgets import QDialog
+        from PycroFlow.gui.tabs import fluid_tab as ft
+
+        plan = {
+            "reservoirs": [
+                {"id": 1, "name": "R1", "used": True, "injected": 0.0}
+            ],
+            "cleaning_rounds": [],
+            "default_pre_empty": None,
+            "default_load": None,
+        }
+        tab, svc = self._tab(cleaning_plan=plan)
+        with patch.object(ft, "CleaningDialog", autospec=True) as fake:
+            fake.return_value.exec.return_value = QDialog.DialogCode.Rejected
+            tab._on_clean()
+        svc.clean_tubings.assert_not_called()
 
     def test_clean_estimate_hint_renders_number(self):
         tab, svc = self._tab()
@@ -3251,6 +3306,121 @@ class TestWebcamsTab(unittest.TestCase):
         with open(configs._SETUP_DIR / "EmulatorCam.yaml") as f:
             shipped = _yaml.safe_load(f)
         self.assertEqual(shipped["monitoring"]["cameras"][0]["device"], 0)
+
+
+@unittest.skipUnless(_HAVE_PYQT6, "PyQt6 not installed")
+class TestCleaningDialog(unittest.TestCase):
+    """The clean-tubings options dialog: defaults, per-reservoir pump-out
+    modes, and the OK-enabled validity rule."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    @staticmethod
+    def _plan():
+        return {
+            "reservoirs": [
+                {
+                    "id": 1,
+                    "name": "R1",
+                    "used": True,
+                    "injected": 120.0,
+                    "dead_vol": 10.0,
+                },
+                {
+                    "id": 2,
+                    "name": "R2",
+                    "used": False,
+                    "injected": 0.0,
+                    "dead_vol": 10.0,
+                },
+            ],
+            "cleaning_rounds": [{"entry": "h2o", "id": 9, "name": "h2o"}],
+            "default_pre_empty": 50.0,
+            "default_load": 200.0,
+        }
+
+    def _dialog(self):
+        from PycroFlow.gui.widgets.clean_dialog import CleaningDialog
+
+        return CleaningDialog(self._plan())
+
+    def test_defaults_check_used_reservoirs_only(self):
+        sel = self._dialog().selections()
+        # Only the run-used reservoir is pre-checked; cleaning liquids are all
+        # on; default mode uses the design's pre-empty volume.
+        self.assertEqual(sel["res_to_clean"], [1])
+        self.assertEqual(sel["cleaning_reservoirs"], ["h2o"])
+        self.assertEqual(sel["pre_empty_volumes"], {1: 50.0})
+
+    def test_calculated_mode_is_loaded_minus_injected(self):
+        dlg = self._dialog()
+        dlg._rows[0]["mode"].setCurrentText("Calculated")  # prefills load=200
+        self.assertEqual(dlg.selections()["pre_empty_volumes"], {1: 80.0})
+
+    def test_custom_mode_uses_entered_value(self):
+        dlg = self._dialog()
+        dlg._rows[0]["mode"].setCurrentText("Custom")
+        dlg._rows[0]["spin"].setValue(42)
+        self.assertEqual(dlg.selections()["pre_empty_volumes"][1], 42.0)
+
+    def test_ok_disabled_when_nothing_selected(self):
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QDialogButtonBox
+
+        dlg = self._dialog()
+        dlg._rows[0]["check"].setCheckState(Qt.CheckState.Unchecked)
+        ok = dlg._buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self.assertFalse(ok.isEnabled())
+
+    def test_can_check_an_unused_reservoir(self):
+        from PyQt6.QtCore import Qt
+
+        dlg = self._dialog()
+        dlg._rows[1]["check"].setCheckState(Qt.CheckState.Checked)
+        self.assertEqual(sorted(dlg.selections()["res_to_clean"]), [1, 2])
+
+    def test_all_checked_when_run_marks_nothing_used(self):
+        from PycroFlow.gui.widgets.clean_dialog import CleaningDialog
+
+        plan = self._plan()
+        for res in plan["reservoirs"]:
+            res["used"] = False
+        dlg = CleaningDialog(plan)
+        self.assertEqual(sorted(dlg.selections()["res_to_clean"]), [1, 2])
+
+    def test_ok_disabled_when_all_liquids_unchecked(self):
+        from PyQt6.QtWidgets import QDialogButtonBox
+
+        # Liquids are configured, so a clean must use at least one — a
+        # pre-empty-only run would clean nothing. Deselecting every liquid
+        # disables OK even though a reservoir and pump-out are set.
+        dlg = self._dialog()
+        dlg._rows[0]["mode"].setCurrentText("Custom")
+        dlg._rows[0]["spin"].setValue(50)
+        for cb, _ in dlg._liquid_boxes:
+            cb.setChecked(False)
+        ok = dlg._buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self.assertFalse(ok.isEnabled())
+
+    def test_pre_empty_only_allowed_without_cleaning_liquids(self):
+        from PyQt6.QtWidgets import QDialogButtonBox
+        from PycroFlow.gui.widgets.clean_dialog import CleaningDialog
+
+        # With no cleaning liquids configured at all, a pre-empty-only run is
+        # the only possible action, so a non-zero pump-out stays valid.
+        plan = self._plan()
+        plan["cleaning_rounds"] = []
+        plan["default_pre_empty"] = 50.0
+        dlg = CleaningDialog(plan)
+        ok = dlg._buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self.assertTrue(ok.isEnabled())
+        sel = dlg.selections()
+        self.assertEqual(sel["cleaning_reservoirs"], [])
+        self.assertEqual(sel["pre_empty_volumes"], {1: 50.0})
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QFormLayout,
     QComboBox,
+    QDialog,
     QMessageBox,
     QScrollArea,
     QSplitter,
@@ -32,6 +33,7 @@ from PyQt6.QtWidgets import (
 
 from PycroFlow.gui.widgets.worker import run_in_background
 from PycroFlow.gui.widgets.fluid_schematic import FluidSchematic
+from PycroFlow.gui.widgets.clean_dialog import CleaningDialog
 
 #: How often (ms) the live schematic re-reads cached valve/syringe state. The
 #: read issues no serial traffic, so this can stay brisk during a run.
@@ -540,18 +542,33 @@ class FluidTab(QWidget):
             require_confirm = self._svc.cleaning_requires_confirmation()
         except Exception:  # pragma: no cover - default to asking
             require_confirm = True
-        if require_confirm:
-            reply = QMessageBox.question(
-                self,
-                "Clean tubings",
-                "Start the tubing cleaning procedure?\n\n"
-                "Make sure the input and output needles are in the same "
-                "container (fluidly connected) and cleaning reservoirs are "
-                "connected to their tanks.",
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
-        self._run(self._svc.clean_tubings, "Clean tubings")
+        try:
+            plan = self._svc.cleaning_plan()
+        except Exception:  # pragma: no cover - plan is best-effort
+            plan = None
+        # Without per-reservoir data (not connected / no design loaded), fall
+        # back to the simple confirm + whole-system default clean.
+        if not plan or not plan.get("reservoirs"):
+            if require_confirm:
+                reply = QMessageBox.question(
+                    self,
+                    "Clean tubings",
+                    "Start the tubing cleaning procedure?\n\n"
+                    "Make sure the input and output needles are in the same "
+                    "container (fluidly connected) and cleaning reservoirs "
+                    "are connected to their tanks.",
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
+            self._run(self._svc.clean_tubings, "Clean tubings")
+            return
+        dlg = CleaningDialog(
+            plan, require_confirm=require_confirm, parent=self
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        sel = dlg.selections()
+        self._run(lambda: self._svc.clean_tubings(**sel), "Clean tubings")
 
     def _on_stroke(self):
         vol, ok = self._num(self.stroke_vol, "Volume", True, float)
