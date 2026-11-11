@@ -378,6 +378,14 @@ class CleaningSettings(BaseModel):
         tooltip="Volume to extract from each reservoir before cleaning starts, "
         "clearing leftover protocol liquid. Blank or 0 skips the pre-empty.",
     )
+    default_reservoir_load: Optional[float] = _unit(
+        None,
+        "µl",
+        tooltip="Default volume loaded into each reservoir at the start of a "
+        "run. The Clean dialog uses it to estimate the leftover "
+        "(loaded − injected) to pump out before cleaning; blank means enter "
+        "it per reservoir in the dialog.",
+    )
     extra_volume: float = _unit(
         100,
         "µl",

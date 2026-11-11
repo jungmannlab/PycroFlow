@@ -188,8 +188,66 @@ class SystemServiceTest(unittest.TestCase):
         svc.clean_tubings()
         svc.deliver_fluid(2, 150)
         fluid.fill_tubings.assert_called_once()
-        fluid.clean_tubings.assert_called_once()
+        # Bare clean passes only confirm=False (design defaults otherwise).
+        fluid.clean_tubings.assert_called_once_with(confirm=False)
         fluid.deliver_fluid.assert_called_once_with(2, 150)
+
+    def test_clean_tubings_forwards_overrides(self):
+        fluid = MagicMock()
+        svc = SystemService(fluid_system=fluid)
+        svc.clean_tubings(
+            res_to_clean=[1, 2],
+            cleaning_reservoirs=[9],
+            pre_empty_volumes={1: 50},
+        )
+        fluid.clean_tubings.assert_called_once_with(
+            confirm=False,
+            res_to_clean=[1, 2],
+            cleaning_reservoirs=[9],
+            max_reservoir_vol={1: 50},
+        )
+
+    def test_cleaning_plan_structures_reservoirs_and_rounds(self):
+        class _FakeFluid:
+            cleaning_config = {
+                "cleaning_rounds": ["h2o"],
+                "pre_empty_volume": 50,
+                "default_reservoir_load": 200,
+            }
+            cleaning_reservoirs = []
+            special_names = {"h2o": 9, "flushbuffer_a": 8}
+            _reservoir_names = {1: "R1-imager", 2: "R2-imager"}
+            reservoir_totals = {1: 120.0}
+            reservoir_a = {1: None, 2: None, 9: None}
+
+            def _resolve_cleaning_reservoir_ids(self, rounds):
+                return [
+                    self.special_names.get(r, r) if isinstance(r, str) else r
+                    for r in rounds
+                ]
+
+            def _calc_vol_to_inlet(self, rid):
+                return 10.0 * rid
+
+        svc = SystemService(fluid_system=_FakeFluid())
+        plan = svc.cleaning_plan()
+        self.assertEqual(plan["default_pre_empty"], 50)
+        self.assertEqual(plan["default_load"], 200)
+        # Cleaning tank (9) is excluded from the reservoirs to clean.
+        by_id = {r["id"]: r for r in plan["reservoirs"]}
+        self.assertEqual(set(by_id), {1, 2})
+        self.assertTrue(by_id[1]["used"])
+        self.assertEqual(by_id[1]["injected"], 120.0)
+        self.assertEqual(by_id[1]["name"], "R1-imager")
+        self.assertEqual(by_id[1]["dead_vol"], 10.0)
+        self.assertFalse(by_id[2]["used"])
+        self.assertEqual(
+            plan["cleaning_rounds"],
+            [{"entry": "h2o", "id": 9, "name": "h2o"}],
+        )
+
+    def test_cleaning_plan_none_without_fluid(self):
+        self.assertIsNone(SystemService().cleaning_plan())
 
     def test_illumination_commands_delegate(self):
         illu = MagicMock()

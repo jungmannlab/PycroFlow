@@ -459,13 +459,125 @@ class SystemService:
         self._require("fluid_system")
         self.fluid_system.fill_tubings()
 
-    def clean_tubings(self) -> None:
+    def clean_tubings(
+        self,
+        *,
+        res_to_clean=None,
+        cleaning_reservoirs=None,
+        pre_empty_volumes=None,
+    ) -> None:
+        """Run the tubing-cleaning procedure.
+
+        Called with no arguments (the CLI / a bare GUI confirm) cleans every
+        wired reservoir with the design's cleaning defaults. The GUI clean
+        dialog instead passes explicit overrides.
+
+        Parameters
+        ----------
+        res_to_clean : list of int or str, optional
+            Subset of reservoirs (ids or special names) whose paths to clean.
+            ``None`` cleans every wired reservoir bar the cleaning tanks.
+        cleaning_reservoirs : list, optional
+            Subset of cleaning-liquid reservoirs (ids or special names) to use,
+            in order. ``None`` uses the design's cleaning rounds.
+        pre_empty_volumes : dict, optional
+            ``{reservoir_id: volume}`` leftover volumes to pump out of each
+            reservoir before cleaning. ``None`` uses the design's single
+            ``pre_empty_volume`` for every reservoir.
+        """
         # confirm=False: no terminal prompt — GUI callers confirm via a
-        # dialog before calling, and there is no stdin to block on. All other
+        # dialog before calling, and there is no stdin to block on. Unspecified
         # cleaning parameters default from the design's cleaning section,
         # stored on the architecture as ``cleaning_config``.
         self._require("fluid_system")
-        self.fluid_system.clean_tubings(confirm=False)
+        kwargs = {"confirm": False}
+        if res_to_clean is not None:
+            kwargs["res_to_clean"] = res_to_clean
+        if cleaning_reservoirs is not None:
+            kwargs["cleaning_reservoirs"] = cleaning_reservoirs
+        if pre_empty_volumes is not None:
+            kwargs["max_reservoir_vol"] = pre_empty_volumes
+        self.fluid_system.clean_tubings(**kwargs)
+
+    def cleaning_plan(self):
+        """Per-reservoir data for the GUI clean dialog, or ``None``.
+
+        Describes what the clean procedure would operate on so the dialog can
+        offer per-reservoir choices: which reservoirs to clean (each with the
+        volume injected during the run and the tubing dead-volume to its
+        inlet), which cleaning liquids are available, and the design defaults.
+        Reads cached attributes only (no serial I/O). ``None`` when no fluid
+        system is connected.
+
+        Returns
+        -------
+        dict or None
+            ``{'reservoirs': [{'id', 'name', 'used', 'injected', 'dead_vol'}],
+            'cleaning_rounds': [{'entry', 'id', 'name'}],
+            'default_pre_empty': float | None,
+            'default_load': float | None}``.
+        """
+        fs = self.fluid_system
+        if fs is None:
+            return None
+        cfg = getattr(fs, "cleaning_config", {}) or {}
+        rounds = cfg.get("cleaning_rounds") or getattr(
+            fs, "cleaning_reservoirs", []
+        )
+        rounds = list(rounds or [])
+        clean_ids = set(fs._resolve_cleaning_reservoir_ids(rounds))
+        names = getattr(fs, "_reservoir_names", {}) or {}
+        # Reverse special_names ({name: id}) so a reservoir wired only under a
+        # role name (e.g. a flush buffer) still shows a label.
+        rev_special = {
+            rid: name
+            for name, rid in (getattr(fs, "special_names", {}) or {}).items()
+        }
+
+        def _name(rid):
+            return (
+                names.get(rid) or names.get(str(rid)) or rev_special.get(rid)
+            )
+
+        totals = getattr(fs, "reservoir_totals", {}) or {}
+        calc = getattr(fs, "_calc_vol_to_inlet", None)
+        reservoirs = []
+        for rid in getattr(fs, "reservoir_a", {}).keys():
+            if rid in clean_ids:
+                continue
+            try:
+                dead = float(calc(rid)) if callable(calc) else None
+            except Exception:  # pragma: no cover - tubing model incomplete
+                dead = None
+            reservoirs.append(
+                {
+                    "id": rid,
+                    "name": _name(rid),
+                    "used": rid in totals,
+                    "injected": float(totals.get(rid, 0) or 0),
+                    "dead_vol": dead,
+                }
+            )
+        cleaning_rounds = []
+        for entry in rounds:
+            rid = (
+                entry
+                if isinstance(entry, int)
+                else fs.special_names.get(entry)
+            )
+            cleaning_rounds.append(
+                {
+                    "entry": entry,
+                    "id": rid,
+                    "name": entry if isinstance(entry, str) else _name(rid),
+                }
+            )
+        return {
+            "reservoirs": reservoirs,
+            "cleaning_rounds": cleaning_rounds,
+            "default_pre_empty": cfg.get("pre_empty_volume"),
+            "default_load": cfg.get("default_reservoir_load"),
+        }
 
     def cleaning_requires_confirmation(self) -> bool:
         """Whether the design's cleaning section asks for a needles-connected
