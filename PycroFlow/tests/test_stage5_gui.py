@@ -2163,6 +2163,33 @@ class TestExperimentDesignTab(unittest.TestCase):
         self.assertEqual(svc.state.value, "loaded")
         self.assertEqual(translated, [1])
 
+    def test_new_from_example_loads_bundled_design(self):
+        from PycroFlow.services import ExperimentService
+        from PycroFlow.examples import design_examples
+        from PycroFlow.gui.tabs.experiment_design_tab import (
+            ExperimentDesignTab,
+        )
+
+        examples = design_examples()
+        self.assertTrue(examples)  # at least one shipped example design
+        by_label = dict(examples)
+        self.assertIn("exchange 4plex", by_label)
+        cwd_before = os.getcwd()
+        loaded = []
+        tab = ExperimentDesignTab(
+            ExperimentService(), on_design_loaded=lambda: loaded.append(1)
+        )
+        tab._load_example(by_label["exchange 4plex"])
+        self.assertEqual(
+            tab._svc.experiment_design["fluid"]["settings"]["experiment"][
+                "type"
+            ],
+            "Exchange",
+        )
+        self.assertEqual(loaded, [1])
+        # Loading an example must NOT chdir into the package examples folder.
+        self.assertEqual(os.getcwd(), cwd_before)
+
     def test_drag_drop_loads_design(self):
         from PycroFlow.services import ExperimentService
         from PycroFlow.gui.tabs.experiment_design_tab import (

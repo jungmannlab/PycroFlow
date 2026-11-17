@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **"New from example…" in the Experiment Design tab.** Load a bundled example
+  design as a starting point to edit and save. Ships a basic Exchange-PAINT
+  example (`examples/exchange_4plex.yaml`) alongside the existing SPH-RESI one;
+  example designs are discovered from `PycroFlow.examples.design_examples()`.
+- **The registry connectivity check now verifies write access, not just
+  reachability.** `/health` is deliberately unauthenticated, so a green health
+  probe said nothing about whether this machine could actually write records —
+  which meant the setup wizard and the Doctor tab both reported the registry as
+  "connected" with no (or an invalid) token. Both now additionally probe a
+  guarded, side-effect-free endpoint (`GET /handoff`) with the configured
+  token: a missing/rejected token is surfaced as a clear warning that writes
+  will fail. (A valid read-only token still passes — there is no harmless write
+  to test with — and the message says so.)
+
+### Changed
+
+- **The setup wizard now asks for the monet-data *folder*, not a config file
+  path.** It derives both `configs.yaml` and `protocols.yaml` inside it and
+  writes **both** `MONET_CONFIG_PATHS` and `MONET_PROTOCOL_PATHS` to `.env`
+  (mirroring monet's own wizard). Previously it wrote whatever was typed
+  verbatim into `MONET_CONFIG_PATHS` and never set `MONET_PROTOCOL_PATHS`, so
+  entering the folder left monet unable to find the configs and the protocols
+  path had to be added to `.env` by hand. A legacy value pointing straight at
+  `configs.yaml` is still accepted (protocols are taken as its sibling).
+
 ## [0.3.6] - 2026-11-11
 
 ### Added
