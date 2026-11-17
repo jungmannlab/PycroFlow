@@ -13,7 +13,7 @@ import os
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def design_examples() -> list:
+def design_examples() -> list[tuple[str, str]]:
     """Return the shipped example experiment designs as ``(label, path)``.
 
     Every ``*.yaml`` next to this module is an example design; the label is a

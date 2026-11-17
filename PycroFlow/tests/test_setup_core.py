@@ -216,6 +216,23 @@ class TestConnectivityProbes(_TmpEnv):
         self.assertFalse(v2["ok"])
         self.assertIn("unreachable", v2["detail"])
 
+    def test_registry_write_probe_timeout_is_not_ok(self):
+        # /health answers but the guarded /handoff probe times out: the check
+        # is about write access, so it must not report a confident green.
+        class _Resp:
+            status_code = 200
+
+        def _get(url, headers=None, params=None, timeout=None):
+            if url.endswith("/handoff"):
+                raise OSError("timed out")
+            return _Resp()
+
+        fake = types.SimpleNamespace(get=_get)
+        with mock.patch.dict(sys.modules, {"requests": fake}):
+            v = setup_core.check_registry("http://reg:8000", token="t")
+        self.assertFalse(v["ok"])
+        self.assertIn("could not verify write access", v["detail"])
+
     def test_derive_monet_paths_from_folder(self):
         folder = os.path.join("Y:", "monet-data")
         cfg, proto = setup_core.derive_monet_paths(folder)
@@ -237,9 +254,6 @@ class TestConnectivityProbes(_TmpEnv):
         self.assertEqual(setup_core.derive_monet_paths(None), (None, None))
 
     def test_monet_folder_from_env(self):
-        # Colon-free path: os.pathsep is ':' on POSIX, so a Windows 'Y:' drive
-        # letter would spuriously split here (it never collides on Windows,
-        # where os.pathsep is ';').
         folder = os.path.join(os.sep, "data", "monet")
         self.assertEqual(
             setup_core.monet_folder_from_env(
@@ -248,6 +262,17 @@ class TestConnectivityProbes(_TmpEnv):
             folder,
         )
         self.assertEqual(setup_core.monet_folder_from_env({}), "")
+
+    def test_monet_folder_from_env_windows_path_on_posix(self):
+        # A .env written on Windows ('Y:/monet-data/configs.yaml') must prefill
+        # sensibly even when read on POSIX, where os.pathsep (':') would
+        # otherwise split off the drive letter.
+        self.assertEqual(
+            setup_core.monet_folder_from_env(
+                {"MONET_CONFIG_PATHS": "Y:/monet-data/configs.yaml"}
+            ),
+            "Y:/monet-data",
+        )
 
     def test_monet_config_present_and_absent(self):
         fake_monet = types.SimpleNamespace(CONFIGS={"Scope": {}})

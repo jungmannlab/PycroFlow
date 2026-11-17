@@ -130,6 +130,11 @@ def monet_folder_from_env(env: dict) -> str:
     if not raw:
         return ""
     first = raw.split(os.pathsep)[0].strip()
+    # On POSIX os.pathsep is ':', which also follows a Windows drive letter
+    # ('Y:/monet-data/...'); a lone-letter first segment means we split a
+    # drive path out of a .env written on Windows — keep the whole value.
+    if os.pathsep == ":" and len(first) == 1 and first.isalpha():
+        first = raw
     if first.lower().endswith((".yaml", ".yml")):
         return os.path.dirname(first)
     return first
@@ -348,12 +353,13 @@ def check_registry(
             timeout=timeout,
         )
     except Exception as exc:  # noqa: BLE001 - a probe failure isn't fatal
+        # /health answered but the write-path probe did not; the whole point
+        # of this check is write access, so don't report a confident green.
         return {
-            "ok": True,
+            "ok": False,
             "detail": (
-                "reachable ({}); could not verify auth ({!r})".format(
-                    base, exc
-                )
+                "/health reachable ({}), but could not verify write access "
+                "({!r})".format(base, exc)
             ),
         }
     if auth_resp.status_code in (401, 403):

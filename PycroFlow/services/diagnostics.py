@@ -357,8 +357,13 @@ class DiagnosticsService:
                     "{}, but writes require a bearer token (HTTP {}) and "
                     "PAINT_REGISTRY_TOKEN is unset".format(healthy, auth_code),
                 )
-            if auth_reachable and auth_code == 200 and token:
-                return CheckStatus.OK, "{}; token accepted".format(healthy)
+            if auth_reachable and auth_code == 200:
+                if token:
+                    return CheckStatus.OK, "{}; token accepted".format(healthy)
+                return (
+                    CheckStatus.OK,
+                    "{}; server auth disabled".format(healthy),
+                )
             return CheckStatus.OK, healthy
         if code == 404:
             return (
