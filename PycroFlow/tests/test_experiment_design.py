@@ -300,7 +300,7 @@ class TestSetupConfigs(unittest.TestCase):
         # tubing records convert to a tuple-keyed dict
         self.assertIn(("pump_a", "sample"), setup["fluid"]["tubing"])
 
-    def test_assemble_filters_and_attaches(self):
+    def test_assemble_wires_full_manifold_and_attaches(self):
         setup = configs.load_setup("Emulator")
         ham, tub = configs.assemble_hamilton_config(
             setup,
@@ -310,8 +310,13 @@ class TestSetupConfigs(unittest.TestCase):
                 "cleaning_reservoirs": ["h2o"],
             },
         )
-        ids = sorted(r["id"] for r in ham["reservoir_a"])
-        self.assertEqual(ids, [1, 7, 16])  # 16 pulled in via cleaning 'h2o'
+        # reservoir_a is the setup's FULL manifold (every wired position), not
+        # the design's named subset — so the system is fully addressable and a
+        # design change needs no reconnect.
+        self.assertEqual(
+            sorted(r["id"] for r in ham["reservoir_a"]),
+            sorted(e["id"] for e in configs.setup_reservoirs(setup)),
+        )
         self.assertEqual(ham["special_names"]["flushbuffer_a"], 7)
         self.assertEqual(ham["cleaning_reservoirs"], ["h2o"])
         self.assertIn("interface", ham)
@@ -332,9 +337,11 @@ class TestSetupConfigs(unittest.TestCase):
                 },
             },
         )
-        # Cleaning tank 'h2o' (16) is pulled into the wired reservoirs.
-        ids = sorted(r["id"] for r in ham["reservoir_a"])
-        self.assertEqual(ids, [1, 7, 16])
+        # The full manifold is wired (the design's names are just a subset).
+        self.assertEqual(
+            sorted(r["id"] for r in ham["reservoir_a"]),
+            sorted(e["id"] for e in configs.setup_reservoirs(setup)),
+        )
         # The rounds mirror the legacy key, and the block carries the knobs.
         self.assertEqual(ham["cleaning_reservoirs"], ["h2o"])
         self.assertEqual(ham["cleaning"]["cleaning_rounds"], ["h2o"])
@@ -366,11 +373,11 @@ class TestSetupConfigs(unittest.TestCase):
         self.assertEqual(ibidi["ibidi"]["channels"], 24)
         self.assertNotIn("driver", ibidi["ibidi"])
 
-    def test_special_name_reservoir_is_wired_in(self):
-        # A reservoir named only via special_names (not in reservoir_names)
-        # is still routed to — _flush() sets the valves to flushbuffer_a —
-        # so it must end up in reservoir_a.
-        setup = configs.load_setup("Emulator")
+    def test_setup_special_names_merge_with_design_overrides(self):
+        # The setup supplies the fixed flush-buffer / water roles; a design's
+        # special_names override per-role (and the full manifold is wired, so
+        # every role's reservoir is routable regardless).
+        setup = configs.load_setup("Emulator")  # flushbuffer_a:7, h2o:16
         ham, _ = configs.assemble_hamilton_config(
             setup,
             {
@@ -378,7 +385,12 @@ class TestSetupConfigs(unittest.TestCase):
                 "special_names": {"flushbuffer_a": 20},
             },
         )
-        self.assertEqual(sorted(r["id"] for r in ham["reservoir_a"]), [1, 20])
+        self.assertEqual(ham["special_names"]["flushbuffer_a"], 20)  # design
+        self.assertEqual(ham["special_names"]["h2o"], 16)  # setup default kept
+        self.assertEqual(
+            sorted(r["id"] for r in ham["reservoir_a"]),
+            sorted(e["id"] for e in configs.setup_reservoirs(setup)),
+        )
 
     def test_sparse_manifold_with_multi_channel_routing(self):
         # ibidi manifolds are sparse (ids need not start at 1 or be
@@ -389,6 +401,9 @@ class TestSetupConfigs(unittest.TestCase):
             {"id": 8, "valve_pos": {"ibidi": [1, 6, 7, 8], 1: "in"}},
             {"id": 20, "valve_pos": {"ibidi": [1, 6, 7, 19, 20], 1: "in"}},
         ]
+        # The truncated manifold doesn't wire the setup's default flush roles,
+        # so clear them (the design supplies its own below).
+        setup["fluid"]["special_names"] = {}
         ham, _ = configs.assemble_hamilton_config(
             setup,
             {
@@ -396,6 +411,7 @@ class TestSetupConfigs(unittest.TestCase):
                 "special_names": {"flushbuffer_a": 20},
             },
         )
+        # The whole (sparse) manifold is wired.
         self.assertEqual(
             sorted(r["id"] for r in ham["reservoir_a"]), [2, 8, 20]
         )
@@ -458,7 +474,19 @@ class TestSetupConfigs(unittest.TestCase):
         settings = {"reservoir_names": {1: "R1"}}
         ham_old, tub_old = configs.assemble_hamilton_config(old, settings)
         ham_new, tub_new = configs.assemble_hamilton_config(new, settings)
-        self.assertEqual(ham_old, ham_new)
+        # The hardware layout normalizes identically; reservoir_a differs only
+        # because this minimal old-layout twin wires a 1-reservoir manifold
+        # while the shipped setup wires all 24 (both are the full manifold of
+        # their own file).
+        for key in (
+            "interface",
+            "pump_a",
+            "pump_out",
+            "valve_a",
+            "ibidi",
+            "flush_pos",
+        ):
+            self.assertEqual(ham_old.get(key), ham_new.get(key))
         self.assertEqual(tub_old[("R1", "pump_a")], tub_new[("R1", "pump_a")])
 
 

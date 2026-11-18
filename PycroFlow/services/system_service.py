@@ -203,24 +203,25 @@ class SystemService:
             "illumination": self.illumination_system is not None,
         }
 
-    def connect_fluid(self, fluid):
+    def connect_fluid(self, fluid=None):
         """Build and connect the Hamilton (legacy) fluid system.
 
-        Merges the loaded setup's hardware wiring with the experiment's
-        reservoir choices (``configs.assemble_hamilton_config``). For an
-        emulated setup the *real* drivers run over the fake serial wire
-        emulator, so fill/clean/manual-pump all work without instruments.
-
-        The design's fluid ``parameters`` are assigned to the system on
-        connect (as an empty protocol) so manual controls (fill/clean/pump)
-        work immediately, before any Run Sequence is loaded.
+        The fluid hardware is fully specified by the loaded setup (the full
+        reservoir manifold), so it connects from the setup alone — **no
+        experiment design required** (``configs.assemble_hamilton_config``
+        wires every manifold position). An experiment design, when given,
+        overlays its reservoir labels / ``special_names`` / cleaning; changing
+        the design later is applied in place via
+        :meth:`sync_fluid_reservoirs` (no serial reconnect). For an emulated
+        setup the *real* drivers run over the fake serial wire emulator, so
+        fill/clean/manual-pump all work without instruments.
 
         Parameters
         ----------
-        fluid : dict
-            The experiment design's ``fluid`` section (with ``settings`` —
-            needs ``reservoir_names`` — and optional ``parameters``). A bare
-            settings dict is also accepted.
+        fluid : dict, optional
+            An experiment design's ``fluid`` section (``settings`` +
+            optional ``parameters``) or a bare settings dict. Omit / ``None``
+            to connect the full manifold from the setup alone.
 
         Returns
         -------
@@ -232,10 +233,11 @@ class SystemService:
         from PycroFlow.configs import assemble_hamilton_config
         import PycroFlow.hamilton_architecture as ha
 
+        fluid = fluid or {}
         if "settings" in fluid:
             settings = fluid["settings"]
             parameters = fluid.get("parameters", {})
-        else:  # a bare settings dict
+        else:  # a bare settings dict, or {} -> setup-only (full manifold)
             settings = fluid
             parameters = {}
 
@@ -695,6 +697,37 @@ class SystemService:
         )
         return True
 
+    def apply_fluid_design(self, fluid) -> bool:
+        """Overlay an experiment design onto the live fluid system in place.
+
+        The fluid hardware is already connected (to the setup's full
+        manifold), so loading or changing a design does **not** reconnect: it
+        re-applies the design's reservoir labels / ``special_names`` / cleaning
+        (:meth:`sync_fluid_reservoirs`) and re-seeds the design's fluid
+        ``parameters`` (so manual fill/clean/pump reflect the design before a
+        Run Sequence is translated), all without a serial reconnect.
+
+        Parameters
+        ----------
+        fluid : dict
+            The design's ``fluid`` section (``settings`` + optional
+            ``parameters``) or a bare settings dict.
+
+        Returns
+        -------
+        bool
+            True if a live fluid system was updated, else False.
+        """
+        if self.fluid_system is None:
+            return False
+        fluid = fluid or {}
+        parameters = fluid.get("parameters", {}) if "settings" in fluid else {}
+        self.sync_fluid_reservoirs(fluid)
+        self.fluid_system._assign_protocol(
+            {"parameters": dict(parameters), "protocol_entries": []}
+        )
+        return True
+
     def routable_reservoirs(self) -> list:
         """Reservoir ids the connected fluid system can currently route to."""
         if self.fluid_system is None:
@@ -723,7 +756,11 @@ class SystemService:
         if fs is None:
             return {}
         names = getattr(fs, "_reservoir_names", {}) or {}
-        used = set(getattr(fs, "reservoir_paths", {}) or {})
+        # "used" = the reservoirs the loaded design actually names, NOT every
+        # wired position: the system always wires the full manifold (all ids
+        # are routable), so reservoir_paths can't distinguish the design's
+        # subset. With no design loaded, nothing is marked used.
+        used = {int(rid) for rid in names}
         totals = getattr(fs, "reservoir_totals", {}) or {}
         pumped = getattr(fs, "reservoir_used", {}) or {}
         labels = {}

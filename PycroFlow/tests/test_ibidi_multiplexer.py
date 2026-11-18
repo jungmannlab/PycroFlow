@@ -421,9 +421,10 @@ class IbidiLegacyArchitectureIntegrationTest(unittest.TestCase):
         self.assertEqual([i for i, s in enumerate(fake.channels, 1) if s], [1])
 
     def test_design_edit_after_connect_is_applied(self):
-        # The reported failure: a reservoir added to the design after the
-        # hardware was connected made the run die on its first step with
-        # KeyError in _set_valves. Re-syncing must make it routable.
+        # Full manifold: every setup reservoir is routable right after connect,
+        # so a reservoir the design names later is already reachable (the old
+        # "added reservoir -> KeyError mid-run in _set_valves" bug can't recur).
+        # A re-sync still re-applies the design overlay without a reconnect.
         from PycroFlow.services import SystemService
 
         svc = SystemService()
@@ -435,9 +436,18 @@ class IbidiLegacyArchitectureIntegrationTest(unittest.TestCase):
             }
         }
         fs = svc.connect_fluid(first)
-        self.assertEqual(sorted(fs.reservoir_paths), [2, 4])
+        # All wired reservoirs are routable immediately, not just the 2 named.
+        self.assertEqual(
+            sorted(fs.reservoir_paths), sorted(svc.reservoir_ids())
+        )
+        self.assertIn(3, fs.reservoir_paths)  # unnamed but wired -> routable
+        fs._set_valves(3)
+        self.assertEqual(
+            [i for i, s in enumerate(fs.multiplexer.channel_states, 1) if s],
+            [3],
+        )
 
-        # ... the user then adds "Imager 1" on reservoir 3 and re-translates
+        # A later design edit re-applies in place and stays the full manifold.
         edited = {
             "settings": {
                 "reservoir_names": {2: "Buffer", 4: "Imager 2", 3: "Imager 1"},
@@ -445,16 +455,14 @@ class IbidiLegacyArchitectureIntegrationTest(unittest.TestCase):
             }
         }
         self.assertTrue(svc.sync_fluid_reservoirs(edited))
-        self.assertEqual(sorted(fs.reservoir_paths), [2, 3, 4])
-        fs._set_valves(3)
         self.assertEqual(
-            [i for i, s in enumerate(fs.multiplexer.channel_states, 1) if s],
-            [3],
+            sorted(fs.reservoir_paths), sorted(svc.reservoir_ids())
         )
 
-    def test_sync_drops_removed_reservoirs(self):
-        # Rebuilt, not added to: a reservoir taken out of the design must
-        # stop being routable rather than linger from the previous connect.
+    def test_sync_keeps_full_manifold_when_design_drops_reservoir(self):
+        # reservoir_a is the setup's full manifold, not the design's subset, so
+        # a reservoir removed from the design stays wired/routable (it is fixed
+        # hardware); only its "used" labelling changes elsewhere.
         from PycroFlow.services import SystemService
 
         svc = SystemService()
@@ -475,7 +483,10 @@ class IbidiLegacyArchitectureIntegrationTest(unittest.TestCase):
                 }
             }
         )
-        self.assertEqual(sorted(fs.reservoir_paths), [2])
+        self.assertEqual(
+            sorted(fs.reservoir_paths), sorted(svc.reservoir_ids())
+        )
+        self.assertIn(4, fs.reservoir_paths)  # still wired though un-named now
 
     def test_manual_set_valves_reaches_undesigned_reservoirs(self):
         # Manual hardware testing must reach every reservoir the SETUP wires,
@@ -492,7 +503,10 @@ class IbidiLegacyArchitectureIntegrationTest(unittest.TestCase):
                 }
             }
         )
-        self.assertEqual(sorted(fs.reservoir_a.keys()), [1, 5])
+        # Every setup reservoir is wired (full manifold), not just the named 1.
+        self.assertEqual(
+            sorted(fs.reservoir_a.keys()), sorted(svc.reservoir_ids())
+        )
 
         svc.set_valves(8)  # wired in the setup, absent from the design
         self.assertEqual(

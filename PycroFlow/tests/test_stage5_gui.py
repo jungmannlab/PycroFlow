@@ -1507,15 +1507,22 @@ class TestConnectionFlow(unittest.TestCase):
         self.assertIn("Illumination: ✓ connected", text)
         self.assertNotIn("not connected", text)
 
-    def test_fluid_connect_requires_design(self):
+    def test_fluid_connects_without_a_design(self):
+        # Fluid connects from the setup's full reservoir manifold alone — no
+        # experiment design required, and no warning.
         from unittest.mock import patch
         from PycroFlow.gui import main_window as mw
 
         w = self._win()
         with patch.object(mw.QMessageBox, "warning") as warn:
             w.fluid_tab._on_connect_clicked()
-        warn.assert_called_once()
-        self.assertIsNone(w._system_service.fluid_system)
+        warn.assert_not_called()
+        self.assertIsNotNone(w._system_service.fluid_system)
+        # The whole manifold is wired, not just a design's subset.
+        self.assertEqual(
+            w._system_service.routable_reservoirs(),
+            sorted(w._system_service.reservoir_ids()),
+        )
 
     def test_manual_imaging_connect(self):
         w = self._win()
