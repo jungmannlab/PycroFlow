@@ -5,8 +5,10 @@ Design, Run Sequence, Fluid, Imaging, Live, Monet. The run controls (Load /
 Start / Pause-Resume / Abort) live in the Run Sequence tab. The window also
 coordinates
 hardware connection: the microscope **setup** is chosen in the toolbar, and
-subsystems **autoconnect** once an experiment design is loaded (the fluid
-system needs the design's reservoir list). Each subsystem tab shows its
+Connect connects every subsystem — including the fluid system, which wires the
+setup's full reservoir manifold and so needs no experiment design (a design,
+once loaded, overlays its reservoir selection / special_names in place without
+a fluid reconnect). Each subsystem tab shows its
 connection status and offers a manual Connect/Reconnect, and the status bar
 shows a single always-visible confirmation of the loaded setup + each
 subsystem's connection state.
@@ -444,10 +446,23 @@ class PycroFlowMainWindow(QMainWindow):
             self._autoconnect()
 
     def _on_design_changed(self):
-        # A freshly loaded design gets clean connections: reconnect every
-        # subsystem (which disconnects first), so any prior design's hardware
-        # handles are released before the new ones are opened.
-        self._reconnect_all()
+        # Fluid is connected to the setup's full manifold independently of the
+        # design, so a design load/change is applied IN PLACE (reservoir
+        # labels / special_names / cleaning / parameters) with no serial
+        # reconnect — connect it only if it isn't up yet.
+        if self._system_service.setup is not None:
+            design = self._experiment_service.experiment_design or {}
+            if self._is_connected("fluid"):
+                self._system_service.apply_fluid_design(design.get("fluid"))
+                self._refresh_status()
+            else:
+                self._connect_system("fluid", warn_missing=False)
+            # Imaging config (save_dir / base_name / positions) comes from the
+            # design, so (re)connect it; illumination does not depend on the
+            # design — connect it only if it isn't up yet.
+            self._connect_system("imaging", warn_missing=False)
+            if not self._is_connected("illumination"):
+                self._connect_system("illumination", warn_missing=False)
 
     def _on_experiment_state(self, old, new):
         """Lock/unlock manual hardware access on experiment state changes."""
@@ -797,17 +812,12 @@ class PycroFlowMainWindow(QMainWindow):
     def _connect_call(self, key, warn_missing):
         svc = self._system_service
         if key == "fluid":
+            # Fluid connects from the setup's full reservoir manifold alone —
+            # no experiment design required. A design, when loaded, overlays
+            # its reservoir labels / special_names / cleaning in place (see
+            # _on_design_changed), so Connect never waits on a design.
             design = self._experiment_service.experiment_design
             fluid = (design or {}).get("fluid")
-            if not fluid or not fluid.get("settings"):
-                if warn_missing:
-                    QMessageBox.warning(
-                        self,
-                        "No experiment design",
-                        "Load an experiment design first — the fluid system "
-                        "needs its reservoir list.",
-                    )
-                return None
             return lambda: svc.connect_fluid(fluid)
         if key == "imaging":
             if svc.is_emulated():

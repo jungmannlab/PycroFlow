@@ -46,6 +46,11 @@ fluid:
   flush_pos:
     inject: in
     flush: out
+  # Fixed hardware roles (flush buffer / water tank), so flush/fill/clean work
+  # right after Connect; a design's special_names may override these.
+  special_names:
+    flushbuffer_a: 7
+    h2o: 16
   # Full candidate wiring of every manifold position. The experiment selects
   # the subset it uses; unused positions are dropped at assemble time.
   reservoirs:

@@ -46,6 +46,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entering the folder left monet unable to find the configs and the protocols
   path had to be added to `.env` by hand. A legacy value pointing straight at
   `configs.yaml` is still accepted (protocols are taken as its sibling).
+- **The fluid system now connects from the microscope setup alone — no
+  experiment design required.** Previously clicking **Connect** attached every
+  subsystem *except* fluid, which waited for a design's reservoir list; the
+  fluid system now wires the setup's **full reservoir manifold** (every
+  position addressable) so Connect attaches it like the others. A new setup
+  field, `fluid.special_names` (the fixed flush-buffer / water roles), lets
+  flush/fill/clean work right after Connect; the shipped and template setups
+  gain it. Loading or changing an experiment design no longer reconnects the
+  fluid hardware — its reservoir selection, `special_names` (overriding the
+  setup's) and cleaning are applied **in place** (`SystemService.
+  apply_fluid_design`), with no serial reconnect. `assemble_hamilton_config`'s
+  `fluid_settings` argument is now optional (omit to build from the setup
+  alone). The schematic's "used" highlight now reflects the design's named
+  reservoirs rather than every wired position.
 
 ## [0.3.6] - 2026-11-11
 

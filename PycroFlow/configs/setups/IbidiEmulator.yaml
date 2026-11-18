@@ -56,6 +56,11 @@ fluid:
   flush_pos:
     inject: in
     flush: out
+  # Fixed hardware roles (flush buffer / water tank), so flush/fill/clean work
+  # right after Connect; a design's special_names may override these.
+  special_names:
+    flushbuffer_a: 7
+    h2o: 16
   # Each reservoir maps to ibidi channel(s) (1..24). Selecting a reservoir
   # opens exactly those and closes all others; the pump (address 1) is set to
   # its input position. 24 channels => reservoir ids 1..24.

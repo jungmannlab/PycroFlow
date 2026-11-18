@@ -557,6 +557,65 @@ class TestSystemService(unittest.TestCase):
         self.assertIs(svc.fluid_system, fs)
         self.assertEqual(fs.parameters["max_velocity"], 200)
 
+    def test_connect_fluid_without_design_uses_full_manifold(self):
+        # Fluid connects from the setup alone (no experiment design): the full
+        # manifold is wired and the setup's fixed special_names apply, so
+        # flush/fill/clean work right after connect.
+        from PycroFlow.fluid.legacy import LegacyArchitecture
+
+        svc = SystemService()
+        svc.load_setup("Emulator")
+        fs = svc.connect_fluid()  # no design
+        self.assertIsInstance(fs, LegacyArchitecture)
+        self.assertEqual(
+            sorted(fs.reservoir_a.keys()), sorted(svc.reservoir_ids())
+        )
+        # Emulator's setup special_names (flushbuffer_a: 7, h2o: 16).
+        self.assertEqual(fs.special_names["flushbuffer_a"], 7)
+        self.assertEqual(fs.special_names["h2o"], 16)
+
+    def test_apply_fluid_design_overlays_in_place(self):
+        # Loading a design onto a connected system applies labels /
+        # special_names / parameters in place, with no reconnect (same object).
+        svc = SystemService()
+        svc.load_setup("Emulator")
+        fs = svc.connect_fluid()  # full manifold, setup special_names
+        design_fluid = {
+            "parameters": {"max_velocity": 321},
+            "settings": {
+                "reservoir_names": {1: "A1"},
+                "special_names": {
+                    "flushbuffer_a": 6
+                },  # override the setup's 7
+            },
+        }
+        self.assertTrue(svc.apply_fluid_design(design_fluid))
+        self.assertIs(svc.fluid_system, fs)  # NOT reconnected
+        self.assertEqual(fs.special_names["flushbuffer_a"], 6)  # design wins
+        self.assertEqual(fs.special_names["h2o"], 16)  # setup default kept
+        self.assertEqual(fs.parameters["max_velocity"], 321)
+        # Still the full manifold (design is just an overlay).
+        self.assertEqual(
+            sorted(fs.reservoir_a.keys()), sorted(svc.reservoir_ids())
+        )
+
+    def test_apply_fluid_design_without_params_preserves_live_state(self):
+        # An overlay that brings no fluid parameters must NOT reset the
+        # system's parameters or wipe its live volume counters.
+        svc = SystemService()
+        svc.load_setup("Emulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 500},
+                "settings": {"reservoir_names": {1: "A1"}},
+            }
+        )
+        fs = svc.fluid_system
+        fs.reservoir_totals = {1: 999.0}  # simulate a live plan
+        svc.apply_fluid_design({"settings": {"reservoir_names": {2: "B2"}}})
+        self.assertEqual(fs.parameters["max_velocity"], 500)  # not reset
+        self.assertEqual(fs.reservoir_totals, {1: 999.0})  # counters intact
+
     def test_load_setup_and_monet_name(self):
         svc = SystemService()
         svc.load_setup("Emulator")
