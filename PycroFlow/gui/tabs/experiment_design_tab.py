@@ -63,11 +63,13 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
 
         controls = QHBoxLayout()
         self.load_btn = QPushButton("Load…")
+        self.example_btn = QPushButton("New from example…")
         self.save_btn = QPushButton("Save…")
         self.clear_btn = QPushButton("Clear")
         self.translate_btn = QPushButton("Translate → Run Sequence")
         for b in (
             self.load_btn,
+            self.example_btn,
             self.save_btn,
             self.clear_btn,
             self.translate_btn,
@@ -114,6 +116,7 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
         self._estimate_timer.timeout.connect(self._recompute_estimate)
 
         self.load_btn.clicked.connect(self._on_load)
+        self.example_btn.clicked.connect(self._on_new_from_example)
         self.save_btn.clicked.connect(self._on_save)
         self.clear_btn.clicked.connect(self._on_clear)
         self.translate_btn.clicked.connect(self._on_translate)
@@ -211,6 +214,52 @@ class ExperimentDesignTab(YamlDropMixin, QWidget):
         )
         if path:
             self.load_design_path(path)
+
+    def _on_new_from_example(self):
+        """Load a bundled example design into the editor as a starting point."""
+        from PyQt6.QtWidgets import QInputDialog
+
+        from PycroFlow.examples import design_examples
+
+        examples = design_examples()
+        if not examples:
+            QMessageBox.information(
+                self, "Examples", "No example designs are bundled."
+            )
+            return
+        by_label = dict(examples)
+        labels = list(by_label)
+        if len(labels) == 1:
+            label = labels[0]
+        else:
+            label, ok = QInputDialog.getItem(
+                self,
+                "New from example",
+                "Start from which example design?",
+                labels,
+                0,
+                False,
+            )
+            if not ok:
+                return
+        self._load_example(by_label[label])
+
+    def _load_example(self, path):
+        # Load as a dict (not the file path) so we do NOT chdir into the
+        # bundled examples folder — this is a template to edit and Save
+        # elsewhere, not a run loaded in place.
+        try:
+            with open(path) as f:
+                data = yaml.safe_load(f)
+            self._svc.load_experiment_design(data)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Invalid example design", "{}".format(exc)
+            )
+            return
+        self._set_form(self._svc.experiment_design)
+        if self._on_design_loaded is not None:
+            self._on_design_loaded()
 
     def _on_clear(self):
         reply = QMessageBox.question(

@@ -51,6 +51,7 @@ from PycroFlow.gui.tabs.monet_tab import MonetTab
 from PycroFlow.gui.tabs.webcams_tab import WebcamsTab
 from PycroFlow.gui.tabs.live_tab import LiveTabHost
 from PycroFlow.gui.tabs.doctor_tab import DoctorTab
+from PycroFlow.gui.tabs.setup_tab import SetupEditorTab
 from PycroFlow.gui.widgets.replay_bar import ReplayBar
 from PycroFlow.services.live_preview import LivePreviewSession
 
@@ -192,6 +193,10 @@ class PycroFlowMainWindow(QMainWindow):
             self.setup_combo.setCurrentIndex(i)
         if self.setup_combo.currentText():
             self._on_setup_changed(self.setup_combo.currentText())
+
+    def _on_setup_saved(self, name):
+        """Setup editor saved a setup — make it selectable in the toolbar."""
+        self._refresh_setup_combo(select=name)
 
     # --- Help menu ----------------------------------------------------
 
@@ -336,6 +341,10 @@ class PycroFlowMainWindow(QMainWindow):
             self._system_service, on_config_changed=self._attach_monitoring
         )
         self.monet_tab = MonetTab()
+        # Structured editor for the microscope setup (pumps/valves/tubing/PFS).
+        # Saving refreshes the toolbar's setup selector so a new/edited setup
+        # is immediately selectable.
+        self.setup_editor_tab = SetupEditorTab(on_saved=self._on_setup_saved)
         # Diagnostics: verifies which subsystems + connectors (registry, monet)
         # are actually working. Reads both services — SystemService for the live
         # hardware, ExperimentService for the run state (so instrument pings are
@@ -366,6 +375,7 @@ class PycroFlowMainWindow(QMainWindow):
         self.tabs.addTab(self.webcams_tab, "Webcams")
         self.tabs.addTab(self.live_tab, "Live")
         self.tabs.addTab(self.monet_tab, "Monet")
+        self.tabs.addTab(self.setup_editor_tab, "Setup")
         self.tabs.addTab(self.doctor_tab, "Doctor")
 
         # The replay scrubber lives ABOVE the tabs so a finished/opened run can
@@ -716,6 +726,7 @@ class PycroFlowMainWindow(QMainWindow):
         )
         self.webcams_tab.set_run_lock(locked, live_path=live)
         self.monet_tab.set_run_lock(locked)
+        self.setup_editor_tab.set_run_lock(locked)
         # A run owns the camera: any MM preview stops, the toggle disables.
         self.live_tab.set_run_lock(locked)
         if not locked:
