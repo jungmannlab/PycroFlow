@@ -711,6 +711,7 @@ class PycroFlowMainWindow(QMainWindow):
         )
         self.webcams_tab.set_run_lock(locked, live_path=live)
         self.monet_tab.set_run_lock(locked)
+        self.setup_editor_tab.set_run_lock(locked)
         # A run owns the camera: any MM preview stops, the toggle disables.
         self.live_tab.set_run_lock(locked)
         if not locked:

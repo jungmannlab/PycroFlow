@@ -232,12 +232,21 @@ def split_setup(data: dict) -> tuple:
     """
     data = copy.deepcopy(data)
     structured: dict = {}
+    # Parent dicts we removed a structured child from — only these may be
+    # pruned if they end up empty, so a block that was ALREADY empty on disk is
+    # preserved (keeping the round-trip exact even for a degenerate setup).
+    touched_parents = set()
     for path in STRUCTURED_PATHS:
         present, value = _get_path(data, path)
         if present:
             _set_path(structured, path, value)
             _del_path(data, path)
-    _prune_empty(data)
+            if len(path) > 1:
+                touched_parents.add(path[:-1])
+    for parent in sorted(touched_parents, key=len, reverse=True):
+        present, node = _get_path(data, parent)
+        if present and node == {}:
+            _del_path(data, parent)
     return structured, data
 
 
@@ -251,24 +260,14 @@ def _del_path(data: dict, path: tuple) -> None:
     node.pop(path[-1], None)
 
 
-def _prune_empty(data: dict) -> None:
-    """Drop now-empty container dicts left behind after carving structured out.
-
-    Only removes dicts that became ``{}`` purely because every child was a
-    structured path — a block the setup left empty on disk would already have
-    been ``{}`` and is equally dropped, which round-trips (an absent vs empty
-    'fluid' both mean no passthrough fluid keys)."""
-    for key in list(data.keys()):
-        value = data[key]
-        if isinstance(value, dict):
-            _prune_empty(value)
-            if value == {}:
-                del data[key]
-
-
 def merge_setup(structured: dict, passthrough: dict) -> dict:
-    """Recombine a structured + passthrough split back into one setup dict."""
-    return _deep_merge(copy.deepcopy(passthrough), structured)
+    """Recombine a structured + passthrough split back into one setup dict.
+
+    Both inputs are deep-copied, so the result shares no nested objects with
+    either argument (a later mutation of the result can't reach back into the
+    caller's ``structured``/``passthrough`` dicts).
+    """
+    return _deep_merge(copy.deepcopy(passthrough), copy.deepcopy(structured))
 
 
 def _deep_merge(base: dict, overlay: dict) -> dict:

@@ -62,6 +62,29 @@ class TestSplitMergeRoundTrip(unittest.TestCase):
         # ...and they are byte-identical after a round-trip.
         self.assertEqual(merge_setup(structured, passthrough), raw)
 
+    def test_empty_block_is_preserved(self):
+        # A block that is ALREADY empty on disk must survive the round-trip —
+        # _prune_empty only drops containers it emptied by carving, not ones
+        # that started empty.
+        raw = configs.load_setup_file("Emulator")
+        raw["imaging"] = {}  # degenerate, but must round-trip exactly
+        structured, passthrough = split_setup(raw)
+        self.assertEqual(passthrough.get("imaging"), {})
+        self.assertEqual(merge_setup(structured, passthrough), raw)
+
+    def test_merge_does_not_alias_inputs(self):
+        # Mutating the merged result must not reach back into the structured or
+        # passthrough dicts the caller passed in.
+        raw = configs.load_setup_file("Emulator")
+        structured, passthrough = split_setup(raw)
+        merged = merge_setup(structured, passthrough)
+        merged["fluid"]["pumps"]["interface"]["COM"] = "99"
+        merged["fluid"]["reservoirs"].append({"id": 999})
+        self.assertNotEqual(
+            structured["fluid"]["pumps"]["interface"]["COM"], "99"
+        )
+        self.assertNotIn({"id": 999}, passthrough["fluid"]["reservoirs"])
+
     def test_structured_paths_are_disjoint_from_passthrough(self):
         raw = configs.load_setup_file("Mercury")
         structured, passthrough = split_setup(raw)

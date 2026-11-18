@@ -178,9 +178,14 @@ class _SetupPage(QWizardPage):
         edit_row.addWidget(self._edit_status)
         form.addRow(edit_row)
 
-        # A new template base invalidates any detailed edits made from the old
-        # one — fall back to the quick clone path until re-edited.
+        # Any quick-field change invalidates a detailed edit (the editor is a
+        # snapshot of the clone + the quick fields at the time it was opened),
+        # so fall back to the quick clone path until re-edited. The name field
+        # is exempt — it stays authoritative and is synced in _build.
         self.template.currentIndexChanged.connect(self._clear_edited)
+        self.emulated.toggled.connect(self._clear_edited)
+        self.com.editTextChanged.connect(self._clear_edited)
+        self.monet_config.textChanged.connect(self._clear_edited)
 
     def _clear_edited(self):
         self._edited_data = None

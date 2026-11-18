@@ -66,6 +66,10 @@ class TestSetupEditorTab(_QtSetupBase):
         self.assertEqual(
             back["fluid"]["reservoirs"], raw["fluid"]["reservoirs"]
         )
+        # The tubing 'from' alias (a Python keyword, Field(alias='from')) is
+        # saved under the on-disk key, not the python field name 'from_'.
+        self.assertIn("from", back["fluid"]["tubing"][0])
+        self.assertNotIn("from_", back["fluid"]["tubing"][0])
 
     def test_bad_raw_yaml_blocks_current_merged(self):
         tab = self._tab()
@@ -136,11 +140,21 @@ class TestWizardSetupPageEditor(_QtSetupBase):
         )  # name field stays authoritative
         self.assertEqual(built["fluid"], {"custom": 1})
 
-    def test_template_change_clears_edited_data(self):
-        page = self._page()
-        page._edited_data = {"setup": "x"}
-        page._clear_edited()
-        self.assertIsNone(page._edited_data)
+    def test_quick_field_changes_clear_edited_data(self):
+        # A detailed edit is a snapshot; changing any quick field afterwards
+        # must discard it so the quick fields can't be silently ignored.
+        for mutate in (
+            lambda p: p.emulated.setChecked(True),
+            lambda p: p.com.setCurrentText("7"),
+            lambda p: p.monet_config.setText("Scope"),
+            lambda p: p.template.setCurrentIndex(
+                1 if p.template.currentIndex() != 1 else 0
+            ),
+        ):
+            page = self._page()
+            page._edited_data = {"setup": "x"}
+            mutate(page)
+            self.assertIsNone(page._edited_data)
 
     def test_quick_path_without_edit(self):
         page = self._page()

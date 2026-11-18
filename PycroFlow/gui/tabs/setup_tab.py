@@ -143,6 +143,22 @@ class SetupEditorTab(QWidget):
             self.setup_combo.setCurrentIndex(i)
         self.setup_combo.blockSignals(False)
 
+    def set_run_lock(self, locked: bool):
+        """Disable load/new/save while the orchestrator owns the instruments.
+
+        The editor only writes YAML files (it holds no instrument handles), but
+        saving over the active setup mid-run is blocked for consistency with
+        the other manual controls."""
+        if self._embedded:
+            return
+        for widget in (
+            self.setup_combo,
+            self.load_btn,
+            self.new_btn,
+            self.save_btn,
+        ):
+            widget.setEnabled(not locked)
+
     # --- data in/out --------------------------------------------------
 
     def _set_form(self, structured, passthrough=None):
