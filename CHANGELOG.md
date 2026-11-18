@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Structured microscope-setup editor** (`Setup` tab + setup wizard). A new
+  schema-driven editor for a setup YAML — pump parameters, serial interface,
+  flush positions, tubing, PFS tags and illumination — backed by a `SetupConfig`
+  pydantic schema (`PycroFlow.schemas.setup`). Load/edit/save any setup (shipped
+  or user-local) from the main window's **Setup** tab, or open it from the setup
+  wizard's new **"Edit full hardware config…"** button to configure a new rig in
+  detail instead of just its COM port. The reservoir **wiring**
+  (`reservoirs[].valve_pos` — list values + mixed int/`ibidi` keys), the
+  multiplexer, and extra blocks (`camera_info`, `live_analysis`, `monitoring`)
+  are preserved byte-for-byte in a raw-YAML panel (a scalar form would corrupt
+  them); `split_setup`/`merge_setup` guarantee `merge(*split(x)) == x` for every
+  setup, so editing never loses or mangles a rig's wiring. Saving refreshes the
+  toolbar's setup selector.
+
 ## [0.3.6] - 2026-11-11
 
 ### Added

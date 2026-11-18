@@ -131,9 +131,9 @@ class TestMainWindow(unittest.TestCase):
 
     def test_builds_tabs(self):
         w = self._build()
-        self.assertEqual(w.tabs.count(), 8)
+        self.assertEqual(w.tabs.count(), 9)
         self.assertEqual(
-            [w.tabs.tabText(i) for i in range(8)],
+            [w.tabs.tabText(i) for i in range(9)],
             [
                 "Experiment Design",
                 "Run Sequence",
@@ -142,6 +142,7 @@ class TestMainWindow(unittest.TestCase):
                 "Webcams",
                 "Live",
                 "Monet",
+                "Setup",
                 "Doctor",
             ],
         )

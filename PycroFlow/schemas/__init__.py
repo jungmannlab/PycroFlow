@@ -25,6 +25,13 @@ from PycroFlow.schemas.experiment_design import (
     validate_experiment_design,
     design_warnings,
 )
+from PycroFlow.schemas.setup import (
+    SetupConfig,
+    SetupValidationError,
+    validate_setup_config,
+    split_setup,
+    merge_setup,
+)
 
 __all__ = [
     "Protocol",
@@ -37,4 +44,9 @@ __all__ = [
     "ExperimentDesignValidationError",
     "validate_experiment_design",
     "design_warnings",
+    "SetupConfig",
+    "SetupValidationError",
+    "validate_setup_config",
+    "split_setup",
+    "merge_setup",
 ]
