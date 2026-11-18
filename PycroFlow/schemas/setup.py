@@ -28,7 +28,7 @@ from __future__ import annotations
 import copy
 from typing import List
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from PycroFlow.schemas.experiment_design import _CFG, _field, _unit
 
@@ -109,7 +109,7 @@ class FluidStructured(BaseModel):
     system_type: str = _field("legacy", tooltip="Fluid system backend.")
     pumps: Pumps
     flush_pos: FlushPos
-    tubing: List[TubingSegment] = Field(default_factory=list)
+    tubing: List[TubingSegment] = _field(default_factory=list)
 
 
 class PfsPars(BaseModel):
@@ -205,7 +205,8 @@ STRUCTURED_PATHS = (
 )
 
 
-def _get_path(data: dict, path: tuple):
+def _get_path(data: dict, path: tuple) -> tuple:
+    """Return ``(present, value)`` for the dotted ``path`` into ``data``."""
     node = data
     for part in path:
         if not isinstance(node, dict) or part not in node:
@@ -215,13 +216,14 @@ def _get_path(data: dict, path: tuple):
 
 
 def _set_path(data: dict, path: tuple, value) -> None:
+    """Set ``data[path...] = value``, creating intermediate dicts as needed."""
     node = data
     for part in path[:-1]:
         node = node.setdefault(part, {})
     node[path[-1]] = value
 
 
-def split_setup(data: dict) -> tuple:
+def split_setup(data: dict) -> tuple[dict, dict]:
     """Split a setup dict into ``(structured, passthrough)``.
 
     ``structured`` holds exactly the :data:`STRUCTURED_PATHS` the form edits;
@@ -251,6 +253,7 @@ def split_setup(data: dict) -> tuple:
 
 
 def _del_path(data: dict, path: tuple) -> None:
+    """Delete ``data[path...]`` if present (no-op on a missing intermediate)."""
     node = data
     for part in path[:-1]:
         nxt = node.get(part)

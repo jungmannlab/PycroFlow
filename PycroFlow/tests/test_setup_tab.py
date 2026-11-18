@@ -85,6 +85,42 @@ class TestSetupEditorTab(_QtSetupBase):
         with self.assertRaises(ValueError):
             tab.current_merged()
 
+    def test_rename_onto_existing_setup_prompts_before_overwrite(self):
+        from PyQt6.QtWidgets import QMessageBox
+
+        tab = self._tab()
+        tab.load_setup("Emulator")  # self._name == "Emulator"
+        # Rename via the 'setup' field to a DIFFERENT existing setup.
+        tab._form.field_editor("setup").line_edit().setText("Template")
+        with (
+            mock.patch(
+                "PycroFlow.gui.tabs.setup_tab.QMessageBox.question",
+                return_value=QMessageBox.StandardButton.No,
+            ) as q,
+            mock.patch(
+                "PycroFlow.gui.tabs.setup_tab.configs.save_setup"
+            ) as save,
+        ):
+            tab._on_save()
+        q.assert_called_once()
+        save.assert_not_called()  # declined -> nothing written
+
+    def test_resave_same_name_does_not_prompt(self):
+        tab = self._tab()
+        tab.load_setup("Emulator")  # re-saving the loaded setup
+        with (
+            mock.patch(
+                "PycroFlow.gui.tabs.setup_tab.QMessageBox.question"
+            ) as q,
+            mock.patch(
+                "PycroFlow.gui.tabs.setup_tab.configs.save_setup",
+                return_value="/x/Emulator.yaml",
+            ) as save,
+        ):
+            tab._on_save()
+        q.assert_not_called()
+        save.assert_called_once()
+
     def test_empty_name_is_rejected(self):
         raw = configs.load_setup_file("Emulator")
         raw["setup"] = ""

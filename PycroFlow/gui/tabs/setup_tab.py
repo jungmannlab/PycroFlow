@@ -266,6 +266,20 @@ class SetupEditorTab(QWidget):
         except (SetupValidationError, ValueError) as exc:
             QMessageBox.warning(self, "Cannot save setup", "{}".format(exc))
             return
+        # Renaming via the 'setup' field writes to a different file. If that
+        # name already belongs to ANOTHER setup, confirm before clobbering it
+        # (save_setup backs up to .bak, but a silent overwrite is still a
+        # footgun). A plain re-save of the loaded setup never prompts.
+        if name != self._name and name in configs.list_setups():
+            reply = QMessageBox.question(
+                self,
+                "Overwrite setup?",
+                "A setup named {!r} already exists. Overwrite it?".format(
+                    name
+                ),
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         try:
             path = configs.save_setup(name, merged)
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator
