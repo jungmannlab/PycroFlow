@@ -45,6 +45,11 @@ fluid:
   flush_pos:
     inject: in
     flush: out
+  # Fixed hardware roles (flush buffer / water tank), so flush/fill/clean work
+  # right after Connect; a design's special_names may override these.
+  special_names:
+    flushbuffer_a: 7
+    h2o: 16
   reservoirs:
     - {id: 1, valve_pos: {3: 2, 1: in}}
     - {id: 2, valve_pos: {3: 3, 1: in}}

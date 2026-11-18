@@ -8,9 +8,10 @@ URL/token, monet config paths, spill port) and a **user-local microscope setup**
 ``commit()``.
 
 Launched automatically on first run (``setup_core.first_run()``) and re-runnable
-from the toolbar's "Setup Wizard…" action. The deeper hardware topology (the
-full reservoir manifold + tubing) is cloned from the template as-is — edit it in
-the saved YAML (a schema editor for it is future work); the page says so.
+from the toolbar's "Setup Wizard…" action. The deeper hardware topology (pumps,
+valves, tubing, PFS) is cloned from the template and can be configured in detail
+via the setup page's "Edit full hardware config…" button, which opens the
+structured :class:`PycroFlow.gui.tabs.setup_tab.SetupEditorDialog`.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import os
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -73,9 +75,18 @@ class _ConnectivityPage(QWizardPage):
             env.get(setup_core.ENV_REGISTRY_TOKEN, "")
         )
         self.registry_token.setEchoMode(QLineEdit.EchoMode.Password)
-        self.monet_paths = QLineEdit(
-            env.get(setup_core.ENV_MONET_CONFIG_PATHS, "")
+        # monet reads configs.yaml + protocols.yaml from a folder (the same
+        # value monet's own wizard asks for); we derive both paths on commit.
+        self.monet_folder = QLineEdit(setup_core.monet_folder_from_env(env))
+        self.monet_folder.setPlaceholderText(
+            "folder holding configs.yaml / protocols.yaml "
+            "(e.g. a shared monet-data drive)"
         )
+        monet_browse = QPushButton("Browse…")
+        monet_browse.clicked.connect(self._browse_monet_folder)
+        monet_folder_row = QHBoxLayout()
+        monet_folder_row.addWidget(self.monet_folder)
+        monet_folder_row.addWidget(monet_browse)
         self.monet_token = QLineEdit(env.get(setup_core.ENV_MONET_TOKEN, ""))
         self.monet_token.setEchoMode(QLineEdit.EchoMode.Password)
         self.spill_port = QLineEdit(env.get(setup_core.ENV_SPILL_PORT, ""))
@@ -91,7 +102,7 @@ class _ConnectivityPage(QWizardPage):
         )
         form.addRow("picasso-registry URL", self.registry_url)
         form.addRow("registry bearer token", self.registry_token)
-        form.addRow("monet config path(s)", self.monet_paths)
+        form.addRow("monet config folder", monet_folder_row)
         form.addRow("monet token", self.monet_token)
         form.addRow("spill-sensor port", self.spill_port)
         form.addRow("setups folder", self.setups_dir)
@@ -112,6 +123,13 @@ class _ConnectivityPage(QWizardPage):
         monet_row.addWidget(self._monet_test_btn)
         monet_row.addWidget(self._monet_test_result)
         form.addRow(monet_row)
+
+    def _browse_monet_folder(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select the monet config folder", self.monet_folder.text()
+        )
+        if folder:
+            self.monet_folder.setText(folder)
 
     def _on_test(self):
         v = setup_core.check_registry(
@@ -137,10 +155,13 @@ class _SetupPage(QWizardPage):
         super().__init__()
         self.setTitle("Microscope setup")
         self.setSubTitle(
-            "Clone a template and name it for this rig. The reservoir manifold "
-            "and tubing are copied from the template — review them in the "
-            "saved YAML afterwards."
+            "Clone a template and name it for this rig. Set the COM port here "
+            "for a quick start, or open the full editor to configure the "
+            "pumps, valves, tubing and PFS in detail."
         )
+        # Set by the full-editor dialog: a complete setup dict that supersedes
+        # the quick fields below (cleared if the template base changes).
+        self._edited_data = None
         form = QFormLayout(self)
         self.create = QCheckBox("Create a setup for this machine")
         self.create.setChecked(True)
@@ -165,6 +186,40 @@ class _SetupPage(QWizardPage):
         self.monet_config = QLineEdit("")
         form.addRow("monet config key (lasers)", self.monet_config)
 
+        self._edit_btn = QPushButton("Edit full hardware config…")
+        self._edit_btn.clicked.connect(self._open_editor)
+        self._edit_status = QLabel("")
+        self._edit_status.setStyleSheet("color: gray;")
+        edit_row = QHBoxLayout()
+        edit_row.addWidget(self._edit_btn)
+        edit_row.addWidget(self._edit_status)
+        form.addRow(edit_row)
+
+        # Any quick-field change invalidates a detailed edit (the editor is a
+        # snapshot of the clone + the quick fields at the time it was opened),
+        # so fall back to the quick clone path until re-edited. The name field
+        # is exempt — it stays authoritative and is synced in _build.
+        self.template.currentIndexChanged.connect(self._clear_edited)
+        self.emulated.toggled.connect(self._clear_edited)
+        self.com.editTextChanged.connect(self._clear_edited)
+        self.monet_config.textChanged.connect(self._clear_edited)
+
+    def _clear_edited(self):
+        self._edited_data = None
+        self._edit_status.setText("")
+
+    def _open_editor(self):
+        from PycroFlow.gui.tabs.setup_tab import SetupEditorDialog
+
+        name = self.name.text().strip()
+        if not name:
+            self._warn("Enter a name for the new setup first.")
+            return
+        dlg = SetupEditorDialog(self._build(), self)
+        if dlg.exec() and dlg.result_data() is not None:
+            self._edited_data = dlg.result_data()
+            self._edit_status.setText("✓ detailed config captured")
+
     def validatePage(self) -> bool:
         if not self.create.isChecked():
             return True
@@ -186,6 +241,17 @@ class _SetupPage(QWizardPage):
         return True
 
     def _build(self) -> dict:
+        name = self.name.text().strip()
+        # The full editor's output is a complete setup and supersedes the quick
+        # fields (it carries COM/emulated/monet too) — just keep the name field
+        # authoritative so a late rename on this page still takes effect.
+        if self._edited_data is not None:
+            import copy
+
+            data = copy.deepcopy(self._edited_data)
+            if name:
+                data["setup"] = name
+            return data
         overrides = {
             "emulated": self.emulated.isChecked(),
             "illumination.config": self.monet_config.text().strip() or None,
@@ -200,7 +266,7 @@ class _SetupPage(QWizardPage):
             )
         return setup_core.clone_setup(
             self.template.currentText(),
-            self.name.text().strip(),
+            name,
             overrides,
         )
 
@@ -256,7 +322,6 @@ class SetupWizard(QWizard):
         env_updates = {
             setup_core.ENV_REGISTRY_URL: self.page_conn.registry_url.text(),
             setup_core.ENV_REGISTRY_TOKEN: self.page_conn.registry_token.text(),
-            setup_core.ENV_MONET_CONFIG_PATHS: self.page_conn.monet_paths.text(),
             setup_core.ENV_MONET_TOKEN: self.page_conn.monet_token.text(),
             setup_core.ENV_SPILL_PORT: self.page_conn.spill_port.text(),
             setup_core.ENV_SETUPS_DIR: self.page_conn.setups_dir.text(),
@@ -265,6 +330,15 @@ class SetupWizard(QWizard):
         env_updates = {
             k: v.strip() for k, v in env_updates.items() if v.strip()
         }
+        # monet needs a configs.yaml *and* a protocols.yaml path, both derived
+        # from the single folder the operator entered (an empty folder leaves
+        # both vars untouched).
+        monet_configs, monet_protocols = setup_core.derive_monet_paths(
+            self.page_conn.monet_folder.text()
+        )
+        if monet_configs:
+            env_updates[setup_core.ENV_MONET_CONFIG_PATHS] = monet_configs
+            env_updates[setup_core.ENV_MONET_PROTOCOL_PATHS] = monet_protocols
         # Each persistence step is guarded: commit() is called from the Qt
         # summary page's initializePage, so a raise here would break the wizard
         # UI — report the failure in the summary instead. The two writes are

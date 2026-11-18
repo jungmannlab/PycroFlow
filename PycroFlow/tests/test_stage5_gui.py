@@ -131,9 +131,9 @@ class TestMainWindow(unittest.TestCase):
 
     def test_builds_tabs(self):
         w = self._build()
-        self.assertEqual(w.tabs.count(), 8)
+        self.assertEqual(w.tabs.count(), 9)
         self.assertEqual(
-            [w.tabs.tabText(i) for i in range(8)],
+            [w.tabs.tabText(i) for i in range(9)],
             [
                 "Experiment Design",
                 "Run Sequence",
@@ -142,6 +142,7 @@ class TestMainWindow(unittest.TestCase):
                 "Webcams",
                 "Live",
                 "Monet",
+                "Setup",
                 "Doctor",
             ],
         )
@@ -1507,15 +1508,22 @@ class TestConnectionFlow(unittest.TestCase):
         self.assertIn("Illumination: ✓ connected", text)
         self.assertNotIn("not connected", text)
 
-    def test_fluid_connect_requires_design(self):
+    def test_fluid_connects_without_a_design(self):
+        # Fluid connects from the setup's full reservoir manifold alone — no
+        # experiment design required, and no warning.
         from unittest.mock import patch
         from PycroFlow.gui import main_window as mw
 
         w = self._win()
         with patch.object(mw.QMessageBox, "warning") as warn:
             w.fluid_tab._on_connect_clicked()
-        warn.assert_called_once()
-        self.assertIsNone(w._system_service.fluid_system)
+        warn.assert_not_called()
+        self.assertIsNotNone(w._system_service.fluid_system)
+        # The whole manifold is wired, not just a design's subset.
+        self.assertEqual(
+            w._system_service.routable_reservoirs(),
+            sorted(w._system_service.reservoir_ids()),
+        )
 
     def test_manual_imaging_connect(self):
         w = self._win()
@@ -2162,6 +2170,33 @@ class TestExperimentDesignTab(unittest.TestCase):
         tab._on_translate()
         self.assertEqual(svc.state.value, "loaded")
         self.assertEqual(translated, [1])
+
+    def test_new_from_example_loads_bundled_design(self):
+        from PycroFlow.services import ExperimentService
+        from PycroFlow.examples import design_examples
+        from PycroFlow.gui.tabs.experiment_design_tab import (
+            ExperimentDesignTab,
+        )
+
+        examples = design_examples()
+        self.assertTrue(examples)  # at least one shipped example design
+        by_label = dict(examples)
+        self.assertIn("exchange 4plex", by_label)
+        cwd_before = os.getcwd()
+        loaded = []
+        tab = ExperimentDesignTab(
+            ExperimentService(), on_design_loaded=lambda: loaded.append(1)
+        )
+        tab._load_example(by_label["exchange 4plex"])
+        self.assertEqual(
+            tab._svc.experiment_design["fluid"]["settings"]["experiment"][
+                "type"
+            ],
+            "Exchange",
+        )
+        self.assertEqual(loaded, [1])
+        # Loading an example must NOT chdir into the package examples folder.
+        self.assertEqual(os.getcwd(), cwd_before)
 
     def test_drag_drop_loads_design(self):
         from PycroFlow.services import ExperimentService

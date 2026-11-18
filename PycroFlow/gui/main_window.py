@@ -5,8 +5,10 @@ Design, Run Sequence, Fluid, Imaging, Live, Monet. The run controls (Load /
 Start / Pause-Resume / Abort) live in the Run Sequence tab. The window also
 coordinates
 hardware connection: the microscope **setup** is chosen in the toolbar, and
-subsystems **autoconnect** once an experiment design is loaded (the fluid
-system needs the design's reservoir list). Each subsystem tab shows its
+Connect connects every subsystem — including the fluid system, which wires the
+setup's full reservoir manifold and so needs no experiment design (a design,
+once loaded, overlays its reservoir selection / special_names in place without
+a fluid reconnect). Each subsystem tab shows its
 connection status and offers a manual Connect/Reconnect, and the status bar
 shows a single always-visible confirmation of the loaded setup + each
 subsystem's connection state.
@@ -49,6 +51,7 @@ from PycroFlow.gui.tabs.monet_tab import MonetTab
 from PycroFlow.gui.tabs.webcams_tab import WebcamsTab
 from PycroFlow.gui.tabs.live_tab import LiveTabHost
 from PycroFlow.gui.tabs.doctor_tab import DoctorTab
+from PycroFlow.gui.tabs.setup_tab import SetupEditorTab
 from PycroFlow.gui.widgets.replay_bar import ReplayBar
 from PycroFlow.services.live_preview import LivePreviewSession
 
@@ -190,6 +193,10 @@ class PycroFlowMainWindow(QMainWindow):
             self.setup_combo.setCurrentIndex(i)
         if self.setup_combo.currentText():
             self._on_setup_changed(self.setup_combo.currentText())
+
+    def _on_setup_saved(self, name):
+        """Setup editor saved a setup — make it selectable in the toolbar."""
+        self._refresh_setup_combo(select=name)
 
     # --- Help menu ----------------------------------------------------
 
@@ -334,6 +341,10 @@ class PycroFlowMainWindow(QMainWindow):
             self._system_service, on_config_changed=self._attach_monitoring
         )
         self.monet_tab = MonetTab()
+        # Structured editor for the microscope setup (pumps/valves/tubing/PFS).
+        # Saving refreshes the toolbar's setup selector so a new/edited setup
+        # is immediately selectable.
+        self.setup_editor_tab = SetupEditorTab(on_saved=self._on_setup_saved)
         # Diagnostics: verifies which subsystems + connectors (registry, monet)
         # are actually working. Reads both services — SystemService for the live
         # hardware, ExperimentService for the run state (so instrument pings are
@@ -364,6 +375,7 @@ class PycroFlowMainWindow(QMainWindow):
         self.tabs.addTab(self.webcams_tab, "Webcams")
         self.tabs.addTab(self.live_tab, "Live")
         self.tabs.addTab(self.monet_tab, "Monet")
+        self.tabs.addTab(self.setup_editor_tab, "Setup")
         self.tabs.addTab(self.doctor_tab, "Doctor")
 
         # The replay scrubber lives ABOVE the tabs so a finished/opened run can
@@ -434,10 +446,23 @@ class PycroFlowMainWindow(QMainWindow):
             self._autoconnect()
 
     def _on_design_changed(self):
-        # A freshly loaded design gets clean connections: reconnect every
-        # subsystem (which disconnects first), so any prior design's hardware
-        # handles are released before the new ones are opened.
-        self._reconnect_all()
+        # Fluid is connected to the setup's full manifold independently of the
+        # design, so a design load/change is applied IN PLACE (reservoir
+        # labels / special_names / cleaning / parameters) with no serial
+        # reconnect — connect it only if it isn't up yet.
+        if self._system_service.setup is not None:
+            design = self._experiment_service.experiment_design or {}
+            if self._is_connected("fluid"):
+                self._system_service.apply_fluid_design(design.get("fluid"))
+                self._refresh_status()
+            else:
+                self._connect_system("fluid", warn_missing=False)
+            # Imaging config (save_dir / base_name / positions) comes from the
+            # design, so (re)connect it; illumination does not depend on the
+            # design — connect it only if it isn't up yet.
+            self._connect_system("imaging", warn_missing=False)
+            if not self._is_connected("illumination"):
+                self._connect_system("illumination", warn_missing=False)
 
     def _on_experiment_state(self, old, new):
         """Lock/unlock manual hardware access on experiment state changes."""
@@ -701,6 +726,7 @@ class PycroFlowMainWindow(QMainWindow):
         )
         self.webcams_tab.set_run_lock(locked, live_path=live)
         self.monet_tab.set_run_lock(locked)
+        self.setup_editor_tab.set_run_lock(locked)
         # A run owns the camera: any MM preview stops, the toggle disables.
         self.live_tab.set_run_lock(locked)
         if not locked:
@@ -786,17 +812,12 @@ class PycroFlowMainWindow(QMainWindow):
     def _connect_call(self, key, warn_missing):
         svc = self._system_service
         if key == "fluid":
+            # Fluid connects from the setup's full reservoir manifold alone —
+            # no experiment design required. A design, when loaded, overlays
+            # its reservoir labels / special_names / cleaning in place (see
+            # _on_design_changed), so Connect never waits on a design.
             design = self._experiment_service.experiment_design
             fluid = (design or {}).get("fluid")
-            if not fluid or not fluid.get("settings"):
-                if warn_missing:
-                    QMessageBox.warning(
-                        self,
-                        "No experiment design",
-                        "Load an experiment design first — the fluid system "
-                        "needs its reservoir list.",
-                    )
-                return None
             return lambda: svc.connect_fluid(fluid)
         if key == "imaging":
             if svc.is_emulated():

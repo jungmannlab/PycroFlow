@@ -424,38 +424,52 @@ def _flatten_fluid_config(fluid):
     return config
 
 
-def assemble_hamilton_config(setup, fluid_settings):
-    """Combine a setup's hardware with an experiment's reservoir choices.
+def assemble_hamilton_config(setup, fluid_settings=None):
+    """Combine a setup's fluid hardware into a LegacyArchitecture config.
 
-    The setup holds the full reservoir manifold wiring (all candidate
-    positions); the experiment design selects which reservoirs are actually
-    used (via ``reservoir_names``) and supplies ``special_names`` /
-    ``cleaning_reservoirs``. This reproduces the merge previously hand-coded
-    in ``start_experiment.py`` and returns a config shaped exactly like the
-    ``hamilton_config`` that :class:`LegacyArchitecture` expects, plus the
-    tubing dict.
+    The connected fluid system always wires the setup's **full reservoir
+    manifold** (every candidate position), so it can be connected from the
+    setup alone — no experiment design required — and a later design change is
+    applied in place (:meth:`LegacyArchitecture.update_reservoirs`) with no
+    serial reconnect. An experiment design only *overlays*: ``special_names``
+    (overriding the setup's fixed flush-buffer/water roles), the ``cleaning``
+    rounds, and the friendly ``reservoir_names`` labels (which mark the
+    design's used subset — stored separately, not here).
 
     Parameters
     ----------
     setup : dict
-        A setup config from :func:`load_setup` (with a ``fluid`` block).
-    fluid_settings : dict
-        The experiment design's ``fluid.settings`` (needs ``reservoir_names``;
-        optional ``special_names`` and a ``cleaning`` block — or the legacy
-        flat ``cleaning_reservoirs`` list).
+        A setup config from :func:`load_setup` (``fluid`` block with the
+        reservoir manifold and, optionally, the fixed-role ``special_names``).
+    fluid_settings : dict, optional
+        An experiment design's ``fluid.settings`` overlay — optional
+        ``special_names`` (merged over the setup's), a ``cleaning`` block (or
+        the legacy flat ``cleaning_reservoirs``), and ``reservoir_names``
+        (validated against the manifold). Omit / empty to build from the setup
+        alone.
 
     Returns
     -------
     (dict, dict)
         ``(hamilton_config, tubing_config)`` ready for
         ``LegacyArchitecture(hamilton_config, tubing_config)``.
+
+    Raises
+    ------
+    KeyError
+        If the design references a reservoir id not wired in the manifold.
     """
+    fluid_settings = fluid_settings or {}
     fluid = copy.deepcopy(setup["fluid"])
     hamilton = _flatten_fluid_config(fluid)
     manifold = fluid.get("reservoirs", []) or []
     by_id = {entry["id"]: entry for entry in manifold}
 
-    special_names = dict(fluid_settings.get("special_names", {}))
+    # special_names: the setup's fixed hardware roles (flush buffer, water),
+    # overridden by anything the design specifies.
+    special_names = dict(fluid.get("special_names", {}) or {})
+    special_names.update(fluid_settings.get("special_names", {}) or {})
+
     # Cleaning config lives in the ``cleaning`` block (``cleaning_rounds`` =
     # one reservoir per round). Fall back to the legacy flat
     # ``cleaning_reservoirs`` list for designs predating the block.
@@ -465,29 +479,20 @@ def assemble_hamilton_config(setup, fluid_settings):
     else:
         cleaning = fluid_settings.get("cleaning_reservoirs", []) or []
 
-    used_ids = list(fluid_settings.get("reservoir_names", {}).keys())
-    # Reservoirs named only in special_names (e.g. flushbuffer_a) are routed
-    # to just like any other — _flush() and fill_tubings() call
-    # _set_valves(special_names['flushbuffer_a']) — so they must be wired in
-    # too, even when the design does not also list them in reservoir_names.
-    for rid in special_names.values():
-        if rid not in used_ids:
-            used_ids.append(rid)
+    # Validate every id the design references is actually wired — even though
+    # reservoir_a is the full manifold, this catches a design/setup mismatch
+    # (a typo'd reservoir id, a role pointing at an unwired position) early.
+    referenced = list(fluid_settings.get("reservoir_names", {}).keys())
+    referenced += list(special_names.values())
     for res in cleaning:
-        if isinstance(res, int):
-            rid = res
-        else:
-            rid = special_names.get(res)
-            if rid is None:
-                raise KeyError(
-                    "Cleaning reservoir {!r} is neither an int id nor a "
-                    "name in special_names {}".format(res, special_names)
-                )
-        if rid not in used_ids:
-            used_ids.append(rid)
-
-    reservoir_a = []
-    for rid in used_ids:
+        rid = res if isinstance(res, int) else special_names.get(res)
+        if rid is None:
+            raise KeyError(
+                "Cleaning reservoir {!r} is neither an int id nor a "
+                "name in special_names {}".format(res, special_names)
+            )
+        referenced.append(rid)
+    for rid in referenced:
         if rid not in by_id:
             raise KeyError(
                 "Reservoir id {!r} is not wired in setup {!r}'s "
@@ -495,9 +500,9 @@ def assemble_hamilton_config(setup, fluid_settings):
                     rid, setup.get("setup"), sorted(by_id)
                 )
             )
-        reservoir_a.append(by_id[rid])
 
-    hamilton["reservoir_a"] = reservoir_a
+    # The connected system wires the FULL manifold (all positions addressable).
+    hamilton["reservoir_a"] = list(manifold)
     hamilton["special_names"] = special_names
     hamilton["cleaning_reservoirs"] = cleaning
     # Full cleaning config for clean_tubings() (the rounds plus the behaviour
