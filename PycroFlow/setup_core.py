@@ -35,6 +35,7 @@ from PycroFlow.envfile import repo_root_env_path
 ENV_REGISTRY_URL = "PAINT_REGISTRY_URL"
 ENV_REGISTRY_TOKEN = "PAINT_REGISTRY_TOKEN"
 ENV_MONET_CONFIG_PATHS = "MONET_CONFIG_PATHS"
+ENV_MONET_PROTOCOL_PATHS = "MONET_PROTOCOL_PATHS"
 ENV_MONET_TOKEN = "PAINT_MONET_TOKEN"
 ENV_SPILL_PORT = "PYCROFLOW_SPILL_PORT"
 #: Default microscope setup the GUI pre-selects on launch (the toolbar combo is
@@ -74,6 +75,69 @@ def normalize_com_port(value):
     if s[:3].upper() == "COM":
         return s[3:].strip()
     return s
+
+
+#: The two YAML files monet discovers inside a (shared) monet-data folder.
+MONET_CONFIGS_FILENAME = "configs.yaml"
+MONET_PROTOCOLS_FILENAME = "protocols.yaml"
+
+
+def derive_monet_paths(value: str | None) -> tuple:
+    """Resolve a monet-data *folder* into its ``configs``/``protocols`` paths.
+
+    monet reads two separate ``os.pathsep``-separated lists —
+    ``MONET_CONFIG_PATHS`` (``configs.yaml``) and ``MONET_PROTOCOL_PATHS``
+    (``protocols.yaml``) — not a single directory. The operator naturally
+    enters the *folder* that holds them (the same value monet's own wizard
+    asks for), so derive both file paths from it.
+
+    Parameters
+    ----------
+    value : str or None
+        The monet-data folder (e.g. ``Y:/monet-data``). A value that already
+        points at a ``*.yaml`` file is accepted too: it is taken as the
+        configs path and the protocols path is its sibling
+        ``protocols.yaml`` — so a legacy ``.../configs.yaml`` entry keeps
+        working.
+
+    Returns
+    -------
+    tuple of (str or None, str or None)
+        ``(configs_path, protocols_path)``; ``(None, None)`` for an empty
+        value (monet is optional).
+    """
+    s = (value or "").strip()
+    if not s:
+        return (None, None)
+    s = os.path.expanduser(s)
+    if s.lower().endswith((".yaml", ".yml")):
+        folder = os.path.dirname(s)
+        return (s, os.path.join(folder, MONET_PROTOCOLS_FILENAME))
+    return (
+        os.path.join(s, MONET_CONFIGS_FILENAME),
+        os.path.join(s, MONET_PROTOCOLS_FILENAME),
+    )
+
+
+def monet_folder_from_env(env: dict) -> str:
+    """Best-effort monet-data folder to prefill the wizard from an existing env.
+
+    Reads the first entry of ``MONET_CONFIG_PATHS`` and returns the folder that
+    holds it (its parent when it is a ``configs.yaml`` file, else the value
+    itself). Empty string when unset.
+    """
+    raw = (env.get(ENV_MONET_CONFIG_PATHS) or "").strip()
+    if not raw:
+        return ""
+    first = raw.split(os.pathsep)[0].strip()
+    # On POSIX os.pathsep is ':', which also follows a Windows drive letter
+    # ('Y:/monet-data/...'); a lone-letter first segment means we split a
+    # drive path out of a .env written on Windows — keep the whole value.
+    if os.pathsep == ":" and len(first) == 1 and first.isalpha():
+        first = raw
+    if first.lower().endswith((".yaml", ".yml")):
+        return os.path.dirname(first)
+    return first
 
 
 #: Default template the wizard clones a new setup from (a shipped built-in).
@@ -239,12 +303,27 @@ def save_setup(name: str, data: dict) -> Path:
 def check_registry(
     url: str | None, token: str | None = None, timeout: float = 3.0
 ) -> dict:
-    """Probe a picasso-registry server's ``/health`` (best-effort).
+    """Probe a picasso-registry server for reachability *and* auth.
 
     Returns ``{'ok': bool, 'detail': str}``; never raises. An empty ``url`` is
     reported as "not configured" (the registry is optional). ``requests`` is
     pulled in by ``picasso-registry[client]`` (a base dependency); if it is
     somehow absent the probe degrades to a clear message rather than failing.
+
+    Two steps, because ``/health`` is *deliberately unauthenticated* (liveness
+    probes can't carry a token): a green ``/health`` alone says nothing about
+    whether this machine can actually write records. So after ``/health`` this
+    also probes an authenticated, side-effect-free read endpoint
+    (``GET /handoff?limit=1``, ``read``-scoped) with the token:
+
+    * accepted (HTTP 200) with a token → reported OK ("token accepted"). The
+      registry grants ``write`` to any token that can read at the same or
+      higher scope, so a token that reads here can almost always write; a
+      read-only token is the rare exception, and we say the write path is not
+      separately proven (there is no harmless write to test with).
+    * accepted with **no token** → the server has auth disabled; OK, but noted.
+    * rejected (401/403) → NOT ok: the token is missing or wrong and writes
+      *will* be rejected — exactly the case a bare ``/health`` check misses.
     """
     if not url:
         return {"ok": False, "detail": "registry URL not set (optional)"}
@@ -258,11 +337,70 @@ def check_registry(
         resp = requests.get(base + "/health", headers=headers, timeout=timeout)
     except Exception as exc:  # noqa: BLE001 - a probe failure isn't fatal
         return {"ok": False, "detail": "unreachable: {!r}".format(exc)}
-    if resp.status_code == 200:
-        return {"ok": True, "detail": "reachable ({})".format(base)}
+    if resp.status_code != 200:
+        return {
+            "ok": False,
+            "detail": "HTTP {} from {}/health".format(resp.status_code, base),
+        }
+    # /health is up — now verify the token can actually talk to a guarded
+    # (read-scoped) endpoint, since writes need a valid token and /health
+    # never checks one.
+    try:
+        auth_resp = requests.get(
+            base + "/handoff",
+            headers=headers,
+            params={"limit": 1},
+            timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 - a probe failure isn't fatal
+        # /health answered but the write-path probe did not; the whole point
+        # of this check is write access, so don't report a confident green.
+        return {
+            "ok": False,
+            "detail": (
+                "/health reachable ({}), but could not verify write access "
+                "({!r})".format(base, exc)
+            ),
+        }
+    if auth_resp.status_code in (401, 403):
+        if token:
+            return {
+                "ok": False,
+                "detail": (
+                    "reachable, but the token was rejected (HTTP {}) — "
+                    "writes will fail".format(auth_resp.status_code)
+                ),
+            }
+        return {
+            "ok": False,
+            "detail": (
+                "reachable, but requires a bearer token (HTTP {}) and none "
+                "is set — writes will be rejected".format(
+                    auth_resp.status_code
+                )
+            ),
+        }
+    if auth_resp.status_code == 200:
+        if token:
+            return {
+                "ok": True,
+                "detail": (
+                    "reachable ({}); token accepted (write not separately "
+                    "verified)".format(base)
+                ),
+            }
+        return {
+            "ok": True,
+            "detail": (
+                "reachable ({}); server auth is disabled (no token "
+                "required)".format(base)
+            ),
+        }
     return {
-        "ok": False,
-        "detail": "HTTP {} from {}/health".format(resp.status_code, base),
+        "ok": True,
+        "detail": "reachable ({}); auth check inconclusive (HTTP {})".format(
+            base, auth_resp.status_code
+        ),
     }
 
 

@@ -204,6 +204,37 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertEqual(row.status, CheckStatus.WARN)
         self.assertIn("auth rejected", row.detail)
 
+    def test_registry_health_ok_but_write_probe_rejected_warns(self):
+        # /health is unauthenticated (200), but the guarded /handoff probe
+        # 401s -> the machine can't write, so WARN even though health is green.
+        import os
+
+        os.environ["PAINT_REGISTRY_URL"] = "http://registry.local"
+        os.environ.pop("PAINT_REGISTRY_TOKEN", None)
+
+        def _urlopen(req, timeout=None):
+            url = req.full_url if hasattr(req, "full_url") else req
+            if "/handoff" in url:
+                raise urllib.error.HTTPError(
+                    url, 401, "Unauthorized", None, None
+                )
+            resp = mock.MagicMock()
+            resp.getcode.return_value = 200
+            resp.read.return_value = b"{}"
+            resp.__enter__.return_value = resp
+            resp.__exit__.return_value = False
+            return resp
+
+        with mock.patch(
+            "PycroFlow.services.diagnostics.urllib.request.urlopen",
+            side_effect=_urlopen,
+        ):
+            rows = _by_name(DiagnosticsService(_FakeSys()).run_all())
+        row = rows["Registry · reachability"]
+        self.assertEqual(row.status, CheckStatus.WARN)
+        self.assertIn("token", row.detail)
+        self.assertIn("unset", row.detail)
+
     def test_registry_unreachable_fails(self):
         import os
 
@@ -318,10 +349,10 @@ class DiagnosticsTest(unittest.TestCase):
         import os
 
         os.environ["PAINT_REGISTRY_URL"] = "http://mibweather:8001"
-        seen = {}
+        seen = []
 
         def _fake_urlopen(req, timeout=None):
-            seen["url"] = req.full_url
+            seen.append(req.full_url)
             resp = mock.MagicMock()
             resp.getcode.return_value = 200
             resp.read.return_value = b'{"status": "ok", "version": "9.9"}'
@@ -334,8 +365,10 @@ class DiagnosticsTest(unittest.TestCase):
             side_effect=_fake_urlopen,
         ):
             rows = _by_name(DiagnosticsService(_FakeSys()).run_all())
-        # Probes /health, not the bare base URL (which would 404).
-        self.assertEqual(seen["url"], "http://mibweather:8001/health")
+        # Probes /health first (not the bare base URL, which would 404), then
+        # the guarded /handoff endpoint to check write auth.
+        self.assertEqual(seen[0], "http://mibweather:8001/health")
+        self.assertTrue(any("/handoff" in u for u in seen))
         row = rows["Registry · reachability"]
         self.assertEqual(row.status, CheckStatus.OK)
         self.assertIn("9.9", row.detail)

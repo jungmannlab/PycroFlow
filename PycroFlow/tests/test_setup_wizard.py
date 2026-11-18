@@ -91,6 +91,25 @@ class TestSetupWizardCommit(unittest.TestCase):
         # Nothing saved to the (isolated, empty) user setups dir.
         self.assertFalse(list(configs.user_setups_dir().glob("*.yaml")))
 
+    def test_commit_derives_both_monet_paths_from_folder(self):
+        # The operator enters the monet-data FOLDER; the wizard derives both
+        # configs.yaml and protocols.yaml and writes the two env vars monet
+        # reads (regression: it used to write the folder verbatim into
+        # MONET_CONFIG_PATHS and never set MONET_PROTOCOL_PATHS).
+        wiz = self._wizard()
+        wiz.page_setup.create.setChecked(False)
+        wiz.page_conn.monet_folder.setText(os.path.join("Y:", "monet-data"))
+        wiz.commit()
+        env = setup_core.read_env()
+        self.assertEqual(
+            env["MONET_CONFIG_PATHS"],
+            os.path.join("Y:", "monet-data", "configs.yaml"),
+        )
+        self.assertEqual(
+            env["MONET_PROTOCOL_PATHS"],
+            os.path.join("Y:", "monet-data", "protocols.yaml"),
+        )
+
     def test_validatepage_rejects_blank_and_duplicate_names(self):
         from PyQt6.QtWidgets import QMessageBox
 
