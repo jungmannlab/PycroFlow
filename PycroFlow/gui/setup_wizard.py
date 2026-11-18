@@ -21,6 +21,7 @@ import os
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -74,9 +75,18 @@ class _ConnectivityPage(QWizardPage):
             env.get(setup_core.ENV_REGISTRY_TOKEN, "")
         )
         self.registry_token.setEchoMode(QLineEdit.EchoMode.Password)
-        self.monet_paths = QLineEdit(
-            env.get(setup_core.ENV_MONET_CONFIG_PATHS, "")
+        # monet reads configs.yaml + protocols.yaml from a folder (the same
+        # value monet's own wizard asks for); we derive both paths on commit.
+        self.monet_folder = QLineEdit(setup_core.monet_folder_from_env(env))
+        self.monet_folder.setPlaceholderText(
+            "folder holding configs.yaml / protocols.yaml "
+            "(e.g. a shared monet-data drive)"
         )
+        monet_browse = QPushButton("Browse…")
+        monet_browse.clicked.connect(self._browse_monet_folder)
+        monet_folder_row = QHBoxLayout()
+        monet_folder_row.addWidget(self.monet_folder)
+        monet_folder_row.addWidget(monet_browse)
         self.monet_token = QLineEdit(env.get(setup_core.ENV_MONET_TOKEN, ""))
         self.monet_token.setEchoMode(QLineEdit.EchoMode.Password)
         self.spill_port = QLineEdit(env.get(setup_core.ENV_SPILL_PORT, ""))
@@ -92,7 +102,7 @@ class _ConnectivityPage(QWizardPage):
         )
         form.addRow("picasso-registry URL", self.registry_url)
         form.addRow("registry bearer token", self.registry_token)
-        form.addRow("monet config path(s)", self.monet_paths)
+        form.addRow("monet config folder", monet_folder_row)
         form.addRow("monet token", self.monet_token)
         form.addRow("spill-sensor port", self.spill_port)
         form.addRow("setups folder", self.setups_dir)
@@ -113,6 +123,13 @@ class _ConnectivityPage(QWizardPage):
         monet_row.addWidget(self._monet_test_btn)
         monet_row.addWidget(self._monet_test_result)
         form.addRow(monet_row)
+
+    def _browse_monet_folder(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select the monet config folder", self.monet_folder.text()
+        )
+        if folder:
+            self.monet_folder.setText(folder)
 
     def _on_test(self):
         v = setup_core.check_registry(
@@ -305,7 +322,6 @@ class SetupWizard(QWizard):
         env_updates = {
             setup_core.ENV_REGISTRY_URL: self.page_conn.registry_url.text(),
             setup_core.ENV_REGISTRY_TOKEN: self.page_conn.registry_token.text(),
-            setup_core.ENV_MONET_CONFIG_PATHS: self.page_conn.monet_paths.text(),
             setup_core.ENV_MONET_TOKEN: self.page_conn.monet_token.text(),
             setup_core.ENV_SPILL_PORT: self.page_conn.spill_port.text(),
             setup_core.ENV_SETUPS_DIR: self.page_conn.setups_dir.text(),
@@ -314,6 +330,15 @@ class SetupWizard(QWizard):
         env_updates = {
             k: v.strip() for k, v in env_updates.items() if v.strip()
         }
+        # monet needs a configs.yaml *and* a protocols.yaml path, both derived
+        # from the single folder the operator entered (an empty folder leaves
+        # both vars untouched).
+        monet_configs, monet_protocols = setup_core.derive_monet_paths(
+            self.page_conn.monet_folder.text()
+        )
+        if monet_configs:
+            env_updates[setup_core.ENV_MONET_CONFIG_PATHS] = monet_configs
+            env_updates[setup_core.ENV_MONET_PROTOCOL_PATHS] = monet_protocols
         # Each persistence step is guarded: commit() is called from the Qt
         # summary page's initializePage, so a raise here would break the wizard
         # UI — report the failure in the summary instead. The two writes are

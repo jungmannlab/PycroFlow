@@ -329,17 +329,42 @@ class DiagnosticsService:
                 CheckStatus.SKIP,
                 "not configured (PAINT_REGISTRY_URL unset)",
             )
-        url = base.rstrip("/") + "/health"
-        reachable, code, body = self._probe_url(
-            url, os.environ.get("PAINT_REGISTRY_TOKEN")
-        )
+        token = os.environ.get("PAINT_REGISTRY_TOKEN")
+        root = base.rstrip("/")
+        reachable, code, body = self._probe_url(root + "/health", token)
         if not reachable:
             return CheckStatus.FAIL, "unreachable: {}".format(body)
         if code == 200:
             info = self._parse_health(body)
-            return CheckStatus.OK, (
+            healthy = (
                 "healthy ({})".format(info) if info else "reachable (HTTP 200)"
             )
+            # /health is deliberately unauthenticated, so a green health says
+            # nothing about whether this machine can WRITE records. Probe a
+            # guarded (read-scoped), side-effect-free endpoint with the token.
+            auth_reachable, auth_code, _ = self._probe_url(
+                root + "/handoff?limit=1", token
+            )
+            if auth_reachable and auth_code in (401, 403):
+                if token:
+                    return (
+                        CheckStatus.WARN,
+                        "{}, but the token was rejected (HTTP {}) — writes "
+                        "will fail".format(healthy, auth_code),
+                    )
+                return (
+                    CheckStatus.WARN,
+                    "{}, but writes require a bearer token (HTTP {}) and "
+                    "PAINT_REGISTRY_TOKEN is unset".format(healthy, auth_code),
+                )
+            if auth_reachable and auth_code == 200:
+                if token:
+                    return CheckStatus.OK, "{}; token accepted".format(healthy)
+                return (
+                    CheckStatus.OK,
+                    "{}; server auth disabled".format(healthy),
+                )
+            return CheckStatus.OK, healthy
         if code == 404:
             return (
                 CheckStatus.WARN,

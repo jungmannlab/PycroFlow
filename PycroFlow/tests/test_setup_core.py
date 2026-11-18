@@ -156,24 +156,57 @@ class TestConnectivityProbes(_TmpEnv):
         self.assertFalse(v["ok"])
         self.assertIn("not set", v["detail"])
 
-    def test_registry_reachable_and_unreachable(self):
-        calls = {}
+    def _fake_requests(self, status_by_path):
+        """A fake ``requests`` module returning a canned status per URL path."""
+        calls = []
 
         class _Resp:
-            status_code = 200
+            def __init__(self, status_code):
+                self.status_code = status_code
 
-        def _get(url, headers=None, timeout=None):
-            calls["url"] = url
-            calls["headers"] = headers
-            return _Resp()
+        def _get(url, headers=None, params=None, timeout=None):
+            calls.append({"url": url, "headers": headers, "params": params})
+            # match on the trailing endpoint (/health, /handoff)
+            for key, code in status_by_path.items():
+                if url.endswith(key):
+                    return _Resp(code)
+            return _Resp(404)
 
-        fake = types.SimpleNamespace(get=_get)
+        return types.SimpleNamespace(get=_get), calls
+
+    def test_registry_reachable_authenticated(self):
+        # /health up AND the token accepted on the guarded /handoff probe.
+        fake, calls = self._fake_requests({"/health": 200, "/handoff": 200})
         with mock.patch.dict(sys.modules, {"requests": fake}):
             v = setup_core.check_registry("http://reg:8000/", token="t")
         self.assertTrue(v["ok"])
-        self.assertEqual(calls["url"], "http://reg:8000/health")
-        self.assertEqual(calls["headers"], {"Authorization": "Bearer t"})
+        self.assertIn("token accepted", v["detail"])
+        urls = [c["url"] for c in calls]
+        self.assertEqual(urls[0], "http://reg:8000/health")
+        self.assertTrue(any(u.endswith("/handoff") for u in urls))
+        self.assertEqual(calls[0]["headers"], {"Authorization": "Bearer t"})
 
+    def test_registry_reachable_but_auth_rejected(self):
+        # /health is unauthenticated so it passes; the guarded probe 401s.
+        fake, _ = self._fake_requests({"/health": 200, "/handoff": 401})
+        with mock.patch.dict(sys.modules, {"requests": fake}):
+            # no token: server requires one -> NOT ok, writes would fail.
+            v = setup_core.check_registry("http://reg:8000")
+            vt = setup_core.check_registry("http://reg:8000", token="bad")
+        self.assertFalse(v["ok"])
+        self.assertIn("none is set", v["detail"])
+        self.assertFalse(vt["ok"])
+        self.assertIn("rejected", vt["detail"])
+
+    def test_registry_auth_disabled_without_token(self):
+        # No token but the guarded endpoint answers 200 -> auth is off.
+        fake, _ = self._fake_requests({"/health": 200, "/handoff": 200})
+        with mock.patch.dict(sys.modules, {"requests": fake}):
+            v = setup_core.check_registry("http://reg:8000")
+        self.assertTrue(v["ok"])
+        self.assertIn("auth is disabled", v["detail"])
+
+    def test_registry_unreachable(self):
         def _boom(*a, **k):
             raise OSError("refused")
 
@@ -182,6 +215,64 @@ class TestConnectivityProbes(_TmpEnv):
             v2 = setup_core.check_registry("http://reg:8000")
         self.assertFalse(v2["ok"])
         self.assertIn("unreachable", v2["detail"])
+
+    def test_registry_write_probe_timeout_is_not_ok(self):
+        # /health answers but the guarded /handoff probe times out: the check
+        # is about write access, so it must not report a confident green.
+        class _Resp:
+            status_code = 200
+
+        def _get(url, headers=None, params=None, timeout=None):
+            if url.endswith("/handoff"):
+                raise OSError("timed out")
+            return _Resp()
+
+        fake = types.SimpleNamespace(get=_get)
+        with mock.patch.dict(sys.modules, {"requests": fake}):
+            v = setup_core.check_registry("http://reg:8000", token="t")
+        self.assertFalse(v["ok"])
+        self.assertIn("could not verify write access", v["detail"])
+
+    def test_derive_monet_paths_from_folder(self):
+        folder = os.path.join("Y:", "monet-data")
+        cfg, proto = setup_core.derive_monet_paths(folder)
+        self.assertEqual(cfg, os.path.join(folder, "configs.yaml"))
+        self.assertEqual(proto, os.path.join(folder, "protocols.yaml"))
+
+    def test_derive_monet_paths_from_configs_file(self):
+        # A legacy value already pointing at configs.yaml keeps working: it is
+        # the configs path and protocols.yaml is its sibling.
+        folder = os.path.join("Y:", "monet-data")
+        cfg, proto = setup_core.derive_monet_paths(
+            os.path.join(folder, "configs.yaml")
+        )
+        self.assertEqual(cfg, os.path.join(folder, "configs.yaml"))
+        self.assertEqual(proto, os.path.join(folder, "protocols.yaml"))
+
+    def test_derive_monet_paths_empty(self):
+        self.assertEqual(setup_core.derive_monet_paths(""), (None, None))
+        self.assertEqual(setup_core.derive_monet_paths(None), (None, None))
+
+    def test_monet_folder_from_env(self):
+        folder = os.path.join(os.sep, "data", "monet")
+        self.assertEqual(
+            setup_core.monet_folder_from_env(
+                {"MONET_CONFIG_PATHS": os.path.join(folder, "configs.yaml")}
+            ),
+            folder,
+        )
+        self.assertEqual(setup_core.monet_folder_from_env({}), "")
+
+    def test_monet_folder_from_env_windows_path_on_posix(self):
+        # A .env written on Windows ('Y:/monet-data/configs.yaml') must prefill
+        # sensibly even when read on POSIX, where os.pathsep (':') would
+        # otherwise split off the drive letter.
+        self.assertEqual(
+            setup_core.monet_folder_from_env(
+                {"MONET_CONFIG_PATHS": "Y:/monet-data/configs.yaml"}
+            ),
+            "Y:/monet-data",
+        )
 
     def test_monet_config_present_and_absent(self):
         fake_monet = types.SimpleNamespace(CONFIGS={"Scope": {}})

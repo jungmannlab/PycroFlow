@@ -1,0 +1,75 @@
+# Example high-level Experiment Design (Exchange-PAINT, 4 imager rounds).
+#
+# Hardware-free: this is the experiment intent only. Pair it with a setup
+# (e.g. Emulator) in the GUI / services, then Translate it into a Run
+# Sequence. A good starting point for a standard Exchange-PAINT run — edit the
+# reservoir names, imager order, volumes and laser to match your sample.
+
+base_name: exchange_4plex_demo
+save_dir: '.'
+
+fluid:
+  parameters:
+    start_velocity: 500
+    max_velocity: 1000
+    stop_velocity: 500
+    pumpout_dispense_velocity: 20000
+    clean_velocity: 3000
+    clean_delay: 10
+    mode: tubing_ignore
+    extractionfactor: 6
+    inject_pickup_extravol: 1500
+    inject_in_to_out_delay: 15
+    inject_out_to_in_delay: 5
+    inject_precreate_underpressure: false
+  settings:
+    reservoir_names:
+      1: EGFR
+      2: 5T4
+      3: AXL
+      4: Her2
+      6: PBS
+    special_names:
+      flushbuffer_a: 6
+      h2o: 16
+    vol_wash: 1800
+    vol_reagent: 855
+    vol_reagent_post: 95
+    vol_remove_before_flush: 50
+    wait_after_pickup: 5
+    cleaning:
+      cleaning_rounds: [h2o]       # one cleaning-liquid reservoir per round
+      reuse_cleaning_liquid: true  # shuttle one fill through all reservoirs
+      pre_empty_volume: null       # extract from each reservoir first (µl)
+      extra_volume: 100            # overfill beyond tubing volume (µl)
+      flush_out_strokes: 1
+    experiment:
+      type: Exchange
+      wash_buffer: PBS
+      initial_imager: null         # imager already in the sample (skip inject)
+      imagers:                     # imager reservoirs to cycle through, in order
+        - EGFR
+        - 5T4
+        - AXL
+        - Her2
+
+img:
+  parameters:
+    show_progress: true
+    show_display: true
+    close_display_after_acquisition: true
+  settings:
+    t_exp: 100
+    frames: 15000
+    darkframes: 50
+
+illu:
+  # No 'parameters' block: the monet config name comes from the chosen
+  # microscope setup, not the design.
+  settings:
+    laser: 560
+    power_acq: 30
+    power_nonacq: 1
+    warmup_delay: 5
+    shutter_off_nonacq: true
+    lasers_off_finally: true
