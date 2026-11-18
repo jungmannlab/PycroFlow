@@ -703,9 +703,10 @@ class SystemService:
         The fluid hardware is already connected (to the setup's full
         manifold), so loading or changing a design does **not** reconnect: it
         re-applies the design's reservoir labels / ``special_names`` / cleaning
-        (:meth:`sync_fluid_reservoirs`) and re-seeds the design's fluid
-        ``parameters`` (so manual fill/clean/pump reflect the design before a
-        Run Sequence is translated), all without a serial reconnect.
+        (:meth:`sync_fluid_reservoirs`) and, when the design carries fluid
+        ``parameters``, re-seeds them (so manual fill/clean/pump reflect the
+        design before a Run Sequence is translated), all without a serial
+        reconnect.
 
         Parameters
         ----------
@@ -721,12 +722,17 @@ class SystemService:
         if self.fluid_system is None:
             return False
         fluid = fluid or {}
-        parameters = fluid.get("parameters", {}) if "settings" in fluid else {}
-        self.sync_fluid_reservoirs(fluid)
-        self.fluid_system._assign_protocol(
-            {"parameters": dict(parameters), "protocol_entries": []}
-        )
-        return True
+        parameters = fluid.get("parameters") if "settings" in fluid else None
+        changed = self.sync_fluid_reservoirs(fluid)
+        # Only re-seed when the design actually brings parameters: a bare
+        # _assign_protocol with an empty plan would reset the system's
+        # parameters AND its live volume counters, wiping them when the design
+        # has no fluid parameters (or none at all).
+        if parameters:
+            self.fluid_system._assign_protocol(
+                {"parameters": dict(parameters), "protocol_entries": []}
+            )
+        return changed or bool(parameters)
 
     def routable_reservoirs(self) -> list:
         """Reservoir ids the connected fluid system can currently route to."""

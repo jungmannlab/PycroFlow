@@ -599,6 +599,23 @@ class TestSystemService(unittest.TestCase):
             sorted(fs.reservoir_a.keys()), sorted(svc.reservoir_ids())
         )
 
+    def test_apply_fluid_design_without_params_preserves_live_state(self):
+        # An overlay that brings no fluid parameters must NOT reset the
+        # system's parameters or wipe its live volume counters.
+        svc = SystemService()
+        svc.load_setup("Emulator")
+        svc.connect_fluid(
+            {
+                "parameters": {"max_velocity": 500},
+                "settings": {"reservoir_names": {1: "A1"}},
+            }
+        )
+        fs = svc.fluid_system
+        fs.reservoir_totals = {1: 999.0}  # simulate a live plan
+        svc.apply_fluid_design({"settings": {"reservoir_names": {2: "B2"}}})
+        self.assertEqual(fs.parameters["max_velocity"], 500)  # not reset
+        self.assertEqual(fs.reservoir_totals, {1: 999.0})  # counters intact
+
     def test_load_setup_and_monet_name(self):
         svc = SystemService()
         svc.load_setup("Emulator")
