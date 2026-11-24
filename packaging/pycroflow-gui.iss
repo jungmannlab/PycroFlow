@@ -38,6 +38,10 @@ DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE.md
 OutputDir=..\dist
 OutputBaseFilename=PycroFlow-Setup-{#MyAppVersion}
+; Icon of the installer exe itself (the droplet logo). The installed GUI exe
+; embeds the same icon (PyInstaller spec), so the Start-menu/desktop shortcuts
+; that point at it — and the Add/Remove Programs entry below — show it too.
+SetupIconFile=..\release\logos\pycroflow.ico
 UninstallDisplayIcon={app}\pycroflow-gui.exe
 UninstallDisplayName=PycroFlow {#MyAppVersion}
 WizardStyle=modern
