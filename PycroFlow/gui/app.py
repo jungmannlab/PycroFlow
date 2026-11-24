@@ -22,6 +22,15 @@ def _require_pyqt6():
         raise SystemExit(2)
 
 
+def _app_icon():
+    """The PycroFlow window/taskbar icon (bundled as package data)."""
+    from pathlib import Path
+
+    from PyQt6.QtGui import QIcon
+
+    return QIcon(str(Path(__file__).resolve().parent / "pycroflow.ico"))
+
+
 def build_main_window():
     """Construct services + the main window (no event loop). Separated from
     :func:`main` so tests can build the window headless."""
@@ -67,6 +76,10 @@ def main(argv=None):
     )
 
     app = QApplication(argv if argv is not None else sys.argv)
+    # The droplet logo for the title bar / taskbar (QApplication default, so
+    # every window inherits it). The frozen exe also embeds it (see the
+    # PyInstaller spec) for Explorer and Start-menu shortcuts.
+    app.setWindowIcon(_app_icon())
     # V0.8 look & feel across the whole acquisition GUI (Fusion + dark/gold QSS),
     # so the Quality tab and every other tab match the live operator frontend.
     from PycroFlow.gui.live.theme import apply_live_theme

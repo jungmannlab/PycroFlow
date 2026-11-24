@@ -41,6 +41,11 @@ import os
 
 _launcher = os.path.join(SPECPATH, "pycroflow_gui.py")
 
+# The app icon embedded in pycroflow-gui.exe (so Explorer, the taskbar and the
+# Start-menu/desktop shortcuts that point at the exe all show the droplet
+# logo). Same .ico the running GUI loads as its window icon.
+_icon = os.path.join(SPECPATH, "..", "PycroFlow", "gui", "pycroflow.ico")
+
 # PycroFlow's own submodules (minus the test package — dead weight, and it
 # imports unittest/mock + the fake-hardware shims).
 hiddenimports = [
@@ -186,4 +191,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=_icon,
 )

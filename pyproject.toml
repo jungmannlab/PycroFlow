@@ -170,6 +170,7 @@ PycroFlow = [
     "configs/setups/*.yaml",
     "perf/configs/*.yaml",
     "examples/*.yaml",
+    "gui/*.ico",
     "tests/fixtures/configs/*.py",
     "tests/fixtures/snapshots/*.json",
 ]
